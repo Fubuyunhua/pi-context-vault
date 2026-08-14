@@ -4,7 +4,7 @@ import { mkdir, readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
-import { atomicWriteFile } from "../state/atomic.js";
+import { atomicWriteFile, withFileLock } from "../state/atomic.js";
 import {
   buildRepoMap,
   indexRepoMapFile,
@@ -25,6 +25,7 @@ export type RepoMapChangeEvent = "add" | "change" | "unlink";
 
 export interface RepoMapWatcher {
   on(event: RepoMapChangeEvent, listener: (path: string) => void): RepoMapWatcher;
+  ready?(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -94,10 +95,19 @@ function hash(value: string): string {
 }
 
 function watcher(root: string): RepoMapWatcher {
-  return chokidar.watch(root, {
+  const fsWatcher = chokidar.watch(root, {
     ignoreInitial: true,
     ignored: (path) => path.split(sep).some((part) => [".git", ".pi", "node_modules", "dist", "build"].includes(part)),
   }) as FSWatcher;
+  const ready = new Promise<void>((resolveReady) => fsWatcher.once("ready", () => resolveReady()));
+  return {
+    on(event, listener) {
+      fsWatcher.on(event, listener);
+      return this;
+    },
+    ready: () => ready,
+    close: () => fsWatcher.close(),
+  };
 }
 
 async function gitHead(projectRoot: string): Promise<string> {
@@ -200,6 +210,7 @@ export class RepoMapRuntime {
       for (const event of ["add", "change", "unlink"] as const) {
         this.#watcher.on(event, (path) => this.notify(event, path));
       }
+      await this.#watcher.ready?.();
     }
   }
 
@@ -389,27 +400,30 @@ export class RepoMapRuntime {
 
   async #activate(): Promise<void> {
     if (!this.#effective) throw new Error("repository map is unavailable");
-    const nextGeneration = this.#generation + 1;
-    const generation: RepoMapGeneration = {
-      schemaVersion: 1,
-      generation: nextGeneration,
-      gitHead: this.#head,
-      dirtyFiles: [...this.#dirty]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([path, contentHash]) => ({ path, contentHash })),
-      workspaceRevision: revision(this.#head, this.#dirty),
-      freshness: this.#freshness,
-      pendingFiles: [...this.#pending].sort(),
-      snapshot: this.#effective,
-      activatedAt: (this.#options.now ?? (() => new Date()))().toISOString(),
-    };
-    const generationPath = join(this.#options.stateRoot, "generations", `${nextGeneration}.json`);
-    await this.#atomicWriter(generationPath, `${JSON.stringify(generation, null, 2)}\n`);
-    await this.#atomicWriter(
-      join(this.#options.stateRoot, "active.json"),
-      `${JSON.stringify({ generation: nextGeneration, path: slash(relative(this.#options.stateRoot, generationPath)) })}\n`,
-    );
-    this.#generation = nextGeneration;
+    await withFileLock(join(this.#options.stateRoot, "activation.lock"), async () => {
+      const activeGeneration = await readActiveGenerationNumber(this.#options.stateRoot).catch(() => 0);
+      const nextGeneration = Math.max(this.#generation, activeGeneration) + 1;
+      const generation: RepoMapGeneration = {
+        schemaVersion: 1,
+        generation: nextGeneration,
+        gitHead: this.#head,
+        dirtyFiles: [...this.#dirty]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([path, contentHash]) => ({ path, contentHash })),
+        workspaceRevision: revision(this.#head, this.#dirty),
+        freshness: this.#freshness,
+        pendingFiles: [...this.#pending].sort(),
+        snapshot: this.#effective as RepoMapSnapshot,
+        activatedAt: (this.#options.now ?? (() => new Date()))().toISOString(),
+      };
+      const generationPath = join(this.#options.stateRoot, "generations", `${nextGeneration}.json`);
+      await this.#atomicWriter(generationPath, `${JSON.stringify(generation, null, 2)}\n`);
+      await this.#atomicWriter(
+        join(this.#options.stateRoot, "active.json"),
+        `${JSON.stringify({ generation: nextGeneration, path: slash(relative(this.#options.stateRoot, generationPath)) })}\n`,
+      );
+      this.#generation = nextGeneration;
+    });
   }
 
   #degrade(error: unknown): void {
@@ -419,15 +433,61 @@ export class RepoMapRuntime {
 }
 
 export async function loadActiveRepoMapGeneration(stateRoot: string): Promise<RepoMapGeneration> {
-  const pointer = JSON.parse(await readFile(join(stateRoot, "active.json"), "utf8")) as { path?: unknown };
-  if (typeof pointer.path !== "string") throw new Error("invalid active repository map generation");
+  const pointer = await readActivePointer(stateRoot);
   const generationPath = resolve(stateRoot, pointer.path);
-  if (dirname(generationPath) !== resolve(stateRoot, "generations") || basename(generationPath) === "") {
-    throw new Error("invalid active repository map generation path");
-  }
   const value = JSON.parse(await readFile(generationPath, "utf8")) as RepoMapGeneration;
-  if (value.schemaVersion !== 1 || !value.snapshot || typeof value.workspaceRevision !== "string") {
-    throw new Error("invalid active repository map generation");
+  if (
+    value.schemaVersion !== 1 ||
+    value.generation !== pointer.generation ||
+    typeof value.gitHead !== "string" ||
+    !Array.isArray(value.dirtyFiles) ||
+    value.dirtyFiles.some(
+      (entry) =>
+        !entry ||
+        typeof entry.path !== "string" ||
+        typeof entry.contentHash !== "string" ||
+        (!/^[a-f0-9]{64}$/u.test(entry.contentHash) && entry.contentHash !== DELETED_HASH),
+    ) ||
+    !/^[a-f0-9]{64}$/u.test(value.workspaceRevision) ||
+    !(["fresh", "dirty", "stale", "unsupported"] as const).includes(value.freshness) ||
+    !Array.isArray(value.pendingFiles) ||
+    value.pendingFiles.some((path) => typeof path !== "string") ||
+    !value.snapshot ||
+    value.snapshot.schemaVersion !== 1 ||
+    !value.snapshot.provenance ||
+    !Array.isArray(value.snapshot.files) ||
+    !Array.isArray(value.snapshot.warnings) ||
+    !Number.isFinite(Date.parse(value.activatedAt))
+  ) {
+    throw new Error("invalid active repository map generation metadata");
   }
   return value;
+}
+
+interface ActiveGenerationPointer {
+  generation: number;
+  path: string;
+}
+
+async function readActivePointer(stateRoot: string): Promise<ActiveGenerationPointer> {
+  const pointer = JSON.parse(
+    await readFile(join(stateRoot, "active.json"), "utf8"),
+  ) as Partial<ActiveGenerationPointer>;
+  if (!Number.isSafeInteger(pointer.generation) || (pointer.generation ?? 0) <= 0 || typeof pointer.path !== "string") {
+    throw new Error("invalid active repository map generation");
+  }
+  const expectedPath = `generations/${pointer.generation}.json`;
+  const generationPath = resolve(stateRoot, pointer.path);
+  if (
+    slash(pointer.path) !== expectedPath ||
+    dirname(generationPath) !== resolve(stateRoot, "generations") ||
+    basename(generationPath) !== `${pointer.generation}.json`
+  ) {
+    throw new Error("invalid active repository map generation path");
+  }
+  return pointer as ActiveGenerationPointer;
+}
+
+async function readActiveGenerationNumber(stateRoot: string): Promise<number> {
+  return (await readActivePointer(stateRoot)).generation;
 }
