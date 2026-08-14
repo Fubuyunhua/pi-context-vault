@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,6 +16,20 @@ async function tempRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "context-vault-state-"));
   roots.push(root);
   return root;
+}
+
+async function waitForFile(path: string, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await stat(path);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for file: ${path}`);
 }
 
 describe("project state", () => {
@@ -122,16 +136,16 @@ describe("atomic state operations", () => {
     const lockPath = join(root, "writer.lock");
     const order: string[] = [];
 
-    await Promise.all([
-      withFileLock(lockPath, async () => {
-        order.push("a:start");
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        order.push("a:end");
-      }),
-      withFileLock(lockPath, async () => {
-        order.push("b");
-      }),
-    ]);
+    const firstHolder = withFileLock(lockPath, async () => {
+      order.push("a:start");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      order.push("a:end");
+    });
+    await waitForFile(lockPath);
+    const secondHolder = withFileLock(lockPath, async () => {
+      order.push("b");
+    });
+    await Promise.all([firstHolder, secondHolder]);
     expect(order).toEqual(["a:start", "a:end", "b"]);
 
     await writeFile(lockPath, "stale");
@@ -148,6 +162,7 @@ describe("atomic state operations", () => {
       release = resolve;
     });
     const holder = withFileLock(lockPath, async () => held, { staleMs: 1000 });
+    await waitForFile(lockPath);
 
     await expect(
       withFileLock(lockPath, async () => undefined, { retryMs: 5, staleMs: 1000, timeoutMs: 20 }),
