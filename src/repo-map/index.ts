@@ -6,19 +6,24 @@ import { promisify } from "node:util";
 import MiniSearch from "minisearch";
 import ts from "typescript";
 import { atomicWriteFile } from "../state/atomic.js";
+import { analyzeJava } from "./java.js";
 
 const execFileAsync = promisify(execFile);
 export const REPO_MAP_SCHEMA_VERSION = 1;
-const SEMANTIC_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"]);
-const BUILT_IN_EXCLUDED_SEGMENTS = new Set([".git", ".pi", "node_modules", "dist", "build"]);
+const SEMANTIC_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".java"]);
+const BUILT_IN_EXCLUDED_SEGMENTS = new Set([".git", ".pi", ".gradle", "node_modules", "dist", "build", "target"]);
 
 export type RepoMapFileKind = "semantic" | "lexical";
-export type RepoMapLanguage = "typescript" | "javascript" | "text";
+export type RepoMapLanguage = "typescript" | "javascript" | "java" | "text";
 
 export interface RepoMapImport {
   source: string;
   names: string[];
   typeOnly: boolean;
+  /** Java-only additive metadata; absent in schema-1 TS/JS snapshots. */
+  static?: boolean;
+  /** Java-only additive metadata; absent in schema-1 TS/JS snapshots. */
+  wildcard?: boolean;
 }
 
 export interface RepoMapExport {
@@ -29,10 +34,29 @@ export interface RepoMapExport {
 
 export interface RepoMapSymbol {
   name: string;
-  kind: "function" | "class" | "interface" | "type" | "enum" | "variable" | "namespace";
+  kind:
+    | "function"
+    | "class"
+    | "interface"
+    | "type"
+    | "enum"
+    | "variable"
+    | "namespace"
+    | "record"
+    | "annotation"
+    | "constructor"
+    | "method"
+    | "field"
+    | "enum-constant";
   signature: string;
   exported: boolean;
   line: number;
+  /** Additive Java semantic metadata. Optional to keep existing schema-1 consumers compatible. */
+  container?: string;
+  annotations?: string[];
+  modifiers?: string[];
+  typeParameters?: string[];
+  relationships?: { extends: string[]; implements: string[]; permits: string[] };
 }
 
 export interface RepoMapFile {
@@ -46,6 +70,8 @@ export interface RepoMapFile {
   exports: RepoMapExport[];
   symbols: RepoMapSymbol[];
   dependencies: string[];
+  /** Java package name; optional for backward-compatible schema-1 snapshots. */
+  packageName?: string;
   degradedReason?: string;
 }
 
@@ -62,6 +88,7 @@ export interface RepoMapSnapshot {
     generatorVersion: "0.1.0";
     parser: "typescript-compiler-api";
     typescriptVersion: string;
+    javaParser?: "java-parser@3.0.1";
     generatedAt: string;
     projectRoot: string;
   };
@@ -458,13 +485,30 @@ export async function indexRepoMapFile(
     const base = baseFile(normalizedPath, content);
     const extension = extname(normalizedPath).toLowerCase();
     if (!SEMANTIC_EXTENSIONS.has(extension)) return { file: { ...base, kind: "lexical", language: "text" } };
-    const language: RepoMapLanguage = [".js", ".jsx", ".mjs", ".cjs"].includes(extension) ? "javascript" : "typescript";
+    const language: RepoMapLanguage =
+      extension === ".java"
+        ? "java"
+        : [".js", ".jsx", ".mjs", ".cjs"].includes(extension)
+          ? "javascript"
+          : "typescript";
     try {
       return {
-        file: { ...base, ...analyzeSemantic(normalizedPath, content.toString("utf8")), kind: "semantic", language },
+        file: {
+          ...base,
+          ...(language === "java"
+            ? analyzeJava(content.toString("utf8"))
+            : analyzeSemantic(normalizedPath, content.toString("utf8"))),
+          kind: "semantic",
+          language,
+        },
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const detail = (error instanceof Error ? error.message : String(error)).replace(/\s+/gu, " ");
+      const location = detail.match(/line:\s*(\d+),\s*column:\s*(\d+)/iu);
+      const safeJavaMessage = detail.toLowerCase().startsWith("parse error:")
+        ? detail
+        : `parse error: Java syntax is unsupported or malformed${location ? ` at line ${location[1]}, column ${location[2]}` : ""}`;
+      const message = (language === "java" ? safeJavaMessage : detail).slice(0, 512);
       return {
         file: { ...base, kind: "lexical", language, degradedReason: message },
         warning: { path: normalizedPath, code: "parse-error", message },
@@ -492,6 +536,7 @@ export async function buildRepoMap(options: BuildRepoMapOptions): Promise<RepoMa
       generatorVersion: "0.1.0",
       parser: "typescript-compiler-api",
       typescriptVersion: ts.version,
+      javaParser: "java-parser@3.0.1",
       generatedAt: new Date().toISOString(),
       projectRoot,
     },

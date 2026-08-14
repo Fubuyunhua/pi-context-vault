@@ -97,7 +97,10 @@ function hash(value: string): string {
 function watcher(root: string): RepoMapWatcher {
   const fsWatcher = chokidar.watch(root, {
     ignoreInitial: true,
-    ignored: (path) => path.split(sep).some((part) => [".git", ".pi", "node_modules", "dist", "build"].includes(part)),
+    ignored: (path) =>
+      path
+        .split(sep)
+        .some((part) => [".git", ".pi", ".gradle", "node_modules", "dist", "build", "target"].includes(part)),
   }) as FSWatcher;
   const ready = new Promise<void>((resolveReady) => fsWatcher.once("ready", () => resolveReady()));
   return {
@@ -250,7 +253,11 @@ export class RepoMapRuntime {
     if (this.#pending.size === 0 && this.#freshness !== "stale" && !reconciled) return;
     try {
       this.#pending.clear();
-      this.#freshness = this.#dirty.size > 0 ? "dirty" : "fresh";
+      this.#freshness = this.#effective?.files.some((file) => file.degradedReason)
+        ? "unsupported"
+        : this.#dirty.size > 0
+          ? "dirty"
+          : "fresh";
       await this.#activate();
       this.#error = undefined;
     } catch (error) {
@@ -389,8 +396,11 @@ export class RepoMapRuntime {
         this.#dirty.set(path, snapshot.files.find((file) => file.path === path)?.contentHash ?? DELETED_HASH);
       }
       this.#pending.clear();
-      this.#freshness =
-        this.#dirty.size > 0 ? "dirty" : snapshot.files.some((file) => file.degradedReason) ? "unsupported" : "fresh";
+      this.#freshness = snapshot.files.some((file) => file.degradedReason)
+        ? "unsupported"
+        : this.#dirty.size > 0
+          ? "dirty"
+          : "fresh";
       await this.#activate();
       this.#error = undefined;
     } catch (error) {

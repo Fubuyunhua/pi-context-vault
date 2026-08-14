@@ -4,6 +4,9 @@
 
 > v0.1.0 面向 Node.js 22.19 及以上、`@earendil-works/pi-coding-agent` 0.84.x，以及
 > TypeScript/JavaScript 仓库。
+>
+> **下一版本 / 当前 `main`：** Java 语义索引是在 v0.1.0 之后实现的；不可变的 v0.1.0 tag 不包含 Java AST
+> 支持。在发布更新的 tag 前，请使用开发 checkout 验证 Java 能力。
 
 [English README](./README.md) · [研究文档](./deepResearch.md) · [v0.1 规范](./docs/specs/0001-v0.1.md) ·
 [v0.1.0 发布说明](./docs/releases/v0.1.0.md)
@@ -14,7 +17,8 @@
   receipt；持久化失败时保留原结果。
 - 当上下文压力超过配置阈值时，在 Pi 的非持久化模型视图中把较旧的已归档 Observation 替换为 receipt，同时
   保持 canonical session 时序和 tool-call/tool-result 配对结构。
-- 维护 TS/JS Repo Map，索引路径、词法词项、import、export、顶层 symbol 和 signature。
+- 维护 TS/JS Repo Map，索引路径、词法词项、import、export、顶层 symbol 和 signature。当前 `main` 还会对
+  `.java` 文件进行确定性 AST 索引，提取 package、import、声明、成员、注解、泛型和语法级类型关系。
 - 监听 Agent 与外部文件系统变更，核对 Git HEAD 和 dirty files，并原子激活带 revision 的 Map generation。
 - 只向模型注入与当前任务相关的小型 Map capsule。每个 capsule 都包含 workspace revision 和 freshness；stale
   Map 会给出 fallback evidence，而不会伪装成最新状态。
@@ -75,6 +79,9 @@ pi -e /absolute/path/to/pi-context-vault/extensions/index.ts
 ```
 
 `-e` 建议明确传入上面的 extension 入口文件，而不是仓库目录。
+
+在首个包含 Java AST 的 tag 发布前，如需验收 Java 语义索引，请 checkout `main`、执行 `npm ci`，再使用上述
+开发 checkout 命令。需要 Java AST 时不要安装 `v0.1.0`。
 
 ## 首次启动与健康检查
 
@@ -179,6 +186,17 @@ paths 和 freshness：
 { "query": "authentication token refresh", "limit": 8 }
 ```
 
+当前 `main` 会让 Java 结构化声明排在 comment 或偶然引用之前，例如：
+
+```json
+{ "query": "UserController createUser UserRepository", "limit": 8 }
+```
+
+Java 语义条目包括 package/import evidence；class、interface、enum、record、annotation 声明；nested type；
+constructor、method、field、enum constant；注解、modifier、泛型参数、源码行号以及
+`extends`/`implements`/`permits` 关系。这些关系只是语法级导航 evidence，不是编译器解析后的类型或 call graph。
+损坏或暂不支持的 Java 会退化为词法索引、给出有界 parse warning，并报告 `unsupported`，不会伪称语义新鲜。
+
 Freshness 含义：
 
 - `fresh`：索引对应所报告 Git HEAD 的干净工作区。
@@ -244,8 +262,8 @@ Context Vault 注册一个 slash command 和四个子命令：
 | `mapDebounceMs` | `300` | 正整数；pending Map batch 开始 reconciliation 前的延时。 |
 | `mapExcludePatterns` | `[]` | 非空项目相对 glob pattern 数组。 |
 
-`.git`、`.pi`、`node_modules`、`dist` 和 `build` path segment 始终从 Map 中排除。配置在 session startup
-读取，修改后请重启 Pi。
+`.git`、`.pi`、`.gradle`、`node_modules`、`dist`、`build` 和 `target` path segment 始终从 Map 中排除。配置在
+session startup 读取，修改后请重启 Pi。
 
 ## 状态、隐私与恢复
 
@@ -337,8 +355,11 @@ pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
   最终 hard invariant 由 Pi core 负责。
 - v0.1.0 不包含 embedding、完整跨语言 call graph、typed long-term memory、自动 Git commit 或 tool-episode
   subagent。
-- TS、TSX、JS、JSX、MTS、CTS、MJS、CJS 使用语义索引；其他文本文件使用词法索引；不支持或语法损坏的
-  源文件会被显式标记为 degraded。
+- v0.1.0 tag 对 TS、TSX、JS、JSX、MTS、CTS、MJS、CJS 使用语义索引。当前 `main` 还会在不执行 Maven、
+  Gradle、`javac`、annotation processor 或仓库代码的前提下语义索引 Java；它不做类型求解、方法体 call graph、
+  依赖解析或 Lombok 成员推导。其他文本文件使用词法索引；不支持或语法损坏的源文件会显式降级。
+- `.git`、`.pi`、`.gradle`、`node_modules`、`dist`、`build` 和 `target` path segment 始终排除，Java source
+  symlink 不会被跟随。
 - Repo Map 是导航索引，不是权威 summary，也不能代替源码检查和测试。
 - Secret 脱敏降低意外持久化风险，但无法证明任意敏感数据均被识别。
 

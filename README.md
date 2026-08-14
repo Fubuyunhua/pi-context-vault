@@ -4,6 +4,9 @@ Recoverable observation storage and a revision-aware repository map for Pi.
 
 > v0.1.0 targets Node.js 22.19 or newer, `@earendil-works/pi-coding-agent` 0.84.x, and
 > TypeScript/JavaScript repositories.
+>
+> **Next release / current `main`:** Java semantic indexing is implemented after v0.1.0. The immutable v0.1.0 tag
+> does not contain Java AST support; use a development checkout until a newer tag is published.
 
 [中文说明](./README.zh-CN.md) · [Research and rationale](./deepResearch.md) ·
 [v0.1 specification](./docs/specs/0001-v0.1.md) · [v0.1.0 release notes](./docs/releases/v0.1.0.md)
@@ -14,7 +17,9 @@ Recoverable observation storage and a revision-aware repository map for Pi.
   with a bounded receipt that the agent can retrieve later. If persistence fails, the original result stays visible.
 - Replaces older archived observations in Pi's non-persistent model view when context pressure crosses the configured
   threshold. Canonical session chronology and tool-call/tool-result pairs are preserved.
-- Maintains a TS/JS repository map of paths, lexical terms, imports, exports, top-level symbols, and signatures.
+- Maintains a TS/JS repository map of paths, lexical terms, imports, exports, top-level symbols, and signatures. On
+  current `main`, `.java` files additionally receive deterministic AST indexing for packages, imports, declarations,
+  members, annotations, generics, and syntactic type relationships.
 - Watches agent and external filesystem changes, reconciles Git HEAD plus dirty files, and atomically activates
   revisioned map generations.
 - Injects only a small task-relevant map capsule. Every capsule identifies its workspace revision and freshness; a
@@ -77,6 +82,9 @@ pi -e /absolute/path/to/pi-context-vault/extensions/index.ts
 ```
 
 Use the extension entry file shown above; passing only the repository directory is not required for `-e`.
+
+To evaluate Java semantic indexing before its first tagged release, check out `main`, run `npm ci`, and use this
+development-checkout command. Do not install `v0.1.0` when Java AST support is part of the acceptance target.
 
 ## First run and health check
 
@@ -184,6 +192,18 @@ paths, and freshness.
 { "query": "authentication token refresh", "limit": 8 }
 ```
 
+On current `main`, Java queries rank structured declarations above comments and incidental references. For example:
+
+```json
+{ "query": "UserController createUser UserRepository", "limit": 8 }
+```
+
+Java semantic entries include package/import evidence; class, interface, enum, record, and annotation declarations;
+nested types; constructors, methods, fields, and enum constants; annotations, modifiers, generic parameters, source
+lines, and `extends`/`implements`/`permits` relationships. The relationships are syntax-level navigation evidence,
+not compiler-resolved types or a call graph. Malformed or unsupported Java falls back to lexical indexing with a
+bounded parse warning and reports `unsupported` rather than claiming fresh semantics.
+
 Freshness meanings:
 
 - `fresh`: the indexed workspace is clean for the reported Git HEAD.
@@ -249,8 +269,8 @@ types, and out-of-range values cause explicit degraded initialization instead of
 | `mapDebounceMs` | `300` | Positive integer; delay before a pending map batch is reconciled. |
 | `mapExcludePatterns` | `[]` | Array of non-empty project-relative glob patterns. |
 
-`.git`, `.pi`, `node_modules`, `dist`, and `build` path segments are always excluded from the map. Configuration is
-read at session startup; restart Pi after changing it.
+`.git`, `.pi`, `.gradle`, `node_modules`, `dist`, `build`, and `target` path segments are always excluded from the map.
+Configuration is read at session startup; restart Pi after changing it.
 
 ## State, privacy, and recovery
 
@@ -345,8 +365,12 @@ and verify with direct `read`, search, `git diff`, and tests.
   the model input limit. Pi core owns that final hard-invariant boundary.
 - v0.1.0 does not provide embeddings, a complete cross-language call graph, typed long-term memory, automatic Git
   commits, or tool-episode subagents.
-- Semantic indexing covers TS, TSX, JS, JSX, MTS, CTS, MJS, and CJS. Other text files receive lexical indexing;
-  unsupported or malformed source is explicitly degraded.
+- The v0.1.0 tag semantically indexes TS, TSX, JS, JSX, MTS, CTS, MJS, and CJS. Current `main` also semantically
+  indexes Java without invoking Maven, Gradle, `javac`, annotation processors, or repository code. It does not perform
+  type solving, method-body call graphs, dependency resolution, or Lombok member inference. Other text files receive
+  lexical indexing; unsupported or malformed source is explicitly degraded.
+- `.git`, `.pi`, `.gradle`, `node_modules`, `dist`, `build`, and `target` path segments are always excluded from the
+  map. Java source symlinks are not followed.
 - Repository maps are navigation indexes, not authoritative summaries or substitutes for source inspection and tests.
 - Secret redaction reduces accidental persistence risk but cannot prove that arbitrary sensitive data was detected.
 
