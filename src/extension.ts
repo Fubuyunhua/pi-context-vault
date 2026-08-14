@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ArtifactStore } from "./artifacts/store.js";
+import { reduceContext } from "./context/reduction.js";
 import {
   MAX_QUERY_LENGTH,
   MAX_RETRIEVAL_BYTES,
@@ -42,18 +43,28 @@ function activeRuntime(runtime: ObservationRuntime | undefined): ObservationRunt
 
 export function registerContextVault(pi: ExtensionAPI, options: RegisterContextVaultOptions = {}): void {
   let runtime: ObservationRuntime | undefined;
+  let contextState:
+    | {
+        store: ArtifactStore;
+        sessionId: string;
+        config: Awaited<ReturnType<typeof loadConfig>>;
+      }
+    | undefined;
 
   pi.on("session_start", async (_event, ctx) => {
     const state = await resolveProjectState(ctx.cwd, options.env ?? process.env);
     const config = await loadConfig(state.projectRoot);
+    const store = new ArtifactStore({ artifactsRoot: state.artifactsRoot, metadataRoot: state.metadataRoot });
+    const sessionId = ctx.sessionManager.getSessionId();
     runtime = new ObservationRuntime({
-      store: new ArtifactStore({ artifactsRoot: state.artifactsRoot, metadataRoot: state.metadataRoot }),
+      store,
       archiveThresholdBytes: config.archiveThresholdBytes,
       receiptMaxBytes: config.receiptMaxBytes,
       projectId: state.projectId,
       projectRoot: state.projectRoot,
-      sessionId: ctx.sessionManager.getSessionId(),
+      sessionId,
     });
+    contextState = { store, sessionId, config };
     if (ctx.hasUI) ctx.ui.setStatus(EXTENSION_ID, `vault v${EXTENSION_VERSION}`);
   });
 
@@ -76,8 +87,25 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
     };
   });
 
+  pi.on("context", async (event, ctx) => {
+    if (contextState === undefined || ctx.model === undefined) return;
+    const reduced = await reduceContext({
+      store: contextState.store,
+      messages: event.messages,
+      sessionId: contextState.sessionId,
+      systemPrompt: ctx.getSystemPrompt(),
+      contextWindowTokens: ctx.model.contextWindow,
+      hotObservationCount: contextState.config.hotObservationCount,
+      softContextRatio: contextState.config.softContextRatio,
+      targetContextRatio: contextState.config.targetContextRatio,
+      receiptMaxBytes: contextState.config.receiptMaxBytes,
+    });
+    if (reduced.reducedCount > 0) return { messages: reduced.messages };
+  });
+
   pi.on("session_shutdown", async (_event, ctx) => {
     runtime = undefined;
+    contextState = undefined;
     if (ctx.hasUI) ctx.ui.setStatus(EXTENSION_ID, undefined);
   });
 
