@@ -70,6 +70,24 @@ describe("project state", () => {
     await mkdir(join(root, ".pi"));
     await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ archiveThresholdBytes: -1 }));
     await expect(loadConfig(root)).rejects.toThrow("archiveThresholdBytes");
+
+    await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ receiptMaxBytes: 511 }));
+    await expect(loadConfig(root)).rejects.toThrow("at least 512");
+  });
+
+  it("rejects unknown, non-numeric, and inconsistent configuration", async () => {
+    const root = await tempRoot();
+    await mkdir(join(root, ".pi"));
+    const path = join(root, ".pi", "context-vault.json");
+
+    await writeFile(path, JSON.stringify({ unknownOption: 1 }));
+    await expect(loadConfig(root)).rejects.toThrow("Unknown");
+    await writeFile(path, JSON.stringify({ archiveThresholdBytes: "many" }));
+    await expect(loadConfig(root)).rejects.toThrow("finite number");
+    await writeFile(path, JSON.stringify({ softContextRatio: 2 }));
+    await expect(loadConfig(root)).rejects.toThrow("between 0 and 1");
+    await writeFile(path, JSON.stringify({ softContextRatio: 0.5, targetContextRatio: 0.6 }));
+    await expect(loadConfig(root)).rejects.toThrow("lower than");
   });
 
   it("rejects invalid repository map exclusions", async () => {
