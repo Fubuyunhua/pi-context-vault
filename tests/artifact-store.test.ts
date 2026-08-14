@@ -49,6 +49,13 @@ describe("secret redaction", () => {
 });
 
 describe("artifact store", () => {
+  it("validates garbage collection boundaries", async () => {
+    const root = await tempRoot();
+    const store = storeAt(root);
+    await expect(store.garbageCollect({ retentionDays: -1, quotaBytes: 1 })).rejects.toThrow("retentionDays");
+    await expect(store.garbageCollect({ retentionDays: 1, quotaBytes: -1 })).rejects.toThrow("quotaBytes");
+  });
+
   it("redacts before hashing and persistence and records evidence metadata", async () => {
     const root = await tempRoot();
     const store = storeAt(root);
