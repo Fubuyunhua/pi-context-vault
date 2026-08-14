@@ -1231,6 +1231,35 @@ commit 8b31a4
 
 ## 在 Pi 上我建议怎样真正落地
 
+### v0.1.0 实施状态（2026-08-14）
+
+本文提出的是完整研究架构；`pi-context-vault` v0.1.0 已经把其中可由 extension 可靠拥有的第一批能力实现为
+可安装插件，而不是声称整套未来架构已经完成：
+
+| 研究能力 | v0.1.0 状态 | 实际边界 |
+|---|---|---|
+| Observation Vault | 已实现 | 脱敏后内容寻址归档、即时 receipt、历史 masking、`obs_get/search` |
+| 实时增量 Repo Map | 已实现 | TS/JS 语义索引、其他文本词法索引、Base + Dirty overlay、Git HEAD guard |
+| 外部修改同步 | 已实现 | 真实 chokidar watcher 等待 ready；每次相关 add/change/unlink 立即 invalidation 与 fast update |
+| Map 原子一致性 | 已实现 | generation 临时写入后切换 active；并发 runtime 通过文件锁串行激活；损坏 generation 拒绝加载 |
+| Pi runtime surfaces | 已实现 | 四个 tools、`/context-vault status|rebuild|gc|doctor`、有界非持久化 Map capsule |
+| Current Task Capsule / typed memory / Git checkpoint / tool-episode subagent | 未实现 | 保留为后续独立实验，不属于 v0.1.0 接口 |
+| Final-request token guard | extension 中不可实现 | 必须在所有 transform 后、provider sampling 前由 Pi core 执行 |
+
+v0.1.0 的 Repo Map 实时同步协议是：watcher 收到任何非排除文件变化后立即把 path 标为 stale/pending，串行执行
+文件级 fast update；下一次查询或 model context 使用前执行 `ensureFresh()`，核对当前 Git HEAD、从 `git status`
+重算规范化 dirty path 集合、更新 Dirty Overlay，再通过完整 generation 文件和 `active.json` 指针原子切换。纯粹
+依赖 Agent 自身 edit/write 事件是不够的，因此该实现也覆盖 IDE、用户进程和 Git checkout 等外部变化。
+
+模型不会收到“整个项目 summary”，只收到与本轮 query 有关且有字节上限的 Map slice。该 slice 必须携带
+`workspaceRevision` 和 freshness；如果解析、读取或 generation 激活失败，它必须显式为 `stale` 并带 source/
+`git diff` fallback evidence。这里的“实时”指下一次相关使用前完成 freshness guard，而不是对每个字符变化执行
+全仓 deep rebuild。
+
+还必须强调：extension 的 `context` hook 可以显著降低 model-visible context，但它看不到最终 provider 序列化
+边界，所以不能保证最终 payload 永远不超限。本文所述 final-request hard invariant 仍然是 Pi core patch 的 P0，
+不能因为 v0.1.0 已交付 Observation/Repo Map 能力就把它写成 extension guarantee。
+
 我会把实现拆成 extension POC 和一个很小但关键的 Pi core patch，但不会按下文章节出现顺序同时开发所有组件。更合理的优先级是：
 
 | 优先级 | 能力 | 首要验收条件 |

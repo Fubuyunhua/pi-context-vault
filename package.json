@@ -26,6 +26,8 @@
   "files": [
     "extensions",
     "src",
+    "docs",
+    "deepResearch.md",
     "README.md",
     "README.zh-CN.md",
     "LICENSE"
@@ -37,8 +39,9 @@
     "format": "biome check --write .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:watcher": "vitest run tests/watcher-smoke.test.ts",
     "test:package": "node scripts/package-smoke.mjs",
-    "ci": "npm run check && npm test && npm run test:package"
+    "ci": "npm run check && npm run test:coverage && npm run test:package"
   },
   "dependencies": {
     "chokidar": "5.0.0",

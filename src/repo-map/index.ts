@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile, realpath } from "node:fs/promises";
-import { basename, extname, join, relative, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import MiniSearch from "minisearch";
 import ts from "typescript";
@@ -440,28 +440,43 @@ export async function indexRepoMapFile(
   projectRoot: string,
   path: string,
 ): Promise<{ file?: RepoMapFile; warning?: RepoMapWarning }> {
+  const normalizedPath = slash(path);
+  if (
+    !normalizedPath ||
+    isAbsolute(path) ||
+    normalizedPath.startsWith("/") ||
+    normalizedPath.split("/").some((segment) => segment === "..")
+  ) {
+    throw new Error(`repository map path must be project-relative: ${path}`);
+  }
   try {
-    const absolute = resolve(projectRoot, path);
+    const absolute = resolve(projectRoot, normalizedPath);
     const info = await lstat(absolute);
     if (!info.isFile()) return {};
     const content = await readFile(absolute);
     if (!isText(content)) return {};
-    const base = baseFile(path, content);
-    const extension = extname(path).toLowerCase();
+    const base = baseFile(normalizedPath, content);
+    const extension = extname(normalizedPath).toLowerCase();
     if (!SEMANTIC_EXTENSIONS.has(extension)) return { file: { ...base, kind: "lexical", language: "text" } };
     const language: RepoMapLanguage = [".js", ".jsx", ".mjs", ".cjs"].includes(extension) ? "javascript" : "typescript";
     try {
-      return { file: { ...base, ...analyzeSemantic(path, content.toString("utf8")), kind: "semantic", language } };
+      return {
+        file: { ...base, ...analyzeSemantic(normalizedPath, content.toString("utf8")), kind: "semantic", language },
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return {
         file: { ...base, kind: "lexical", language, degradedReason: message },
-        warning: { path, code: "parse-error", message },
+        warning: { path: normalizedPath, code: "parse-error", message },
       };
     }
   } catch (error) {
     return {
-      warning: { path, code: "read-error", message: error instanceof Error ? error.message : String(error) },
+      warning: {
+        path: normalizedPath,
+        code: "read-error",
+        message: error instanceof Error ? error.message : String(error),
+      },
     };
   }
 }
