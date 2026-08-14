@@ -11,6 +11,7 @@ export interface ContextVaultConfig {
   retentionDays: number;
   mapContextMaxBytes: number;
   mapDebounceMs: number;
+  mapExcludePatterns: string[];
 }
 
 export const DEFAULT_CONFIG: Readonly<ContextVaultConfig> = Object.freeze({
@@ -23,6 +24,7 @@ export const DEFAULT_CONFIG: Readonly<ContextVaultConfig> = Object.freeze({
   retentionDays: 30,
   mapContextMaxBytes: 6 * 1024,
   mapDebounceMs: 300,
+  mapExcludePatterns: [],
 });
 
 const POSITIVE_INTEGERS = new Set<keyof ContextVaultConfig>([
@@ -34,6 +36,8 @@ const POSITIVE_INTEGERS = new Set<keyof ContextVaultConfig>([
   "mapContextMaxBytes",
   "mapDebounceMs",
 ]);
+
+const STRING_ARRAYS = new Set<keyof ContextVaultConfig>(["mapExcludePatterns"]);
 
 export async function loadConfig(projectRoot: string): Promise<ContextVaultConfig> {
   const configPath = join(projectRoot, ".pi", "context-vault.json");
@@ -50,18 +54,28 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
     }
   }
 
-  const config = { ...DEFAULT_CONFIG } as ContextVaultConfig;
+  const config = {
+    ...DEFAULT_CONFIG,
+    mapExcludePatterns: [...DEFAULT_CONFIG.mapExcludePatterns],
+  } as ContextVaultConfig;
   for (const [key, value] of Object.entries(override)) {
     if (!(key in DEFAULT_CONFIG)) throw new Error(`Unknown Context Vault option: ${key}`);
-    if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${key} must be a finite number`);
     const typedKey = key as keyof ContextVaultConfig;
+    if (STRING_ARRAYS.has(typedKey)) {
+      if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim().length === 0)) {
+        throw new Error(`${key} must be an array of non-empty strings`);
+      }
+      config.mapExcludePatterns = [...value];
+      continue;
+    }
+    if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${key} must be a finite number`);
     if (POSITIVE_INTEGERS.has(typedKey) && (!Number.isInteger(value) || value <= 0)) {
       throw new Error(`${key} must be a positive integer`);
     }
     if ((typedKey === "softContextRatio" || typedKey === "targetContextRatio") && (value <= 0 || value >= 1)) {
       throw new Error(`${key} must be between 0 and 1`);
     }
-    config[typedKey] = value;
+    (config[typedKey] as number) = value;
   }
   if (config.targetContextRatio >= config.softContextRatio) {
     throw new Error("targetContextRatio must be lower than softContextRatio");
