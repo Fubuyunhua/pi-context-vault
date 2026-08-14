@@ -49,4 +49,29 @@ describe("real chokidar watcher smoke", () => {
       await runtime.close();
     }
   }, 10_000);
+
+  it("observes an external Java signature edit on every supported CI operating system", async () => {
+    const project = await mkdtemp(join(tmpdir(), "context-vault-java-watcher-project-"));
+    const stateRoot = await mkdtemp(join(tmpdir(), "context-vault-java-watcher-state-"));
+    roots.push(project, stateRoot);
+    await mkdir(join(project, "src"));
+    const path = join(project, "src", "GreetingService.java");
+    await writeFile(path, "public class GreetingService { public String greet(String name) { return name; } }");
+    const runtime = new RepoMapRuntime({ projectRoot: project, stateRoot, mapDebounceMs: 25 });
+    try {
+      await runtime.start();
+      await writeFile(path, "public class GreetingService { public Message greet(User user) { return null; } }");
+      const result = await eventually(
+        () => runtime.query("greet"),
+        (query) =>
+          query.results.some((entry) =>
+            entry.symbols.some((item) => item.signature === "public Message greet(User user)"),
+          ),
+      );
+      expect(result.freshness).toMatch(/^(dirty|fresh)$/);
+      expect(result.pendingFiles).toEqual([]);
+    } finally {
+      await runtime.close();
+    }
+  }, 10_000);
 });
