@@ -130,6 +130,10 @@ function exclusionMatcher(patterns: string[]): (path: string) => boolean {
   };
 }
 
+export function isRepoMapPathExcluded(path: string, patterns: string[] = []): boolean {
+  return exclusionMatcher(patterns)(slash(path));
+}
+
 async function gitFiles(projectRoot: string): Promise<string[] | undefined> {
   try {
     const { stdout } = await execFileAsync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
@@ -172,7 +176,7 @@ async function rootGitignorePatterns(projectRoot: string): Promise<string[]> {
   }
 }
 
-async function enumerateFiles(projectRoot: string, exclude: string[]): Promise<string[]> {
+export async function enumerateRepoMapFiles(projectRoot: string, exclude: string[]): Promise<string[]> {
   const fromGit = await gitFiles(projectRoot);
   const patterns = [...exclude, ...(fromGit ? [] : await rootGitignorePatterns(projectRoot))];
   const isExcluded = exclusionMatcher(patterns);
@@ -432,7 +436,10 @@ function baseFile(path: string, content: Buffer): Omit<RepoMapFile, "kind" | "la
   };
 }
 
-async function indexFile(projectRoot: string, path: string): Promise<{ file?: RepoMapFile; warning?: RepoMapWarning }> {
+export async function indexRepoMapFile(
+  projectRoot: string,
+  path: string,
+): Promise<{ file?: RepoMapFile; warning?: RepoMapWarning }> {
   try {
     const absolute = resolve(projectRoot, path);
     const info = await lstat(absolute);
@@ -461,8 +468,8 @@ async function indexFile(projectRoot: string, path: string): Promise<{ file?: Re
 
 export async function buildRepoMap(options: BuildRepoMapOptions): Promise<RepoMapSnapshot> {
   const projectRoot = await realpath(resolve(options.projectRoot));
-  const paths = await enumerateFiles(projectRoot, options.exclude ?? []);
-  const indexed = await Promise.all(paths.map((path) => indexFile(projectRoot, path)));
+  const paths = await enumerateRepoMapFiles(projectRoot, options.exclude ?? []);
+  const indexed = await Promise.all(paths.map((path) => indexRepoMapFile(projectRoot, path)));
   const snapshot: RepoMapSnapshot = {
     schemaVersion: REPO_MAP_SCHEMA_VERSION,
     provenance: {
