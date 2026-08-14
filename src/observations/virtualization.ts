@@ -156,6 +156,7 @@ export class ObservationRuntime {
     try {
       const archived = await this.#store.archive({
         observationId: id,
+        toolCallId: input.toolCallId,
         toolName: input.toolName,
         sessionId: this.#status.sessionId,
         content: input.text,

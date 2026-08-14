@@ -16,6 +16,7 @@ export interface ArtifactStoreOptions {
 
 export interface ArchiveObservationInput {
   observationId: string;
+  toolCallId?: string;
   toolName: string;
   sessionId: string;
   content: string;
@@ -25,6 +26,8 @@ export interface ArtifactMetadata {
   schemaVersion: 1;
   artifactId: string;
   observationId: string;
+  /** Present for records produced by the Pi runtime; optional for v0.1 records written before S04. */
+  toolCallId?: string;
   toolName: string;
   sessionId: string;
   contentHash: string;
@@ -72,6 +75,7 @@ function parseMetadata(source: string): ArtifactMetadata[] {
         entry.schemaVersion !== 1 ||
         typeof entry.artifactId !== "string" ||
         typeof entry.observationId !== "string" ||
+        (entry.toolCallId !== undefined && typeof entry.toolCallId !== "string") ||
         typeof entry.toolName !== "string" ||
         typeof entry.sessionId !== "string" ||
         entry.contentHash !== entry.artifactId ||
@@ -124,6 +128,7 @@ export class ArtifactStore {
       schemaVersion: 1,
       artifactId: contentHash,
       observationId: input.observationId,
+      ...(input.toolCallId === undefined ? {} : { toolCallId: input.toolCallId }),
       toolName: input.toolName,
       sessionId: input.sessionId,
       contentHash,
@@ -167,6 +172,15 @@ export class ArtifactStore {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index];
       if (entry?.observationId === observationId) return entry;
+    }
+    return undefined;
+  }
+
+  async getMetadataByToolCallId(sessionId: string, toolCallId: string): Promise<ArtifactMetadata | undefined> {
+    const entries = await this.#readMetadataUnlocked();
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry?.sessionId === sessionId && entry.toolCallId === toolCallId) return entry;
     }
     return undefined;
   }
