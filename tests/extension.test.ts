@@ -31,6 +31,8 @@ async function harness() {
     hasUI: true,
     ui: { setStatus },
     sessionManager: { getSessionId: () => "session-1" },
+    model: { contextWindow: 12_000 },
+    getSystemPrompt: () => "system contract",
   };
   return { handlers, tools, pi, ctx, setStatus };
 }
@@ -38,7 +40,7 @@ async function harness() {
 describe("extension observation adapter", () => {
   it("registers lifecycle hooks and bounded retrieval tools", async () => {
     const { handlers, tools, pi, ctx, setStatus } = await harness();
-    expect(pi.on).toHaveBeenCalledTimes(3);
+    expect(pi.on).toHaveBeenCalledTimes(4);
     expect([...tools.keys()]).toEqual(["context_vault_obs_get", "context_vault_obs_search", "context_vault_status"]);
 
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
@@ -127,5 +129,57 @@ describe("extension observation adapter", () => {
     expect(transformed.content.map((block) => block.type)).toEqual(["text", "image"]);
     await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, headless);
     expect(setStatus).not.toHaveBeenCalled();
+  });
+
+  it("reduces archived old results through the context hook without persisting a capsule", async () => {
+    const { handlers, ctx } = await harness();
+    const narrowContext = { ...ctx, model: { contextWindow: 35_000 } };
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, narrowContext);
+    const messages: Array<Record<string, unknown>> = [
+      { role: "user", content: "CONSTRAINT: preserve chronology", timestamp: 0 },
+    ];
+    for (let index = 0; index < 20; index += 1) {
+      const text = `${index}:`.padEnd(8_000, "x");
+      await handlers.get("tool_result")?.({
+        type: "tool_result",
+        toolCallId: `context-call-${index}`,
+        toolName: "read",
+        input: {},
+        content: [{ type: "text", text }],
+        isError: false,
+      });
+      messages.push({
+        role: "assistant",
+        content: [{ type: "toolCall", id: `context-call-${index}`, name: "read", arguments: {} }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "test",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {} },
+        stopReason: "toolUse",
+        timestamp: index * 2 + 1,
+      });
+      messages.push({
+        role: "toolResult",
+        toolCallId: `context-call-${index}`,
+        toolName: "read",
+        content: [{ type: "text", text }],
+        isError: false,
+        timestamp: index * 2 + 2,
+      });
+    }
+
+    const transformed = (await handlers.get("context")?.({ type: "context", messages }, narrowContext)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(transformed.messages).toHaveLength(messages.length);
+    expect(transformed.messages[0]).toEqual(messages[0]);
+    expect(JSON.stringify(transformed.messages)).toContain("context_vault_observation_receipt");
+    expect(JSON.stringify(transformed.messages.slice(-12))).not.toContain("context_vault_observation_receipt");
+
+    const repeated = await handlers.get("context")?.(
+      { type: "context", messages: transformed.messages },
+      narrowContext,
+    );
+    expect(repeated).toBeUndefined();
   });
 });

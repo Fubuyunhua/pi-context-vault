@@ -61,6 +61,7 @@ describe("artifact store", () => {
     const store = storeAt(root);
     const archived = await store.archive({
       observationId: "obs-1",
+      toolCallId: "call-1",
       toolName: "exec_command",
       sessionId: "session-1",
       content: "TOKEN=secret-value-123456\nresult: passed",
@@ -68,6 +69,7 @@ describe("artifact store", () => {
 
     expect(archived.metadata.redactionCount).toBe(1);
     expect(archived.metadata.observationId).toBe("obs-1");
+    expect(archived.metadata.toolCallId).toBe("call-1");
     expect(archived.metadata.toolName).toBe("exec_command");
     expect(archived.metadata.sessionId).toBe("session-1");
     expect(archived.metadata.contentHash).toMatch(/^[a-f0-9]{64}$/);
@@ -78,6 +80,7 @@ describe("artifact store", () => {
     expect(persisted).toContain("[REDACTED]");
     expect(persisted).not.toContain("secret-value-123456");
     expect(await readFile(join(root, "metadata", "observations.jsonl"), "utf8")).not.toContain("secret-value-123456");
+    expect(await store.getMetadataByToolCallId("session-1", "call-1")).toEqual(archived.metadata);
   });
 
   it("deduplicates sanitized content under concurrent writers and recovers after restart", async () => {
