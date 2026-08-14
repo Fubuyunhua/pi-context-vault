@@ -1246,6 +1246,12 @@ commit 8b31a4
 | Current Task Capsule / typed memory / Git checkpoint / tool-episode subagent | 未实现 | 保留为后续独立实验，不属于 v0.1.0 接口 |
 | Final-request token guard | extension 中不可实现 | 必须在所有 transform 后、provider sampling 前由 Pi core 执行 |
 
+> v0.1.0 发布后的下一版本开发状态：当前 `main` 已增加纯 Node Java CST 语义索引，覆盖 package/import、类型与
+> member 声明、注解、泛型、源码行号及 `extends`/`implements`/`permits` 语法关系，并复用同一套增量 watcher、
+> Git HEAD guard 与原子 generation 协议。它不会执行 Maven、Gradle、`javac`、annotation processor 或项目代码，
+> 也不声称完成类型求解、call graph、依赖解析或 Lombok 推导。不可变的 v0.1.0 tag 仍然只有 TS/JS 语义索引；
+> Java AST 能力必须由后续 tag 发布。
+
 v0.1.0 的 Repo Map 实时同步协议是：watcher 收到任何非排除文件变化后立即把 path 标为 stale/pending，串行执行
 文件级 fast update；下一次查询或 model context 使用前执行 `ensureFresh()`，核对当前 Git HEAD、从 `git status`
 重算规范化 dirty path 集合、更新 Dirty Overlay，再通过完整 generation 文件和 `active.json` 指针原子切换。纯粹
