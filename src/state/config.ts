@@ -83,5 +83,8 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
   if (config.receiptMaxBytes < 512) {
     throw new Error("receiptMaxBytes must be at least 512 bytes");
   }
+  if (config.mapContextMaxBytes < 512) {
+    throw new Error("mapContextMaxBytes must be at least 512 bytes");
+  }
   return config;
 }

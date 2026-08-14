@@ -251,6 +251,16 @@ export class RepoMapRuntime {
     await this.flush();
   }
 
+  /** Rebuild the base snapshot and atomically activate it as a new generation. */
+  async rebuild(): Promise<void> {
+    const operation = this.#flushChain.then(async () => {
+      await this.#updateChain;
+      await this.#rebuildBase();
+    });
+    this.#flushChain = operation.catch(() => undefined);
+    await operation;
+  }
+
   async query(query: string, options: RepoMapQueryOptions = {}): Promise<RepoMapRuntimeQuery> {
     await this.ensureFresh();
     const fallbackEvidence: RepoMapFallbackEvidence[] = [];
@@ -272,6 +282,23 @@ export class RepoMapRuntime {
       }
       const diff = await gitDiff(this.#projectRoot);
       if (diff) fallbackEvidence.push({ kind: "git-diff", excerpt: diff });
+      if (fallbackEvidence.length === 0) {
+        const firstFile = this.#effective?.files[0];
+        if (firstFile) {
+          let excerpt = firstFile.lexicalTerms.slice(0, 40).join(" ");
+          try {
+            excerpt = (await readFile(join(this.#projectRoot, firstFile.path), "utf8")).slice(0, 4 * 1024);
+          } catch {
+            // Lexical terms from the last coherent generation remain an explicit degraded fallback.
+          }
+          fallbackEvidence.push({ kind: "source", path: firstFile.path, excerpt });
+        } else {
+          fallbackEvidence.push({
+            kind: "source",
+            excerpt: "No indexed source file is available; use direct filesystem search.",
+          });
+        }
+      }
     }
     return {
       results,
