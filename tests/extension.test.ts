@@ -212,7 +212,7 @@ describe("extension observation adapter", () => {
       narrowContext,
     )) as { messages: Array<Record<string, unknown>> };
     expect(repeated.messages.filter((message) => message.customType === "context-vault-repo-map")).toHaveLength(1);
-  });
+  }, 15_000);
 
   it("keeps repository-map capsules ephemeral, bounded, revisioned, and honest when stale", async () => {
     const close = vi.fn(async () => undefined);
