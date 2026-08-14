@@ -87,6 +87,9 @@ describe("project state", () => {
 
     await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ receiptMaxBytes: 511 }));
     await expect(loadConfig(root)).rejects.toThrow("at least 512");
+
+    await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ mapContextMaxBytes: 511 }));
+    await expect(loadConfig(root)).rejects.toThrow("mapContextMaxBytes must be at least 512");
   });
 
   it("rejects unknown, non-numeric, and inconsistent configuration", async () => {

@@ -203,6 +203,21 @@ describe("incremental repository map runtime", () => {
     await runtime.close();
   });
 
+  it("supports an explicit deep rebuild without relying on watcher delivery", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const oldValue = true;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    const generation = runtime.status().generation;
+    await writeFile(join(root, "src/value.ts"), "export const rebuiltValue = true;");
+
+    await runtime.rebuild();
+
+    expect(runtime.status().generation).toBeGreaterThan(generation);
+    expect((await runtime.query("rebuiltValue")).results[0]?.path).toBe("src/value.ts");
+    expect((await runtime.query("oldValue")).results).toEqual([]);
+    await runtime.close();
+  });
+
   it("keeps the previously activated generation intact when activation crashes", async () => {
     const { root, stateRoot } = await fixture({ "src/value.ts": "export const stableValue = 1;" });
     let failActive = false;
