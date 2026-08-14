@@ -66,5 +66,8 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
   if (config.targetContextRatio >= config.softContextRatio) {
     throw new Error("targetContextRatio must be lower than softContextRatio");
   }
+  if (config.receiptMaxBytes < 512) {
+    throw new Error("receiptMaxBytes must be at least 512 bytes");
+  }
   return config;
 }
