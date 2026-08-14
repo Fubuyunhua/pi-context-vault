@@ -55,12 +55,13 @@ describe("project state", () => {
     await mkdir(join(root, ".pi"));
     await writeFile(
       join(root, ".pi", "context-vault.json"),
-      JSON.stringify({ archiveThresholdBytes: 2048, hotObservationCount: 2 }),
+      JSON.stringify({ archiveThresholdBytes: 2048, hotObservationCount: 2, mapExcludePatterns: ["generated/**"] }),
     );
 
     const config = await loadConfig(root);
     expect(config.archiveThresholdBytes).toBe(2048);
     expect(config.hotObservationCount).toBe(2);
+    expect(config.mapExcludePatterns).toEqual(["generated/**"]);
     expect(config.receiptMaxBytes).toBeGreaterThan(0);
   });
 
@@ -69,6 +70,14 @@ describe("project state", () => {
     await mkdir(join(root, ".pi"));
     await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ archiveThresholdBytes: -1 }));
     await expect(loadConfig(root)).rejects.toThrow("archiveThresholdBytes");
+  });
+
+  it("rejects invalid repository map exclusions", async () => {
+    const root = await tempRoot();
+    await mkdir(join(root, ".pi"));
+    await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ mapExcludePatterns: [""] }));
+
+    await expect(loadConfig(root)).rejects.toThrow("mapExcludePatterns");
   });
 
   it("rejects a non-object configuration", async () => {
