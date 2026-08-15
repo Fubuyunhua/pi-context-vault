@@ -419,7 +419,14 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   });
 
   const notify = (ctx: ExtensionCommandContext, value: unknown, type: "info" | "warning" | "error" = "info") => {
-    if (ctx.hasUI) ctx.ui.notify(typeof value === "string" ? value : JSON.stringify(value, null, 2), type);
+    const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    if (ctx.hasUI) {
+      ctx.ui.notify(text, type);
+    } else {
+      // Headless modes (print/json): pi redirects stdout to stderr via its output guard,
+      // so this stays visible without polluting the TUI or the JSON protocol stream.
+      console.log(text);
+    }
   };
 
   pi.registerCommand("context-vault", {

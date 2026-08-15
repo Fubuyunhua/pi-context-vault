@@ -386,7 +386,46 @@ describe("extension observation adapter", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("degraded"), expect.any(String));
 
     const headless = { ...ctx, hasUI: false };
-    await expect(commands.get("context-vault")?.handler("doctor", headless)).resolves.toBeUndefined();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const tuiNotifyCount = notify.mock.calls.length;
+      await expect(commands.get("context-vault")?.handler("doctor", headless)).resolves.toBeUndefined();
+      // headless modes: report goes to console (redirected to stderr by pi's output guard), never silent
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(logSpy.mock.calls[0][0]))).toMatchObject({ status: "degraded" });
+      // and the UI channel stays untouched for the headless run
+      expect(notify.mock.calls.length).toBe(tuiNotifyCount);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("keeps command reports on the UI notification channel only in TUI mode", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const { handlers, commands, ctx, notify } = await harness();
+      await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+      await commands.get("context-vault")?.handler("status", ctx);
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining('"initialized": true'), "info");
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("prints the doctor report through console.log in headless modes without a UI context", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const { handlers, commands, ctx } = await harness();
+      await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+      const headless = { ...ctx, hasUI: false };
+      await commands.get("context-vault")?.handler("doctor", headless);
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      const report = JSON.parse(String(logSpy.mock.calls[0][0]));
+      expect(report).toMatchObject({ status: "healthy", initialized: true, stateOutsideProjectTree: true });
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it("does not report a rebuild as available when the runtime remains stale", async () => {
