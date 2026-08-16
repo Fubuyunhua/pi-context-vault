@@ -94,14 +94,43 @@ function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+const IGNORED_DIR_NAMES = new Set([".git", ".pi", ".gradle", "node_modules", "dist", "build", "target"]);
+
+/**
+ * True when any path segment is an ignored directory name.
+ *
+ * chokidar normalizes every path to forward slashes before invoking `ignored`
+ * (matchPatterns -> normalizePath), so splitting on the platform `sep` alone
+ * would miss `.git` on Windows and watch volatile git internals (lock files),
+ * which previously crashed the host with EPERM. Normalize explicitly so both
+ * separators match on every platform.
+ */
+export function isWatcherIgnoredPath(path: string): boolean {
+  const parts = path.replaceAll("\\", "/").split("/");
+  return parts.some((part) => IGNORED_DIR_NAMES.has(part));
+}
+
+/** Error codes that are expected during normal operation (e.g. git lock files on Windows). */
+const WATCHER_TRANSIENT_CODES = new Set(["EPERM", "EACCES", "ENOENT", "ENOTDIR"]);
+
 function watcher(root: string): RepoMapWatcher {
   const fsWatcher = chokidar.watch(root, {
     ignoreInitial: true,
-    ignored: (path) =>
-      path
-        .split(sep)
-        .some((part) => [".git", ".pi", ".gradle", "node_modules", "dist", "build", "target"].includes(part)),
+    // On Windows, transient entries such as git lock files (`.git/t88JaC0`) are
+    // held exclusively by other processes and fs.watch throws EPERM/EACCES for
+    // them. chokidar suppresses those errors when this option is set.
+    ignorePermissionErrors: true,
+    ignored: isWatcherIgnoredPath,
   }) as FSWatcher;
+  // chokidar emits `error` for watch failures (EMFILE, ELOOP, ...). Without a
+  // listener, EventEmitter rethrows, which previously crashed the host process
+  // as an uncaughtException when Windows reported EPERM for a git lock file.
+  fsWatcher.on("error", (error: unknown) => {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === undefined || !WATCHER_TRANSIENT_CODES.has(code)) {
+      console.error("[context-vault] repo map watcher error:", error);
+    }
+  });
   const ready = new Promise<void>((resolveReady) => fsWatcher.once("ready", () => resolveReady()));
   return {
     on(event, listener) {
