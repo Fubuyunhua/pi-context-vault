@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  isWatcherIgnoredPath,
   loadActiveRepoMapGeneration,
   type RepoMapChangeEvent,
   RepoMapRuntime,
@@ -52,6 +53,27 @@ class FakeWatcher implements RepoMapWatcher {
     this.closed = true;
   }
 }
+
+describe("isWatcherIgnoredPath", () => {
+  it("ignores git internals regardless of path separator style", () => {
+    // Windows-style paths (backslashes) are what chokidar previously failed to
+    // split on, causing it to watch `.git` lock files and crash with EPERM.
+    expect(isWatcherIgnoredPath("C:\\JavaProjects\\slothub\\.git\\t88JaC0")).toBe(true);
+    expect(isWatcherIgnoredPath("C:\\JavaProjects\\slothub\\.git\\index")).toBe(true);
+    expect(isWatcherIgnoredPath("C:/JavaProjects/slothub/.git/t88JaC0")).toBe(true);
+    expect(isWatcherIgnoredPath("/home/dev/project/.git/HEAD")).toBe(true);
+    expect(isWatcherIgnoredPath("/home/dev/project/.pi/agent/state.json")).toBe(true);
+    expect(isWatcherIgnoredPath("/home/dev/project/node_modules/pkg/index.js")).toBe(true);
+    expect(isWatcherIgnoredPath("/home/dev/project/build/out.class")).toBe(true);
+  });
+
+  it("keeps ordinary project paths visible", () => {
+    expect(isWatcherIgnoredPath("C:\\JavaProjects\\slothub\\src\\Main.java")).toBe(false);
+    expect(isWatcherIgnoredPath("/home/dev/project/src/index.ts")).toBe(false);
+    expect(isWatcherIgnoredPath("/home/dev/project/gitnotes.txt")).toBe(false);
+    expect(isWatcherIgnoredPath("/home/dev/project/.gitignore")).toBe(false);
+  });
+});
 
 async function fixture(files: Record<string, string>, git = true): Promise<{ root: string; stateRoot: string }> {
   const root = await mkdtemp(join(tmpdir(), "context-vault-runtime-"));

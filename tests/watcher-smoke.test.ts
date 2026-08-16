@@ -50,6 +50,47 @@ describe("real chokidar watcher smoke", () => {
     }
   }, 10_000);
 
+  it("never watches git internals and survives lock-file churn (Windows EPERM regression)", async () => {
+    const project = await mkdtemp(join(tmpdir(), "context-vault-gitdir-watcher-project-"));
+    const stateRoot = await mkdtemp(join(tmpdir(), "context-vault-gitdir-watcher-state-"));
+    roots.push(project, stateRoot);
+    // A `.git` directory that is not a real repository: git lock files are
+    // created and deleted here by git operations (e.g. `.git/t88JaC0` during
+    // `git status`). chokidar must never descend into it.
+    await mkdir(join(project, ".git"));
+    await mkdir(join(project, "src"));
+    const path = join(project, "src", "main.ts");
+    await writeFile(path, "export const initialGitWatcherValue = true;");
+    const runtime = new RepoMapRuntime({ projectRoot: project, stateRoot, mapDebounceMs: 25 });
+    try {
+      await runtime.start();
+      const lockPath = join(project, ".git", "t88JaC0");
+      await writeFile(lockPath, Buffer.from([0, 1, 2, 3, 255]));
+      const churn = setInterval(() => {
+        void writeFile(lockPath, Buffer.from([0, 1, 2, 3, 255])).catch(() => undefined);
+      }, 10);
+      try {
+        const symbol = "gitWatcherValue";
+        await writeFile(path, `export const ${symbol} = true;`);
+        const result = await eventually(
+          () => runtime.query(symbol),
+          (query) => query.results.some((entry) => entry.symbols.some((item) => item.name === symbol)),
+        );
+        expect(result.freshness).toMatch(/^(dirty|fresh)$/);
+        expect(result.pendingFiles).toEqual([]);
+        expect(result.results.some((entry) => entry.path.includes(".git"))).toBe(false);
+      } finally {
+        clearInterval(churn);
+      }
+      await rm(lockPath, { force: true });
+      const after = await runtime.query("gitWatcherValue");
+      expect(after.freshness).toMatch(/^(dirty|fresh)$/);
+      expect(after.pendingFiles).toEqual([]);
+    } finally {
+      await runtime.close();
+    }
+  }, 10_000);
+
   it("observes an external Java signature edit on every supported CI operating system", async () => {
     const project = await mkdtemp(join(tmpdir(), "context-vault-java-watcher-project-"));
     const stateRoot = await mkdtemp(join(tmpdir(), "context-vault-java-watcher-state-"));
