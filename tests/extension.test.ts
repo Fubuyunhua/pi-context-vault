@@ -197,13 +197,15 @@ describe("extension observation adapter", () => {
       messages: Array<Record<string, unknown>>;
     };
     expect(transformed.messages).toHaveLength(messages.length + 1);
-    expect(transformed.messages[0]).toMatchObject({
+    // The capsule is frozen after the latest user message, never at index 0.
+    expect(transformed.messages[0]).toEqual(messages[0]);
+    expect(transformed.messages[1]).toMatchObject({
       role: "custom",
       customType: "context-vault-repo-map",
       display: false,
     });
-    expect(Buffer.byteLength(String(transformed.messages[0]?.content))).toBeLessThanOrEqual(6 * 1024);
-    expect(transformed.messages[1]).toEqual(messages[0]);
+    expect(Buffer.byteLength(String(transformed.messages[1]?.content))).toBeLessThanOrEqual(6 * 1024);
+    expect(transformed.messages[2]).toEqual(messages[1]);
     expect(JSON.stringify(transformed.messages)).toContain("context_vault_observation_receipt");
     expect(JSON.stringify(transformed.messages.slice(-12))).not.toContain("context_vault_observation_receipt");
 
@@ -250,13 +252,22 @@ describe("extension observation adapter", () => {
 
     expect(canonical).toEqual([{ role: "user", content: "fix auth", timestamp: 10 }]);
     expect("appendEntry" in pi).toBe(false);
-    const capsule = transformed.messages[0] as { content: string; details: Record<string, unknown> };
+    // The capsule is frozen after the latest user message, never at index 0.
+    expect(transformed.messages[0]).toEqual(canonical[0]);
+    const capsule = transformed.messages[1] as { content: string; details: Record<string, unknown> };
     expect(Buffer.byteLength(capsule.content)).toBeLessThanOrEqual(6 * 1024);
     expect(capsule.content).toContain('"freshness":"stale"');
     expect(capsule.content).toContain('"workspaceRevision":"revision-7"');
     expect(capsule.content).toContain('"fallbackEvidence"');
     expect(capsule.content).not.toContain('"freshness":"fresh"');
     expect(capsule.details).toMatchObject({ persistent: false, freshness: "stale" });
+
+    // A same-turn repeat must reuse the frozen capsule without re-querying.
+    const repeated = (await handlers.get("context")?.({ type: "context", messages: transformed.messages }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(repeated.messages.filter((message) => message.customType === "context-vault-repo-map")).toHaveLength(1);
+    expect(runtime.query).toHaveBeenCalledTimes(1);
   });
 
   it("uses a valid minimal stale capsule when the configured 512-byte budget is exhausted", async () => {
@@ -295,7 +306,7 @@ describe("extension observation adapter", () => {
       { type: "context", messages: [{ role: "user", content: "q".repeat(512), timestamp: 1 }] },
       ctx,
     )) as { messages: Array<{ content: string }> };
-    const content = transformed.messages[0]?.content ?? "";
+    const content = transformed.messages[1]?.content ?? "";
     expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(512);
     const payload = JSON.parse(content.slice(content.indexOf("\n") + 1));
     expect(payload).toMatchObject({
@@ -304,6 +315,287 @@ describe("extension observation adapter", () => {
       truncated: true,
     });
     expect(payload.fallbackEvidence).toHaveLength(1);
+  });
+
+  it("freezes the map capsule within one user turn and refreshes on the next prompt", async () => {
+    const query = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: 3,
+      gitHead: "head-1",
+      workspaceRevision: "revision-1",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 3,
+        gitHead: "head-1",
+        workspaceRevision: "revision-1",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query,
+    };
+    const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    const turnStart = [{ role: "user", content: "fix auth", timestamp: 10 }];
+    const first = (await handlers.get("context")?.({ type: "context", messages: turnStart }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(first.messages[0]).toEqual(turnStart[0]);
+    const capsule = first.messages[1] as { content: string; details: Record<string, unknown> };
+    expect(capsule).toMatchObject({ role: "custom", customType: "context-vault-repo-map", display: false });
+    expect(query).toHaveBeenCalledTimes(1);
+
+    // Same turn, appended tool-call/tool-result messages: the frozen capsule is
+    // re-inserted byte-for-byte at its original index without re-querying.
+    const grown = [
+      ...turnStart,
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+        timestamp: 11,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+        timestamp: 12,
+      },
+    ];
+    const second = (await handlers.get("context")?.({ type: "context", messages: grown }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(second.messages[0]).toEqual(turnStart[0]);
+    expect(second.messages[1]).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
+    expect(second.messages[1]).toEqual(capsule);
+    expect(query).toHaveBeenCalledTimes(1);
+
+    // New user turn (before_agent_start): the capsule is rebuilt exactly once,
+    // even when the user message text is byte-identical to the previous turn.
+    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
+    const third = (await handlers.get("context")?.({ type: "context", messages: turnStart }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(third.messages[1]).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
+    expect(third.messages[1]).not.toBe(capsule);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("resets the turn sequence and freeze on session lifecycle", async () => {
+    const query = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: 1,
+      gitHead: "h",
+      workspaceRevision: "r",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 1,
+        gitHead: "h",
+        workspaceRevision: "r",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query,
+    };
+    const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    // Turn 1 builds and freezes.
+    const messages = [{ role: "user", content: "fix auth", timestamp: 10 }];
+    await handlers.get("context")?.({ type: "context", messages }, ctx);
+    expect(query).toHaveBeenCalledTimes(1);
+
+    // Session lifecycle resets turnSequence and the freeze; a fresh turn must
+    // build again instead of reusing the previous session's capsule.
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx);
+    await handlers.get("session_start")?.({ type: "session_start", reason: "new" }, ctx);
+    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
+    const rebuilt = (await handlers.get("context")?.({ type: "context", messages }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(rebuilt.messages[1]).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
+    expect(query).toHaveBeenCalledTimes(2);
+
+    // Same turn, no before_agent_start: reuse, no additional query.
+    await handlers.get("context")?.({ type: "context", messages }, ctx);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a capsule per LLM call in every-llm-call mode", async () => {
+    const query = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: 1,
+      gitHead: "h",
+      workspaceRevision: "r",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 1,
+        gitHead: "h",
+        workspaceRevision: "r",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query,
+    };
+    const { handlers, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "every-llm-call" },
+    );
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    const messages = [{ role: "user", content: "fix auth", timestamp: 10 }];
+    const first = (await handlers.get("context")?.({ type: "context", messages }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(first.messages[0]).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
+    expect(query).toHaveBeenCalledTimes(1);
+
+    const grown = [
+      ...messages,
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c", name: "read", arguments: {} }],
+        timestamp: 11,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+        timestamp: 12,
+      },
+    ];
+    const second = (await handlers.get("context")?.({ type: "context", messages: grown }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(second.messages[0]).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("injects no automatic capsule in off mode", async () => {
+    const query = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: 1,
+      gitHead: "h",
+      workspaceRevision: "r",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 1,
+        gitHead: "h",
+        workspaceRevision: "r",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query,
+    };
+    const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime }, { mapInjectionMode: "off" });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    const messages = [{ role: "user", content: "fix auth", timestamp: 10 }];
+    const result = await handlers.get("context")?.({ type: "context", messages }, ctx);
+    expect(result).toBeUndefined();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("does not resurrect a frozen capsule after the map becomes unavailable", async () => {
+    const query = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: 1,
+      gitHead: "h",
+      workspaceRevision: "r",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 1,
+        gitHead: "h",
+        workspaceRevision: "r",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query,
+    };
+    const failing = {
+      start: vi.fn(async () => {
+        throw new Error("map failed");
+      }),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "stale" as const,
+        generation: 0,
+        gitHead: "h",
+        workspaceRevision: "r",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query: vi.fn(),
+    };
+    let factoryCalls = 0;
+    const { handlers, ctx } = await harness({
+      repoMapRuntimeFactory: () => {
+        factoryCalls += 1;
+        return factoryCalls === 1 ? runtime : failing;
+      },
+    });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    const messages = [{ role: "user", content: "fix auth", timestamp: 10 }];
+    const first = (await handlers.get("context")?.({ type: "context", messages }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(first.messages[1]).toMatchObject({ customType: "context-vault-repo-map" });
+
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx);
+    await handlers.get("session_start")?.({ type: "session_start", reason: "new" }, ctx);
+    const second = await handlers.get("context")?.({ type: "context", messages }, ctx);
+    expect(second).toBeUndefined();
   });
 
   it("initializes and disposes the map watcher idempotently across session lifecycle events", async () => {
@@ -467,5 +759,349 @@ describe("extension observation adapter", () => {
       components: { repoMap: { available: false, freshness: "stale", error: "atomic activation failed" } },
     });
     expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("rebuild failed"), "error");
+  });
+
+  it("clears a frozen capsule across failed and successful rebuild boundaries in one turn", async () => {
+    let rebuildAttempts = 0;
+    let workspaceRevision = "revision-before";
+    const query = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: rebuildAttempts + 1,
+      gitHead: "head",
+      workspaceRevision,
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => {
+        rebuildAttempts += 1;
+        if (rebuildAttempts === 1) throw new Error("first rebuild failed");
+        workspaceRevision = "revision-after";
+      }),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: rebuildAttempts + 1,
+        gitHead: "head",
+        workspaceRevision,
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query,
+    };
+    const { handlers, commands, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    const first = (await handlers.get("context")?.(
+      { type: "context", messages: [{ role: "user", content: "inspect", timestamp: 1 }] },
+      ctx,
+    )) as { messages: Array<Record<string, unknown>> };
+
+    await commands.get("context-vault")?.handler("rebuild", ctx);
+    await commands.get("context-vault")?.handler("rebuild", ctx);
+    const second = (await handlers.get("context")?.({ type: "context", messages: first.messages }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(second.messages).toHaveLength(2);
+    expect(String(second.messages[1]?.content)).toContain('"workspaceRevision":"revision-after"');
+    expect(second.messages[1]).not.toEqual(first.messages[1]);
+  });
+
+  it("contains capsule render failures, continues reduction, and counts failed automatic queries", async () => {
+    const cyclicSymbol: Record<string, unknown> = { name: "cyclic" };
+    cyclicSymbol.self = cyclicSymbol;
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 1,
+        gitHead: "head",
+        workspaceRevision: "revision",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("query failed"))
+        .mockResolvedValueOnce({
+          results: [
+            {
+              path: "src/cyclic.ts",
+              kind: "semantic",
+              matchedSymbols: ["cyclic"],
+              symbols: [cyclicSymbol],
+              dependencies: [],
+            },
+          ],
+          freshness: "fresh" as const,
+          generation: 1,
+          gitHead: "head",
+          workspaceRevision: "revision",
+          pendingFiles: [],
+          fallbackEvidence: [],
+        }),
+    };
+    const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    await expect(
+      handlers.get("context")?.({ type: "context", messages: [{ role: "user", content: "first", timestamp: 1 }] }, ctx),
+    ).resolves.toBeDefined();
+    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
+    await expect(
+      handlers.get("context")?.(
+        { type: "context", messages: [{ role: "user", content: "second", timestamp: 2 }] },
+        ctx,
+      ),
+    ).resolves.toBeUndefined();
+
+    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
+    const parsed = JSON.parse(status.content[0].text);
+    expect(parsed.telemetry.repoMapAutomaticQueryCount).toBe(2);
+    expect(parsed.telemetry.reductionInvocationCount).toBe(2);
+    expect(parsed.telemetry.capsuleBuildCount).toBe(1);
+    expect(parsed.failures).toEqual([
+      expect.objectContaining({ component: "repo-map", error: expect.stringContaining("circular") }),
+    ]);
+    expect(parsed.failures[0].error.length).toBeLessThanOrEqual(512);
+  });
+
+  it("telemetry: context hook message structure is unchanged and capsule counters increase", async () => {
+    const query = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: 1,
+      gitHead: "h",
+      workspaceRevision: "r",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 1,
+        gitHead: "h",
+        workspaceRevision: "r",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query,
+    };
+    const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    const turnStart = [{ role: "user", content: "fix auth", timestamp: 10 }];
+    const first = (await handlers.get("context")?.({ type: "context", messages: turnStart }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    // Message structure is identical to the pre-telemetry behavior.
+    expect(first.messages[0]).toEqual(turnStart[0]);
+    expect(first.messages[1]).toMatchObject({ role: "custom", customType: "context-vault-repo-map", display: false });
+
+    const grown = [
+      ...turnStart,
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c", name: "read", arguments: {} }],
+        timestamp: 11,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+        timestamp: 12,
+      },
+    ];
+    const second = (await handlers.get("context")?.({ type: "context", messages: grown }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    expect(second.messages[1]).toEqual(first.messages[1]);
+
+    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
+    const telemetry = JSON.parse(status.content[0].text).telemetry;
+    expect(telemetry.capsuleBuildCount).toBe(1);
+    expect(telemetry.repoMapAutomaticQueryCount).toBe(1);
+    expect(telemetry.capsuleInsertionIndex).toBe(1);
+    expect(telemetry.capsuleBytes).toBeGreaterThan(0);
+  });
+
+  it("telemetry: capsule hash change increments across user turns", async () => {
+    const query = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: 1,
+      gitHead: "h",
+      workspaceRevision: "r",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 1,
+        gitHead: "h",
+        workspaceRevision: "r",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query,
+    };
+    const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    await handlers.get("context")?.(
+      { type: "context", messages: [{ role: "user", content: "first prompt", timestamp: 1 }] },
+      ctx,
+    );
+    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
+    await handlers.get("context")?.(
+      { type: "context", messages: [{ role: "user", content: "second prompt", timestamp: 2 }] },
+      ctx,
+    );
+
+    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
+    const telemetry = JSON.parse(status.content[0].text).telemetry;
+    expect(telemetry.capsuleBuildCount).toBe(2);
+    expect(telemetry.capsuleHashChangeCount).toBe(1);
+  });
+
+  it("telemetry: reduction counters accumulate", async () => {
+    const { handlers, tools, ctx } = await harness();
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    // Small context: reduceContext runs but does not trigger.
+    await handlers.get("context")?.(
+      { type: "context", messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      ctx,
+    );
+
+    // Large context: reduction triggers.
+    const narrowContext = { ...ctx, model: { contextWindow: 35_000 } };
+    const messages: Array<Record<string, unknown>> = [{ role: "user", content: "big", timestamp: 0 }];
+    for (let index = 0; index < 20; index += 1) {
+      const text = `${index}:`.padEnd(8_000, "x");
+      await handlers.get("tool_result")?.({
+        type: "tool_result",
+        toolCallId: `telemetry-call-${index}`,
+        toolName: "read",
+        input: {},
+        content: [{ type: "text", text }],
+        isError: false,
+      });
+      messages.push({
+        role: "assistant",
+        content: [{ type: "toolCall", id: `telemetry-call-${index}`, name: "read", arguments: {} }],
+        timestamp: index * 2 + 1,
+      });
+      messages.push({
+        role: "toolResult",
+        toolCallId: `telemetry-call-${index}`,
+        toolName: "read",
+        content: [{ type: "text", text }],
+        isError: false,
+        timestamp: index * 2 + 2,
+      });
+    }
+    await handlers.get("context")?.({ type: "context", messages }, narrowContext);
+
+    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
+    const telemetry = JSON.parse(status.content[0].text).telemetry;
+    expect(telemetry.reductionInvocationCount).toBe(2);
+    expect(telemetry.reductionTriggeredCount).toBe(1);
+    expect(telemetry.reducedObservationCount).toBeGreaterThan(0);
+    expect(telemetry.estimatedTokensBeforeTotal).toBeGreaterThan(0);
+    expect(telemetry.estimatedTokensAfterTotal).toBeGreaterThan(0);
+    expect(telemetry.reductionDurationMsTotal).toBeGreaterThanOrEqual(0);
+  }, 15_000);
+
+  it("telemetry: status snapshot is a copy, bounded, and free of raw content", async () => {
+    const query = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: 1,
+      gitHead: "h",
+      workspaceRevision: "r",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 1,
+        gitHead: "h",
+        workspaceRevision: "r",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query,
+    };
+    const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    await handlers.get("context")?.(
+      { type: "context", messages: [{ role: "user", content: "fix auth", timestamp: 1 }] },
+      ctx,
+    );
+    await handlers.get("tool_result")?.({
+      type: "tool_result",
+      toolCallId: "marker-call",
+      toolName: "bash",
+      input: {},
+      content: [{ type: "text", text: "SECRET-TOOL-OUTPUT-MARKER-xyz" }],
+      isError: false,
+    });
+
+    const first = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
+    const firstStatus = JSON.parse(first.content[0].text);
+    const snapshot = firstStatus.telemetry;
+    snapshot.capsuleBuildCount = 999;
+    snapshot.repoMapQueryCount = 999;
+
+    const second = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
+    const secondStatus = JSON.parse(second.content[0].text);
+    expect(secondStatus.telemetry.capsuleBuildCount).toBe(1);
+    expect(secondStatus.telemetry.repoMapQueryCount).toBe(0);
+
+    // Bounded: every telemetry field is a finite number, no arrays or records.
+    for (const [key, value] of Object.entries(secondStatus.telemetry)) {
+      expect(typeof value, key).toBe("number");
+      expect(Number.isFinite(value), key).toBe(true);
+    }
+
+    // Privacy: status never contains raw tool output.
+    expect(first.content[0].text).not.toContain("SECRET-TOOL-OUTPUT-MARKER-xyz");
+    expect(second.content[0].text).not.toContain("SECRET-TOOL-OUTPUT-MARKER-xyz");
+  });
+
+  it("telemetry: degraded state is unaffected by telemetry presence", async () => {
+    const { handlers, tools, ctx } = await harness();
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
+    const parsed = JSON.parse(status.content[0].text);
+    expect(parsed.degraded).toBe(false);
+    expect(parsed.telemetry).toBeDefined();
+    expect(parsed.components.observations.degraded).toBe(false);
   });
 });

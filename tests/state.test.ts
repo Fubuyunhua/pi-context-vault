@@ -90,6 +90,9 @@ describe("project state", () => {
 
     await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ mapContextMaxBytes: 511 }));
     await expect(loadConfig(root)).rejects.toThrow("mapContextMaxBytes must be at least 512");
+
+    await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ debugRequestFingerprints: "yes" }));
+    await expect(loadConfig(root)).rejects.toThrow("debugRequestFingerprints must be a boolean");
   });
 
   it("rejects unknown, non-numeric, and inconsistent configuration", async () => {
@@ -105,6 +108,21 @@ describe("project state", () => {
     await expect(loadConfig(root)).rejects.toThrow("between 0 and 1");
     await writeFile(path, JSON.stringify({ softContextRatio: 0.5, targetContextRatio: 0.6 }));
     await expect(loadConfig(root)).rejects.toThrow("lower than");
+  });
+
+  it("accepts and validates mapInjectionMode", async () => {
+    const root = await tempRoot();
+    const defaults = await loadConfig(root);
+    expect(defaults.mapInjectionMode).toBe("once-per-user-turn");
+
+    await mkdir(join(root, ".pi"));
+    const path = join(root, ".pi", "context-vault.json");
+    for (const mode of ["off", "once-per-user-turn", "every-llm-call"]) {
+      await writeFile(path, JSON.stringify({ mapInjectionMode: mode }));
+      await expect(loadConfig(root)).resolves.toMatchObject({ mapInjectionMode: mode });
+    }
+    await writeFile(path, JSON.stringify({ mapInjectionMode: "sometimes" }));
+    await expect(loadConfig(root)).rejects.toThrow("mapInjectionMode must be one of");
   });
 
   it("rejects invalid repository map exclusions", async () => {

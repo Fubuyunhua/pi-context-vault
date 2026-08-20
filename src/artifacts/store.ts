@@ -3,6 +3,7 @@ import type { Dirent } from "node:fs";
 import { readdir, readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { atomicWriteFile, withFileLock } from "../state/atomic.js";
+import type { Telemetry } from "../telemetry.js";
 import { redactSecrets } from "./redaction.js";
 
 const METADATA_FILE = "observations.jsonl";
@@ -12,6 +13,7 @@ export interface ArtifactStoreOptions {
   artifactsRoot: string;
   metadataRoot: string;
   now?: () => Date;
+  telemetry?: Telemetry;
 }
 
 export interface ArchiveObservationInput {
@@ -103,12 +105,14 @@ export class ArtifactStore {
   readonly #metadataPath: string;
   readonly #lockPath: string;
   readonly #now: () => Date;
+  readonly #telemetry?: Telemetry;
 
   constructor(options: ArtifactStoreOptions) {
     this.#artifactsRoot = options.artifactsRoot;
     this.#metadataPath = join(options.metadataRoot, METADATA_FILE);
     this.#lockPath = join(options.metadataRoot, LOCK_FILE);
     this.#now = options.now ?? (() => new Date());
+    this.#telemetry = options.telemetry;
   }
 
   artifactPath(artifactId: string): string {
@@ -154,7 +158,12 @@ export class ArtifactStore {
       const existingIndex = entries.findIndex((entry) => entry.observationId === input.observationId);
       if (existingIndex === -1) entries.push(metadata);
       else entries[existingIndex] = metadata;
-      await atomicWriteFile(this.#metadataPath, encodeMetadata(entries));
+      const metadataWriteStartedAt = performance.now();
+      try {
+        await atomicWriteFile(this.#metadataPath, encodeMetadata(entries));
+      } finally {
+        this.#telemetry?.recordMetadataWrite(performance.now() - metadataWriteStartedAt);
+      }
       return { artifactId: contentHash, metadata, deduplicated };
     });
   }
@@ -259,11 +268,14 @@ export class ArtifactStore {
   }
 
   async #readMetadataUnlocked(): Promise<ArtifactMetadata[]> {
+    const startedAt = performance.now();
     try {
       return parseMetadata(await readFile(this.#metadataPath, "utf8"));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
+    } finally {
+      this.#telemetry?.recordMetadataRead(performance.now() - startedAt);
     }
   }
 

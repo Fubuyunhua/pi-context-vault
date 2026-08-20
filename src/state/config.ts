@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+export type MapInjectionMode = "off" | "once-per-user-turn" | "every-llm-call";
+
 export interface ContextVaultConfig {
   archiveThresholdBytes: number;
   receiptMaxBytes: number;
@@ -12,6 +14,9 @@ export interface ContextVaultConfig {
   mapContextMaxBytes: number;
   mapDebounceMs: number;
   mapExcludePatterns: string[];
+  mapInjectionMode: MapInjectionMode;
+  /** Reserved for a later debug Spec; inert in this release. */
+  debugRequestFingerprints: boolean;
 }
 
 export const DEFAULT_CONFIG: Readonly<ContextVaultConfig> = Object.freeze({
@@ -25,7 +30,11 @@ export const DEFAULT_CONFIG: Readonly<ContextVaultConfig> = Object.freeze({
   mapContextMaxBytes: 6 * 1024,
   mapDebounceMs: 300,
   mapExcludePatterns: [],
+  mapInjectionMode: "once-per-user-turn",
+  debugRequestFingerprints: false,
 });
+
+const MAP_INJECTION_MODES = new Set<MapInjectionMode>(["off", "once-per-user-turn", "every-llm-call"]);
 
 const POSITIVE_INTEGERS = new Set<keyof ContextVaultConfig>([
   "archiveThresholdBytes",
@@ -38,6 +47,8 @@ const POSITIVE_INTEGERS = new Set<keyof ContextVaultConfig>([
 ]);
 
 const STRING_ARRAYS = new Set<keyof ContextVaultConfig>(["mapExcludePatterns"]);
+
+const BOOLEAN_OPTIONS = new Set<keyof ContextVaultConfig>(["debugRequestFingerprints"]);
 
 export async function loadConfig(projectRoot: string): Promise<ContextVaultConfig> {
   const configPath = join(projectRoot, ".pi", "context-vault.json");
@@ -66,6 +77,20 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
         throw new Error(`${key} must be an array of non-empty strings`);
       }
       config.mapExcludePatterns = [...value];
+      continue;
+    }
+    if (typedKey === "mapInjectionMode") {
+      if (typeof value !== "string" || !MAP_INJECTION_MODES.has(value as MapInjectionMode)) {
+        throw new Error("mapInjectionMode must be one of off, once-per-user-turn, every-llm-call");
+      }
+      config.mapInjectionMode = value as MapInjectionMode;
+      continue;
+    }
+    if (BOOLEAN_OPTIONS.has(typedKey)) {
+      if (typeof value !== "boolean") {
+        throw new Error(`${key} must be a boolean`);
+      }
+      (config[typedKey] as boolean) = value;
       continue;
     }
     if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${key} must be a finite number`);

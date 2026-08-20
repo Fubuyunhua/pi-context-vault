@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { ArtifactMetadata, ArtifactStore } from "../artifacts/store.js";
+import type { ArchivedArtifact, ArtifactMetadata, ArtifactStore } from "../artifacts/store.js";
+import type { Telemetry } from "../telemetry.js";
 
 export const MAX_QUERY_LENGTH = 512;
 export const MAX_RETRIEVAL_BYTES = 32 * 1024;
@@ -34,6 +35,7 @@ export interface ObservationRuntimeOptions {
   projectId: string;
   projectRoot: string;
   sessionId: string;
+  telemetry?: Telemetry;
 }
 
 export interface ObservationGetResult {
@@ -125,6 +127,7 @@ export class ObservationRuntime {
   readonly #archiveThresholdBytes: number;
   readonly #receiptMaxBytes: number;
   readonly #status: ObservationRuntimeStatus;
+  readonly #telemetry?: Telemetry;
 
   constructor(options: ObservationRuntimeOptions) {
     if (!Number.isSafeInteger(options.archiveThresholdBytes) || options.archiveThresholdBytes <= 0) {
@@ -136,6 +139,7 @@ export class ObservationRuntime {
     this.#store = options.store;
     this.#archiveThresholdBytes = options.archiveThresholdBytes;
     this.#receiptMaxBytes = options.receiptMaxBytes;
+    this.#telemetry = options.telemetry;
     this.#status = {
       projectId: options.projectId,
       projectRoot: options.projectRoot,
@@ -153,16 +157,27 @@ export class ObservationRuntime {
 
   async virtualize(input: VirtualizeInput): Promise<VirtualizeResult> {
     const id = observationId(this.#status.sessionId, input.toolCallId);
+    this.#telemetry?.recordArchiveStarted();
+    const startedAt = performance.now();
+    let archived: ArchivedArtifact;
     try {
-      const archived = await this.#store.archive({
+      archived = await this.#store.archive({
         observationId: id,
         toolCallId: input.toolCallId,
         toolName: input.toolName,
         sessionId: this.#status.sessionId,
         content: input.text,
       });
-      this.#status.archived += 1;
-      if (Buffer.byteLength(input.text) <= this.#archiveThresholdBytes) return { observationId: id };
+    } catch (error) {
+      this.#telemetry?.recordArchiveFailed(performance.now() - startedAt);
+      this.#recordFailure(id, error);
+      return { observationId: id };
+    }
+
+    this.#telemetry?.recordArchiveSucceeded(performance.now() - startedAt, archived.deduplicated);
+    this.#status.archived += 1;
+    if (Buffer.byteLength(input.text) <= this.#archiveThresholdBytes) return { observationId: id };
+    try {
       const sanitizedContent = await this.#store.read(archived.artifactId);
       const replacement = buildReceipt({
         observationId: id,
@@ -175,14 +190,20 @@ export class ObservationRuntime {
       this.#status.replaced += 1;
       return { observationId: id, replacement };
     } catch (error) {
-      this.#status.degraded = true;
-      this.#status.failures.push({
-        observationId: id,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      this.#status.failures.splice(0, Math.max(0, this.#status.failures.length - 20));
+      // The durable archive already succeeded. Receipt materialization can
+      // degrade replacement, but it must not also count as an archive failure.
+      this.#recordFailure(id, error);
       return { observationId: id };
     }
+  }
+
+  #recordFailure(observationId: string, error: unknown): void {
+    this.#status.degraded = true;
+    this.#status.failures.push({
+      observationId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    this.#status.failures.splice(0, Math.max(0, this.#status.failures.length - 20));
   }
 
   async get(params: { id: string; query?: string; offset?: number; limit?: number }): Promise<ObservationGetResult> {

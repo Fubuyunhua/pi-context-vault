@@ -1,9 +1,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "../src/artifacts/store.js";
 import { buildReceipt, ObservationRuntime, observationId } from "../src/observations/virtualization.js";
+import { Telemetry } from "../src/telemetry.js";
 
 const roots: string[] = [];
 
@@ -142,5 +143,74 @@ describe("observation virtualization", () => {
     };
     expect(buildReceipt(input)).toBe(buildReceipt(input));
     expect(() => buildReceipt({ ...input, maxBytes: 100 })).toThrow("at least 512");
+  });
+
+  it("telemetry: archive counters track attempts and outcomes without changing replacement", async () => {
+    const root = await mkdtemp(join(tmpdir(), "context-vault-observations-telemetry-"));
+    roots.push(root);
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    await mkdir(artifactsRoot);
+    const telemetry = new Telemetry();
+    const store = new ArtifactStore({ artifactsRoot, metadataRoot, telemetry });
+    const runtime = new ObservationRuntime({
+      store,
+      archiveThresholdBytes: 16,
+      receiptMaxBytes: 512,
+      projectId: "project",
+      projectRoot: "/project",
+      sessionId: "session",
+      telemetry,
+    });
+
+    // Small text: archived without replacement, behavior unchanged.
+    const small = await runtime.virtualize({ toolCallId: "a", toolName: "bash", text: "ok", isError: false });
+    expect(small.replacement).toBeUndefined();
+    // Large text: archived and replaced, behavior unchanged.
+    const big = await runtime.virtualize({
+      toolCallId: "b",
+      toolName: "bash",
+      text: "x".repeat(1_000),
+      isError: false,
+    });
+    expect(big.replacement).toBeDefined();
+    // Duplicate content: artifact deduplicated, metadata record still appended.
+    await runtime.virtualize({ toolCallId: "c", toolName: "bash", text: "x".repeat(1_000), isError: false });
+
+    let snapshot = telemetry.snapshot();
+    expect(snapshot.archiveAttemptCount).toBe(3);
+    expect(snapshot.archiveSuccessCount).toBe(3);
+    expect(snapshot.archiveFailureCount).toBe(0);
+    expect(snapshot.archiveDeduplicatedCount).toBe(1);
+    expect(Number.isFinite(snapshot.archiveDurationMsTotal)).toBe(true);
+    expect(snapshot.archiveDurationMsTotal).toBeGreaterThanOrEqual(0);
+
+    // A durable archive followed by a receipt read/render failure remains one
+    // archive success, never both a success and a failure for the same attempt.
+    const read = vi.spyOn(store, "read").mockRejectedValueOnce(new Error("receipt read failed"));
+    const receiptFailed = await runtime.virtualize({
+      toolCallId: "receipt-failure",
+      toolName: "bash",
+      text: "y".repeat(1_000),
+      isError: false,
+    });
+    expect(receiptFailed.replacement).toBeUndefined();
+    snapshot = telemetry.snapshot();
+    expect(snapshot.archiveAttemptCount).toBe(4);
+    expect(snapshot.archiveSuccessCount).toBe(4);
+    expect(snapshot.archiveFailureCount).toBe(0);
+    expect(runtime.status()).toMatchObject({ archived: 4, replaced: 2, degraded: true });
+    read.mockRestore();
+
+    // Failure path: an unwritable artifacts root fails the archive but still
+    // increments the failure counter and keeps the original result.
+    await rm(artifactsRoot, { recursive: true, force: true });
+    await writeFile(artifactsRoot, "not a directory");
+    const failed = await runtime.virtualize({ toolCallId: "d", toolName: "bash", text: "boom", isError: false });
+    expect(failed.replacement).toBeUndefined();
+    snapshot = telemetry.snapshot();
+    expect(snapshot.archiveAttemptCount).toBe(5);
+    expect(snapshot.archiveFailureCount).toBe(1);
+    expect(snapshot.archiveSuccessCount).toBe(4);
   });
 });

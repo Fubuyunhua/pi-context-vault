@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { relative, sep } from "node:path";
 import type {
   ContextEvent,
@@ -17,6 +18,7 @@ import {
 import { RepoMapRuntime, type RepoMapRuntimeOptions, type RepoMapRuntimeQuery } from "./repo-map/runtime.js";
 import { type ContextVaultConfig, loadConfig } from "./state/config.js";
 import { type ProjectStatePaths, resolveProjectState } from "./state/project-state.js";
+import { Telemetry } from "./telemetry.js";
 
 export const EXTENSION_ID = "context-vault";
 export const EXTENSION_VERSION = "0.1.0";
@@ -45,6 +47,21 @@ interface RuntimeState {
   repoMap?: RepoMapController;
   repoMapAvailable: boolean;
   failures: Array<{ component: string; error: string }>;
+  /** Bounded runtime telemetry; reset with the session lifecycle. */
+  telemetry: Telemetry;
+  /** Monotonic user-turn sequence, advanced only by before_agent_start. */
+  turnSequence: number;
+  /** Frozen per-user-turn capsule: re-inserted byte-for-byte without re-querying. */
+  mapCapsule?: FrozenMapCapsule;
+}
+
+interface FrozenMapCapsule {
+  /** User-turn sequence at which this capsule was built. */
+  turn: number;
+  /** Insertion index captured at freeze time, relative to messages without a capsule. */
+  index: number;
+  /** The complete custom message object; re-inserted as-is on reuse. */
+  message: Extract<ContextEvent["messages"][number], { role: "custom" }>;
 }
 
 function errorMessage(error: unknown): string {
@@ -99,11 +116,23 @@ function mapQuery(messages: ContextEvent["messages"]): string {
   return "repository structure";
 }
 
+function lastUserMessageIndex(messages: ContextEvent["messages"]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if ((messages[index] as ContextEvent["messages"][number]).role === "user") return index;
+  }
+  return -1;
+}
+
 function utf8Prefix(value: string, maxBytes: number): string {
   if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
   let prefix = Buffer.from(value, "utf8").subarray(0, maxBytes).toString("utf8");
   while (Buffer.byteLength(prefix, "utf8") > maxBytes) prefix = prefix.slice(0, -1);
   return prefix;
+}
+
+function recordRuntimeFailure(state: RuntimeState, component: string, error: unknown): void {
+  state.failures.push({ component, error: utf8Prefix(errorMessage(error), 512) });
+  state.failures.splice(0, Math.max(0, state.failures.length - 20));
 }
 
 function boundedMapCapsule(query: string, result: RepoMapRuntimeQuery, maxBytes: number): string {
@@ -206,16 +235,29 @@ function runtimeStatus(runtime: RuntimeState) {
           }
         : { available: false, error: runtime.failures.find((failure) => failure.component === "repo-map")?.error },
     },
+    telemetry: runtime.telemetry.snapshot(),
     failures: [...runtime.failures],
   };
 }
 
 export function registerContextVault(pi: ExtensionAPI, options: RegisterContextVaultOptions = {}): void {
-  let runtime: RuntimeState = { initialized: false, repoMapAvailable: false, failures: [] };
+  let runtime: RuntimeState = {
+    initialized: false,
+    repoMapAvailable: false,
+    failures: [],
+    telemetry: new Telemetry(),
+    turnSequence: 0,
+  };
 
   const dispose = async (): Promise<void> => {
     const map = runtime.repoMap;
-    runtime = { initialized: false, repoMapAvailable: false, failures: [] };
+    runtime = {
+      initialized: false,
+      repoMapAvailable: false,
+      failures: [],
+      telemetry: new Telemetry(),
+      turnSequence: 0,
+    };
     if (map) {
       try {
         await map.close();
@@ -227,13 +269,20 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
 
   pi.on("session_start", async (_event, ctx) => {
     await dispose();
-    const next: RuntimeState = { initialized: false, repoMapAvailable: false, failures: [] };
+    const next: RuntimeState = {
+      initialized: false,
+      repoMapAvailable: false,
+      failures: [],
+      telemetry: new Telemetry(),
+      turnSequence: 0,
+    };
     try {
       next.state = await resolveProjectState(ctx.cwd, options.env ?? process.env);
       next.config = await loadConfig(next.state.projectRoot);
       next.store = new ArtifactStore({
         artifactsRoot: next.state.artifactsRoot,
         metadataRoot: next.state.metadataRoot,
+        telemetry: next.telemetry,
       });
       next.observations = new ObservationRuntime({
         store: next.store,
@@ -242,6 +291,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         projectId: next.state.projectId,
         projectRoot: next.state.projectRoot,
         sessionId: ctx.sessionManager.getSessionId(),
+        telemetry: next.telemetry,
       });
       next.initialized = true;
       next.repoMap = (options.repoMapRuntimeFactory ?? ((mapOptions) => new RepoMapRuntime(mapOptions)))({
@@ -249,6 +299,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         stateRoot: next.state.mapRoot,
         exclude: next.config.mapExcludePatterns,
         mapDebounceMs: next.config.mapDebounceMs,
+        telemetry: next.telemetry,
       });
       try {
         await next.repoMap.start();
@@ -269,6 +320,8 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   });
 
   pi.on("before_agent_start", async () => {
+    runtime.turnSequence += 1;
+    runtime.mapCapsule = undefined;
     if (!runtime.repoMapAvailable) return;
     try {
       await runtime.repoMap?.ensureFresh();
@@ -303,41 +356,76 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
     let messages = hasPreviousCapsule
       ? event.messages.filter((message) => !(message.role === "custom" && message.customType === MAP_CAPSULE_TYPE))
       : event.messages;
-    if (runtime.repoMapAvailable && runtime.repoMap && runtime.config) {
-      const query = mapQuery(messages);
-      let result: RepoMapRuntimeQuery;
+    const injectionMode = runtime.config?.mapInjectionMode ?? "once-per-user-turn";
+    if (runtime.repoMapAvailable && runtime.repoMap && runtime.config && injectionMode !== "off") {
       try {
-        result = await runtime.repoMap.query(query, { limit: 8 });
+        const frozen = runtime.mapCapsule;
+        if (injectionMode === "once-per-user-turn" && frozen?.turn === runtime.turnSequence) {
+          // Same user turn: re-insert the identical capsule at its frozen index
+          // without re-querying the map or re-rendering the payload.
+          const insertIndex = Math.min(frozen.index, messages.length);
+          messages = [...messages.slice(0, insertIndex), frozen.message, ...messages.slice(insertIndex)];
+        } else {
+          const query = mapQuery(messages);
+          let result: RepoMapRuntimeQuery;
+          runtime.telemetry.recordAutomaticQuery();
+          try {
+            result = await runtime.repoMap.query(query, { limit: 8 });
+          } catch (error) {
+            result = {
+              results: [],
+              freshness: "stale",
+              generation: 0,
+              gitHead: "unavailable",
+              workspaceRevision: "unavailable",
+              pendingFiles: [],
+              fallbackEvidence: [
+                {
+                  kind: "source",
+                  excerpt: "Repository-map query failed; use direct source reads, grep, and Git diff.",
+                },
+              ],
+              error: errorMessage(error),
+            };
+          }
+          // Per-user-turn mode freezes the capsule after the latest user message;
+          // every-llm-call mode keeps the legacy head-of-history placement.
+          const freeze = injectionMode === "once-per-user-turn";
+          const lastUserIndex = lastUserMessageIndex(messages);
+          const insertIndex = freeze && lastUserIndex >= 0 ? Math.min(lastUserIndex + 1, messages.length) : 0;
+          const timestamp =
+            freeze && lastUserIndex >= 0
+              ? (messages[lastUserIndex]?.timestamp ?? 0)
+              : Math.max(0, (messages[0]?.timestamp ?? Date.now()) - 1);
+          const capsule: Extract<ContextEvent["messages"][number], { role: "custom" }> = {
+            role: "custom",
+            customType: MAP_CAPSULE_TYPE,
+            content: boundedMapCapsule(query, result, runtime.config.mapContextMaxBytes),
+            display: false,
+            details: { persistent: false, freshness: result.freshness, workspaceRevision: result.workspaceRevision },
+            timestamp,
+          };
+          if (freeze) runtime.mapCapsule = { turn: runtime.turnSequence, index: insertIndex, message: capsule };
+          if (typeof capsule.content === "string") {
+            runtime.telemetry.recordCapsuleBuild(
+              Buffer.byteLength(capsule.content, "utf8"),
+              insertIndex,
+              createHash("sha256").update(capsule.content, "utf8").digest("hex"),
+            );
+          }
+          messages = [...messages.slice(0, insertIndex), capsule, ...messages.slice(insertIndex)];
+        }
       } catch (error) {
-        result = {
-          results: [],
-          freshness: "stale",
-          generation: 0,
-          gitHead: "unavailable",
-          workspaceRevision: "unavailable",
-          pendingFiles: [],
-          fallbackEvidence: [
-            { kind: "source", excerpt: "Repository-map query failed; use direct source reads, grep, and Git diff." },
-          ],
-          error: errorMessage(error),
-        };
+        // Map capsules are advisory: malformed/unserializable query data must
+        // never abort the context hook or prevent observation reduction.
+        runtime.mapCapsule = undefined;
+        recordRuntimeFailure(runtime, "repo-map", error);
       }
-      const timestamp = Math.max(0, (messages[0]?.timestamp ?? Date.now()) - 1);
-      messages = [
-        {
-          role: "custom",
-          customType: MAP_CAPSULE_TYPE,
-          content: boundedMapCapsule(query, result, runtime.config.mapContextMaxBytes),
-          display: false,
-          details: { persistent: false, freshness: result.freshness, workspaceRevision: result.workspaceRevision },
-          timestamp,
-        },
-        ...messages,
-      ];
     }
     if (!runtime.store || !runtime.config || !runtime.observations || ctx.model === undefined) {
       return messages === event.messages ? undefined : { messages };
     }
+    const reductionStartedAt = performance.now();
     const reduced = await reduceContext({
       store: runtime.store,
       messages,
@@ -348,6 +436,14 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
       softContextRatio: runtime.config.softContextRatio,
       targetContextRatio: runtime.config.targetContextRatio,
       receiptMaxBytes: runtime.config.receiptMaxBytes,
+    });
+    runtime.telemetry.recordReduction({
+      durationMs: performance.now() - reductionStartedAt,
+      triggered: reduced.triggered,
+      reducedCount: reduced.reducedCount,
+      estimatedTokensBefore: reduced.estimatedTokensBefore,
+      estimatedTokensAfter: reduced.estimatedTokensAfter,
+      targetReached: reduced.targetReached,
     });
     if (reduced.reducedCount > 0 || messages !== event.messages) return { messages: reduced.messages };
   });
@@ -443,6 +539,9 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         return;
       }
       if (subcommand === "rebuild") {
+        // A rebuild changes the map generation contract. Never reuse a capsule
+        // frozen before or concurrently with either rebuild outcome.
+        runtime.mapCapsule = undefined;
         try {
           if (!runtime.repoMap) throw new Error("repository map is not initialized");
           await runtime.repoMap.rebuild();
@@ -458,6 +557,8 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
           runtime.failures = runtime.failures.filter((failure) => failure.component !== "repo-map");
           runtime.failures.push({ component: "repo-map", error: errorMessage(error) });
           notify(ctx, `rebuild failed: ${errorMessage(error)}`, "error");
+        } finally {
+          runtime.mapCapsule = undefined;
         }
         return;
       }

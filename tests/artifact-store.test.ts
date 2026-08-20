@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { redactSecrets } from "../src/artifacts/redaction.js";
 import { ArtifactStore } from "../src/artifacts/store.js";
+import { Telemetry } from "../src/telemetry.js";
 
 const roots: string[] = [];
 
@@ -189,5 +190,28 @@ describe("artifact store", () => {
       }),
     ).rejects.toThrow();
     await expect(stat(join(root, "metadata", "observations.jsonl"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("telemetry: metadata read/write timers accumulate", async () => {
+    const root = await tempRoot();
+    const telemetry = new Telemetry();
+    const store = new ArtifactStore({
+      artifactsRoot: join(root, "artifacts"),
+      metadataRoot: join(root, "metadata"),
+      telemetry,
+    });
+    await store.archive({ observationId: "obs-telemetry-1", toolName: "read", sessionId: "s", content: "a" });
+    await store.archive({ observationId: "obs-telemetry-2", toolName: "read", sessionId: "s", content: "b" });
+
+    const snapshot = telemetry.snapshot();
+    expect(Number.isFinite(snapshot.metadataReadDurationMsTotal)).toBe(true);
+    expect(Number.isFinite(snapshot.metadataWriteDurationMsTotal)).toBe(true);
+    expect(snapshot.metadataReadDurationMsTotal).toBeGreaterThanOrEqual(0);
+    expect(snapshot.metadataWriteDurationMsTotal).toBeGreaterThanOrEqual(0);
+
+    await store.archive({ observationId: "obs-telemetry-3", toolName: "read", sessionId: "s", content: "c" });
+    const after = telemetry.snapshot();
+    expect(after.metadataReadDurationMsTotal).toBeGreaterThanOrEqual(snapshot.metadataReadDurationMsTotal);
+    expect(after.metadataWriteDurationMsTotal).toBeGreaterThanOrEqual(snapshot.metadataWriteDurationMsTotal);
   });
 });

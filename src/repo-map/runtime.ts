@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
 import { atomicWriteFile, withFileLock } from "../state/atomic.js";
+import type { Telemetry } from "../telemetry.js";
 import {
   buildRepoMap,
   indexRepoMapFile,
@@ -73,6 +74,7 @@ export interface RepoMapRuntimeOptions {
   scheduler?: RepoMapScheduler;
   atomicWriter?: typeof atomicWriteFile;
   now?: () => Date;
+  telemetry?: Telemetry;
 }
 
 const defaultScheduler: RepoMapScheduler = {
@@ -210,6 +212,7 @@ export class RepoMapRuntime {
   readonly #options: Required<Pick<RepoMapRuntimeOptions, "mapDebounceMs" | "watch">> & RepoMapRuntimeOptions;
   readonly #scheduler: RepoMapScheduler;
   readonly #atomicWriter: typeof atomicWriteFile;
+  readonly #telemetry?: Telemetry;
   #projectRoot = "";
   #base?: RepoMapSnapshot;
   #effective?: RepoMapSnapshot;
@@ -231,6 +234,7 @@ export class RepoMapRuntime {
     this.#options = { ...options, mapDebounceMs: options.mapDebounceMs ?? 300, watch: options.watch ?? true };
     this.#scheduler = options.scheduler ?? defaultScheduler;
     this.#atomicWriter = options.atomicWriter ?? atomicWriteFile;
+    this.#telemetry = options.telemetry;
   }
 
   async start(): Promise<void> {
@@ -295,7 +299,12 @@ export class RepoMapRuntime {
   }
 
   async ensureFresh(): Promise<void> {
-    await this.flush();
+    const startedAt = performance.now();
+    try {
+      await this.flush();
+    } finally {
+      this.#telemetry?.recordEnsureFresh(performance.now() - startedAt);
+    }
   }
 
   /** Rebuild the base snapshot and atomically activate it as a new generation. */
@@ -309,10 +318,22 @@ export class RepoMapRuntime {
   }
 
   async query(query: string, options: RepoMapQueryOptions = {}): Promise<RepoMapRuntimeQuery> {
+    const startedAt = performance.now();
+    try {
+      return await this.#queryUninstrumented(query, options);
+    } finally {
+      this.#telemetry?.recordRepoMapQuery(performance.now() - startedAt);
+    }
+  }
+
+  async #queryUninstrumented(query: string, options: RepoMapQueryOptions = {}): Promise<RepoMapRuntimeQuery> {
     await this.ensureFresh();
     const fallbackEvidence: RepoMapFallbackEvidence[] = [];
     let results: RepoMapQueryResult[] = [];
-    if (this.#effective) results = new RepoMapSearch(this.#effective).query(query, options);
+    if (this.#effective) {
+      this.#telemetry?.recordSearchIndexBuild();
+      results = new RepoMapSearch(this.#effective).query(query, options);
+    }
     if (this.#freshness === "stale") {
       const terms = query.toLowerCase().match(/[\p{L}\p{N}_$-]{2,}/gu) ?? [];
       for (const file of this.#effective?.files ?? []) {
@@ -389,6 +410,7 @@ export class RepoMapRuntime {
       return;
     }
     const indexed = await indexRepoMapFile(this.#projectRoot, path);
+    this.#telemetry?.recordFileReindexed();
     replaceFile(this.#effective, path, indexed.file, indexed.warning);
     const baseHash = this.#base?.files.find((file) => file.path === path)?.contentHash;
     if (indexed.file && indexed.file.contentHash !== baseHash) this.#dirty.set(path, indexed.file.contentHash);
@@ -406,6 +428,7 @@ export class RepoMapRuntime {
     const next = new Map<string, string>();
     for (const path of pathsToRefresh) {
       const indexed = await indexRepoMapFile(this.#projectRoot, path);
+      this.#telemetry?.recordFileReindexed();
       replaceFile(this.#effective, path, indexed.file, indexed.warning);
       if (dirtyPaths.includes(path)) next.set(path, indexed.file?.contentHash ?? DELETED_HASH);
     }
@@ -456,16 +479,19 @@ export class RepoMapRuntime {
         activatedAt: (this.#options.now ?? (() => new Date()))().toISOString(),
       };
       const generationPath = join(this.#options.stateRoot, "generations", `${nextGeneration}.json`);
-      await this.#atomicWriter(generationPath, `${JSON.stringify(generation, null, 2)}\n`);
+      const serialized = `${JSON.stringify(generation, null, 2)}\n`;
+      await this.#atomicWriter(generationPath, serialized);
       await this.#atomicWriter(
         join(this.#options.stateRoot, "active.json"),
         `${JSON.stringify({ generation: nextGeneration, path: slash(relative(this.#options.stateRoot, generationPath)) })}\n`,
       );
       this.#generation = nextGeneration;
+      this.#telemetry?.recordGenerationCreated(Buffer.byteLength(serialized, "utf8"));
     });
   }
 
   #degrade(error: unknown): void {
+    this.#telemetry?.recordMaintenanceFailure();
     this.#freshness = "stale";
     this.#error = error instanceof Error ? error.message : String(error);
   }

@@ -13,6 +13,7 @@ import {
   type RepoMapWatcher,
 } from "../src/repo-map/runtime.js";
 import { atomicWriteFile } from "../src/state/atomic.js";
+import { Telemetry } from "../src/telemetry.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -242,6 +243,7 @@ describe("incremental repository map runtime", () => {
 
   it("keeps the previously activated generation intact when activation crashes", async () => {
     const { root, stateRoot } = await fixture({ "src/value.ts": "export const stableValue = 1;" });
+    const telemetry = new Telemetry();
     let failActive = false;
     const runtime = new RepoMapRuntime({
       projectRoot: root,
@@ -251,9 +253,11 @@ describe("incremental repository map runtime", () => {
         if (failActive && path.endsWith("active.json")) throw new Error("simulated activation crash");
         await atomicWriteFile(path, content);
       },
+      telemetry,
     });
     await runtime.start();
     const before = await readFile(join(stateRoot, "active.json"), "utf8");
+    const telemetryBefore = telemetry.snapshot();
     failActive = true;
     await writeFile(join(root, "src/value.ts"), "export const changedValue = 2;");
     runtime.notify("change", "src/value.ts");
@@ -262,9 +266,72 @@ describe("incremental repository map runtime", () => {
     expect(runtime.status()).toMatchObject({ freshness: "stale", error: "simulated activation crash" });
     expect(await readFile(join(stateRoot, "active.json"), "utf8")).toBe(before);
     expect((await loadActiveRepoMapGeneration(stateRoot)).snapshot.files[0]?.symbols[0]?.name).toBe("stableValue");
+    expect(telemetry.snapshot()).toMatchObject({
+      generationCreatedCount: telemetryBefore.generationCreatedCount,
+      generationBytesWritten: telemetryBefore.generationBytesWritten,
+      repoMapTotalBytes: telemetryBefore.repoMapTotalBytes,
+    });
     const degraded = await runtime.query("changedValue");
     expect(degraded.freshness).toBe("stale");
     expect(degraded.fallbackEvidence.some((evidence) => evidence.kind === "source")).toBe(true);
+    await runtime.close();
+  });
+
+  it("telemetry: ensureFresh records failed invocations and durations", async () => {
+    const { root, stateRoot } = await fixture({ "src/service.ts": "export const service = true;" });
+    const telemetry = new Telemetry();
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false, telemetry });
+    await runtime.start();
+    const before = telemetry.snapshot();
+    const flushError = new Error("flush failed");
+    const flush = runtime.flush.bind(runtime);
+    runtime.flush = async () => {
+      throw flushError;
+    };
+
+    await expect(runtime.ensureFresh()).rejects.toBe(flushError);
+    const after = telemetry.snapshot();
+    expect(after.ensureFreshCount).toBe(before.ensureFreshCount + 1);
+    expect(after.ensureFreshDurationMsTotal).toBeGreaterThanOrEqual(before.ensureFreshDurationMsTotal);
+
+    runtime.flush = flush;
+    await runtime.close();
+  });
+
+  it("telemetry: query, ensureFresh, search index, and generation counters", async () => {
+    const { root, stateRoot } = await fixture({
+      "src/service.ts": "export function createUser(name: string): string { return name; }",
+    });
+    const telemetry = new Telemetry();
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false, telemetry });
+    await runtime.start();
+
+    // start() rebuilds and activates one generation.
+    let snapshot = telemetry.snapshot();
+    expect(snapshot.generationCreatedCount).toBe(1);
+    expect(snapshot.generationBytesWritten).toBeGreaterThan(0);
+    expect(snapshot.repoMapTotalBytes).toBeGreaterThan(0);
+
+    // Query records count/duration and one MiniSearch build.
+    const result = await runtime.query("createUser");
+    expect(result.results[0]?.path).toBe("src/service.ts");
+    snapshot = telemetry.snapshot();
+    expect(snapshot.repoMapQueryCount).toBe(1);
+    expect(snapshot.repoMapQueryDurationMsTotal).toBeGreaterThanOrEqual(0);
+    expect(snapshot.ensureFreshCount).toBeGreaterThanOrEqual(1);
+    expect(snapshot.searchIndexBuildCount).toBe(1);
+
+    // A file change re-indexes the file and produces another generation on flush.
+    await writeFile(join(root, "src/service.ts"), "export function createUser(id: number): number { return id; }");
+    runtime.notify("change", "src/service.ts");
+    await runtime.flush();
+    snapshot = telemetry.snapshot();
+    expect(snapshot.filesReindexed).toBeGreaterThanOrEqual(1);
+    snapshot = telemetry.snapshot();
+    expect(snapshot.generationCreatedCount).toBeGreaterThanOrEqual(2);
+    expect(snapshot.repoMapTotalBytes).toBeGreaterThan(0);
+    expect(snapshot.repoMapTotalBytes).toBeGreaterThanOrEqual(snapshot.generationBytesWritten);
+    expect(Number.isFinite(snapshot.ensureFreshDurationMsTotal)).toBe(true);
     await runtime.close();
   });
 });
