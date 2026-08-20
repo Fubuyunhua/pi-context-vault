@@ -29,6 +29,7 @@ interface RepoMapController {
   close(): Promise<void>;
   ensureFresh(): Promise<void>;
   rebuild(): Promise<void>;
+  maintenance?: RepoMapRuntime["maintenance"];
   query(query: string, options?: { limit?: number }): Promise<RepoMapRuntimeQuery>;
   status(): ReturnType<RepoMapRuntime["status"]>;
 }
@@ -210,7 +211,8 @@ function runtimeStatus(runtime: RuntimeState) {
     runtime.failures.length > 0 ||
     observation?.degraded === true ||
     repoMap?.freshness === "stale" ||
-    repoMap?.freshness === "unsupported";
+    repoMap?.freshness === "unsupported" ||
+    (repoMap?.maintenance !== undefined && "error" in repoMap.maintenance);
   return {
     extension: { id: EXTENSION_ID, version: EXTENSION_VERSION },
     initialized: runtime.initialized,
@@ -299,6 +301,8 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         stateRoot: next.state.mapRoot,
         exclude: next.config.mapExcludePatterns,
         mapDebounceMs: next.config.mapDebounceMs,
+        mapGenerationRetention: next.config.mapGenerationRetention,
+        mapQuotaBytes: next.config.mapQuotaBytes,
         telemetry: next.telemetry,
       });
       try {
@@ -565,13 +569,13 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
       if (subcommand === "gc") {
         try {
           if (!runtime.store || !runtime.config) throw new Error("artifact store is not initialized");
-          notify(
-            ctx,
-            await runtime.store.garbageCollect({
-              retentionDays: runtime.config.retentionDays,
-              quotaBytes: runtime.config.projectQuotaBytes,
-            }),
-          );
+          if (!runtime.repoMap?.maintenance) throw new Error("repository map maintenance is not initialized");
+          const artifacts = await runtime.store.garbageCollect({
+            retentionDays: runtime.config.retentionDays,
+            quotaBytes: runtime.config.projectQuotaBytes,
+          });
+          const repoMap = await runtime.repoMap.maintenance();
+          notify(ctx, { artifacts, repoMap });
         } catch (error) {
           notify(ctx, `gc failed: ${errorMessage(error)}`, "error");
         }

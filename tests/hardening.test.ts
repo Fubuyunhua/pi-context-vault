@@ -71,7 +71,7 @@ describe("release security and corrupt-state handling", () => {
     await expect(loadConfig(join(root, "project"))).rejects.toThrow("Unable to read");
   });
 
-  it("serializes concurrent runtimes into distinct coherent generations", async () => {
+  it("serializes concurrent runtimes and suppresses an equivalent generation", async () => {
     const project = await temporary("context-vault-concurrent-project-");
     const stateRoot = await temporary("context-vault-concurrent-state-");
     await mkdir(join(project, "src"));
@@ -82,13 +82,13 @@ describe("release security and corrupt-state handling", () => {
     await Promise.all([first.start(), second.start()]);
 
     const generations = [first.status().generation, second.status().generation].sort((left, right) => left - right);
-    expect(generations).toEqual([1, 2]);
+    expect(generations).toEqual([1, 1]);
     const active = await loadActiveRepoMapGeneration(stateRoot);
-    expect(active.generation).toBe(2);
+    expect(active.generation).toBe(1);
     expect(active.snapshot.files[0]?.path).toBe("src/index.ts");
     expect(JSON.parse(await readFile(join(stateRoot, "active.json"), "utf8"))).toEqual({
-      generation: 2,
-      path: "generations/2.json",
+      generation: 1,
+      path: "generations/1.json",
     });
 
     await Promise.all([first.close(), second.close()]);

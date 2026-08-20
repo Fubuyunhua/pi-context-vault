@@ -76,6 +76,8 @@ describe("project state", () => {
     expect(config.archiveThresholdBytes).toBe(2048);
     expect(config.hotObservationCount).toBe(2);
     expect(config.mapExcludePatterns).toEqual(["generated/**"]);
+    expect(config.mapGenerationRetention).toBe(3);
+    expect(config.mapQuotaBytes).toBe(128 * 1024 * 1024);
     expect(config.receiptMaxBytes).toBeGreaterThan(0);
   });
 
@@ -93,6 +95,16 @@ describe("project state", () => {
 
     await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ debugRequestFingerprints: "yes" }));
     await expect(loadConfig(root)).rejects.toThrow("debugRequestFingerprints must be a boolean");
+
+    for (const [key, value] of [
+      ["mapGenerationRetention", 0],
+      ["mapGenerationRetention", 1.5],
+      ["mapQuotaBytes", 0],
+      ["mapQuotaBytes", Number.MAX_SAFE_INTEGER + 1],
+    ] as const) {
+      await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ [key]: value }));
+      await expect(loadConfig(root)).rejects.toThrow(`${key} must be a positive safe integer`);
+    }
   });
 
   it("rejects unknown, non-numeric, and inconsistent configuration", async () => {

@@ -13,6 +13,8 @@ export interface ContextVaultConfig {
   retentionDays: number;
   mapContextMaxBytes: number;
   mapDebounceMs: number;
+  mapGenerationRetention: number;
+  mapQuotaBytes: number;
   mapExcludePatterns: string[];
   mapInjectionMode: MapInjectionMode;
   /** Reserved for a later debug Spec; inert in this release. */
@@ -29,6 +31,8 @@ export const DEFAULT_CONFIG: Readonly<ContextVaultConfig> = Object.freeze({
   retentionDays: 30,
   mapContextMaxBytes: 6 * 1024,
   mapDebounceMs: 300,
+  mapGenerationRetention: 3,
+  mapQuotaBytes: 128 * 1024 * 1024,
   mapExcludePatterns: [],
   mapInjectionMode: "once-per-user-turn",
   debugRequestFingerprints: false,
@@ -44,7 +48,11 @@ const POSITIVE_INTEGERS = new Set<keyof ContextVaultConfig>([
   "retentionDays",
   "mapContextMaxBytes",
   "mapDebounceMs",
+  "mapGenerationRetention",
+  "mapQuotaBytes",
 ]);
+
+const POSITIVE_SAFE_INTEGERS = new Set<keyof ContextVaultConfig>(["mapGenerationRetention", "mapQuotaBytes"]);
 
 const STRING_ARRAYS = new Set<keyof ContextVaultConfig>(["mapExcludePatterns"]);
 
@@ -94,6 +102,9 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
       continue;
     }
     if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${key} must be a finite number`);
+    if (POSITIVE_SAFE_INTEGERS.has(typedKey) && (!Number.isSafeInteger(value) || value <= 0)) {
+      throw new Error(`${key} must be a positive safe integer`);
+    }
     if (POSITIVE_INTEGERS.has(typedKey) && (!Number.isInteger(value) || value <= 0)) {
       throw new Error(`${key} must be a positive integer`);
     }

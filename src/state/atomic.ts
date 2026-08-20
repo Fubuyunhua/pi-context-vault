@@ -2,6 +2,32 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, stat, unlink, utimes } from "node:fs/promises";
 import { dirname } from "node:path";
 
+const UNSUPPORTED_DIRECTORY_SYNC_ERRORS = new Set([
+  "EBADF",
+  "EINVAL",
+  "EISDIR",
+  "ENOSYS",
+  "ENOTSUP",
+  "EOPNOTSUPP",
+  "EPERM",
+]);
+
+function isUnsupportedDirectorySyncError(error: unknown): boolean {
+  return UNSUPPORTED_DIRECTORY_SYNC_ERRORS.has((error as NodeJS.ErrnoException).code ?? "");
+}
+
+async function syncParentDirectory(path: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(dirname(path), "r");
+    await handle.sync();
+  } catch (error) {
+    if (!isUnsupportedDirectorySyncError(error)) throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
 export async function atomicWriteFile(path: string, content: string | Uint8Array): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
@@ -13,6 +39,7 @@ export async function atomicWriteFile(path: string, content: string | Uint8Array
     await handle.close();
     handleClosed = true;
     await rename(temporary, path);
+    await syncParentDirectory(path);
   } catch (error) {
     if (!handleClosed) await handle.close().catch(() => undefined);
     await unlink(temporary).catch(() => undefined);

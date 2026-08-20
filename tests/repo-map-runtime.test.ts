@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -274,7 +274,320 @@ describe("incremental repository map runtime", () => {
     const degraded = await runtime.query("changedValue");
     expect(degraded.freshness).toBe("stale");
     expect(degraded.fallbackEvidence.some((evidence) => evidence.kind === "source")).toBe(true);
+
+    failActive = false;
+    const maintenance = await runtime.maintenance();
+    expect(maintenance.deletedGenerations).toEqual([]);
+    expect((await readdir(join(stateRoot, "generations"))).filter((path) => path.endsWith(".json")).sort()).toEqual([
+      "1.json",
+      "2.json",
+      "3.json",
+    ]);
+    expect((await loadActiveRepoMapGeneration(stateRoot)).generation).toBe(1);
     await runtime.close();
+  });
+
+  it("suppresses same-content generations and writes compact JSON", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const stableValue = 1;" });
+    const telemetry = new Telemetry();
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false, telemetry });
+    await runtime.start();
+    const generation = runtime.status().generation;
+    const before = telemetry.snapshot().generationCreatedCount;
+    const generationPath = join(stateRoot, "generations", `${generation}.json`);
+    expect(await readFile(generationPath, "utf8")).not.toMatch(/\n\s+"/u);
+
+    await writeFile(join(root, "src/value.ts"), "export const stableValue = 1;");
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+
+    expect(runtime.status().generation).toBe(generation);
+    expect(telemetry.snapshot().generationCreatedCount).toBe(before);
+    expect((await readdir(join(stateRoot, "generations"))).filter((path) => path.endsWith(".json"))).toEqual([
+      `${generation}.json`,
+    ]);
+    await runtime.close();
+  });
+
+  it("treats snapshot provenance.generatedAt as a nondurable no-op timestamp", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const stableValue = 1;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    const activePath = join(stateRoot, "generations", "1.json");
+    const active = JSON.parse(await readFile(activePath, "utf8"));
+    active.snapshot.provenance.generatedAt = "2000-01-01T00:00:00.000Z";
+    await writeFile(activePath, `${JSON.stringify(active)}\n`);
+
+    await runtime.rebuild();
+
+    expect(runtime.status().generation).toBe(1);
+    expect((await readdir(join(stateRoot, "generations"))).filter((path) => path.endsWith(".json"))).toEqual([
+      "1.json",
+    ]);
+    await runtime.close();
+  });
+
+  it("rejects nested active-generation corruption before pruning older valid generations", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const safeValue = 1;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false, mapGenerationRetention: 1 });
+    await runtime.start();
+    const generationsRoot = join(stateRoot, "generations");
+    const first = JSON.parse(await readFile(join(generationsRoot, "1.json"), "utf8"));
+    const second = { ...structuredClone(first), generation: 2 };
+    const third = { ...structuredClone(first), generation: 3 };
+    await writeFile(join(generationsRoot, "2.json"), `${JSON.stringify(second)}\n`);
+    await writeFile(join(generationsRoot, "3.json"), `${JSON.stringify(third)}\n`);
+    await writeFile(join(stateRoot, "active.json"), '{"generation":3,"path":"generations/3.json"}\n');
+    const olderGenerations = await Promise.all([
+      readFile(join(generationsRoot, "1.json"), "utf8"),
+      readFile(join(generationsRoot, "2.json"), "utf8"),
+    ]);
+    const corruptions: Array<{ name: string; apply: (value: typeof third) => void }> = [
+      {
+        name: "provenance field",
+        apply: (value) => Object.assign(value.snapshot.provenance, { generator: "x".repeat(10_000) }),
+      },
+      { name: "file integer", apply: (value) => Object.assign(value.snapshot.files[0], { sizeBytes: 1.5 }) },
+      { name: "symbol line", apply: (value) => Object.assign(value.snapshot.files[0].symbols[0], { line: 0 }) },
+      {
+        name: "symbol relationships",
+        apply: (value) =>
+          Object.assign(value.snapshot.files[0].symbols[0], {
+            relationships: { extends: [], implements: [] },
+          }),
+      },
+      {
+        name: "import names",
+        apply: (value) =>
+          Object.assign(value.snapshot.files[0], {
+            imports: [{ source: "dependency", names: [1], typeOnly: false }],
+          }),
+      },
+      {
+        name: "warning code",
+        apply: (value) =>
+          Object.assign(value.snapshot, {
+            warnings: [{ path: "src/value.ts", code: "unknown", message: "bad" }],
+          }),
+      },
+      { name: "dependency", apply: (value) => Object.assign(value.snapshot.files[0], { dependencies: [null] }) },
+    ];
+
+    for (const corruption of corruptions) {
+      const corrupt = structuredClone(third);
+      corruption.apply(corrupt);
+      await writeFile(join(generationsRoot, "3.json"), `${JSON.stringify(corrupt)}\n`);
+
+      await expect(runtime.maintenance(), corruption.name).rejects.toThrow(
+        "invalid active repository map generation metadata",
+      );
+      expect(
+        await Promise.all([
+          readFile(join(generationsRoot, "1.json"), "utf8"),
+          readFile(join(generationsRoot, "2.json"), "utf8"),
+        ]),
+        corruption.name,
+      ).toEqual(olderGenerations);
+      expect((await readdir(generationsRoot)).filter((path) => path.endsWith(".json")).sort(), corruption.name).toEqual(
+        ["1.json", "2.json", "3.json"],
+      );
+      expect(runtime.status().maintenance).toEqual({ error: "invalid active repository map generation metadata" });
+    }
+    await runtime.close();
+  });
+
+  it("accepts documented optional snapshot metadata", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const safeValue = 1;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    const activePath = join(stateRoot, "generations", "1.json");
+    const active = JSON.parse(await readFile(activePath, "utf8"));
+    Object.assign(active.snapshot.provenance, { javaParser: "java-parser@3.0.1" });
+    Object.assign(active.snapshot.files[0], {
+      packageName: "example",
+      degradedReason: "documented optional reason",
+      imports: [
+        { source: "example.Dependency", names: ["Dependency"], typeOnly: false, static: true, wildcard: false },
+      ],
+    });
+    Object.assign(active.snapshot.files[0].symbols[0], {
+      container: "Example",
+      annotations: ["Deprecated"],
+      modifiers: ["public"],
+      typeParameters: ["T"],
+      relationships: { extends: ["Base"], implements: ["Contract"], permits: ["Child"] },
+    });
+    await writeFile(activePath, `${JSON.stringify(active)}\n`);
+
+    await expect(loadActiveRepoMapGeneration(stateRoot)).resolves.toMatchObject({ generation: 1 });
+    await expect(runtime.maintenance()).resolves.toMatchObject({ activeGeneration: 1, deletedGenerations: [] });
+    await runtime.close();
+  });
+
+  it("reports no-op maintenance failures without degrading the active map", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const stableValue = 1;" });
+    let failMaintenance = false;
+    const telemetry = new (class extends Telemetry {
+      override recordRepoMapTotalBytes(bytes: number): void {
+        if (failMaintenance) throw new Error("simulated maintenance failure");
+        super.recordRepoMapTotalBytes(bytes);
+      }
+    })();
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false, telemetry });
+    await runtime.start();
+    const failuresBefore = telemetry.snapshot().maintenanceFailureCount;
+    failMaintenance = true;
+
+    await runtime.rebuild();
+
+    expect(runtime.status()).toMatchObject({
+      freshness: "fresh",
+      generation: 1,
+      maintenance: { error: "simulated maintenance failure" },
+    });
+    expect(runtime.status()).not.toHaveProperty("error");
+    expect(telemetry.snapshot().maintenanceFailureCount).toBe(failuresBefore + 1);
+    expect((await runtime.query("stableValue")).results[0]?.path).toBe("src/value.ts");
+    await runtime.close();
+  });
+
+  it("defers cleanup of generations newer than active until a later activation supersedes them", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const value = 1;" });
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      mapGenerationRetention: 1,
+      mapQuotaBytes: 1,
+    });
+    await runtime.start();
+    const active = await loadActiveRepoMapGeneration(stateRoot);
+    await writeFile(join(stateRoot, "generations", "2.json"), `${JSON.stringify({ ...active, generation: 2 })}\n`);
+
+    const maintenance = await runtime.maintenance();
+    expect(maintenance.deletedGenerations).toEqual([]);
+    expect(maintenance.quotaSatisfied).toBe(false);
+    expect((await readdir(join(stateRoot, "generations"))).filter((path) => path.endsWith(".json")).sort()).toEqual([
+      "1.json",
+      "2.json",
+    ]);
+
+    await writeFile(join(root, "src/value.ts"), "export const value = 3;");
+    await runtime.rebuild();
+    expect((await loadActiveRepoMapGeneration(stateRoot)).generation).toBe(3);
+    expect((await readdir(join(stateRoot, "generations"))).filter((path) => path.endsWith(".json"))).toEqual([
+      "3.json",
+    ]);
+    await runtime.close();
+  });
+
+  it("prunes old generations by retention while preserving the active generation", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const value = 0;" });
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      mapGenerationRetention: 2,
+      mapQuotaBytes: 10 * 1024 * 1024,
+    });
+    await runtime.start();
+    for (let value = 1; value <= 3; value += 1) {
+      await writeFile(join(root, "src/value.ts"), `export const value = ${value};`);
+      runtime.notify("change", "src/value.ts");
+      await runtime.flush();
+    }
+
+    const active = await loadActiveRepoMapGeneration(stateRoot);
+    const files = (await readdir(join(stateRoot, "generations"))).filter((path) => path.endsWith(".json")).sort();
+    expect(files).toHaveLength(2);
+    expect(files).toContain(`${active.generation}.json`);
+    expect(runtime.status().maintenance).toMatchObject({
+      activeGeneration: active.generation,
+      remainingGenerations: 2,
+      quotaSatisfied: true,
+    });
+    await runtime.close();
+  });
+
+  it("prunes non-active generations to satisfy the byte quota", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const quotaValue = 0;" });
+    const writer = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      mapGenerationRetention: 10,
+      mapQuotaBytes: 10 * 1024 * 1024,
+    });
+    await writer.start();
+    for (let value = 1; value <= 2; value += 1) {
+      await writeFile(join(root, "src/value.ts"), `export const quotaValue = ${value};`);
+      writer.notify("change", "src/value.ts");
+      await writer.flush();
+    }
+    const active = await loadActiveRepoMapGeneration(stateRoot);
+    const activeBytes = Buffer.byteLength(
+      await readFile(join(stateRoot, "generations", `${active.generation}.json`), "utf8"),
+    );
+    await writer.close();
+
+    const collector = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      mapGenerationRetention: 10,
+      mapQuotaBytes: activeBytes,
+    });
+    await collector.start();
+
+    expect(collector.status().maintenance).toMatchObject({
+      activeGeneration: active.generation,
+      deletedGenerations: [1, 2],
+      remainingGenerations: 1,
+      quotaSatisfied: true,
+    });
+    expect((await readdir(join(stateRoot, "generations"))).filter((path) => path.endsWith(".json"))).toEqual([
+      `${active.generation}.json`,
+    ]);
+    await collector.close();
+  });
+
+  it("keeps an over-quota active generation and reports the unsatisfied quota", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const activeValue = 1;" });
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      mapGenerationRetention: 1,
+      mapQuotaBytes: 1,
+    });
+    await runtime.start();
+
+    const active = await loadActiveRepoMapGeneration(stateRoot);
+    const maintenance = await runtime.maintenance();
+    expect(await readFile(join(stateRoot, "generations", `${active.generation}.json`), "utf8")).toContain(
+      "activeValue",
+    );
+    expect(maintenance).toMatchObject({
+      activeGeneration: active.generation,
+      remainingGenerations: 1,
+      quotaSatisfied: false,
+    });
+    expect(maintenance.remainingBytes).toBeGreaterThan(1);
+    await runtime.close();
+  });
+
+  it("serializes concurrent runtimes sharing a state root and suppresses the equivalent activation", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const sharedValue = 1;" });
+    const first = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    const second = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+
+    await Promise.all([first.start(), second.start()]);
+
+    expect((await loadActiveRepoMapGeneration(stateRoot)).generation).toBe(1);
+    expect((await readdir(join(stateRoot, "generations"))).filter((path) => path.endsWith(".json"))).toEqual([
+      "1.json",
+    ]);
+    await Promise.all([first.close(), second.close()]);
   });
 
   it("telemetry: ensureFresh records failed invocations and durations", async () => {

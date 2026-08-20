@@ -157,6 +157,10 @@ export class Telemetry {
     this.#repoMapTotalBytes += bytesWritten;
   }
 
+  recordRepoMapTotalBytes(totalBytes: number): void {
+    this.#repoMapTotalBytes = totalBytes;
+  }
+
   recordMaintenanceFailure(): void {
     this.#maintenanceFailureCount += 1;
   }

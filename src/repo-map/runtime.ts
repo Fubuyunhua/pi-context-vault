@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, realpath } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
@@ -53,6 +53,15 @@ export interface RepoMapFallbackEvidence {
   excerpt: string;
 }
 
+export interface RepoMapMaintenanceResult {
+  activeGeneration: number;
+  deletedGenerations: number[];
+  bytesFreed: number;
+  remainingGenerations: number;
+  remainingBytes: number;
+  quotaSatisfied: boolean;
+}
+
 export interface RepoMapRuntimeQuery {
   results: RepoMapQueryResult[];
   freshness: RepoMapFreshness;
@@ -69,6 +78,8 @@ export interface RepoMapRuntimeOptions {
   stateRoot: string;
   exclude?: string[];
   mapDebounceMs?: number;
+  mapGenerationRetention?: number;
+  mapQuotaBytes?: number;
   watch?: boolean;
   watcherFactory?: (root: string) => RepoMapWatcher;
   scheduler?: RepoMapScheduler;
@@ -208,8 +219,189 @@ function cloneSnapshot(snapshot: RepoMapSnapshot): RepoMapSnapshot {
   return structuredClone(snapshot);
 }
 
+function semanticGeneration(generation: RepoMapGeneration): string {
+  const { activatedAt: _activatedAt, generation: _generation, snapshot, ...durable } = generation;
+  const { generatedAt: _generatedAt, ...provenance } = snapshot.provenance;
+  return JSON.stringify({
+    ...durable,
+    snapshot: { ...snapshot, provenance },
+  });
+}
+
+const REPO_MAP_FILE_KINDS = new Set(["semantic", "lexical"]);
+const REPO_MAP_LANGUAGES = new Set(["typescript", "javascript", "java", "text"]);
+const REPO_MAP_SYMBOL_KINDS = new Set([
+  "function",
+  "class",
+  "interface",
+  "type",
+  "enum",
+  "variable",
+  "namespace",
+  "record",
+  "annotation",
+  "constructor",
+  "method",
+  "field",
+  "enum-constant",
+]);
+const REPO_MAP_WARNING_CODES = new Set(["parse-error", "read-error"]);
+const REPO_MAP_FRESHNESS = new Set(["fresh", "dirty", "stale", "unsupported"]);
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const INVALID_GENERATION_MESSAGE = "invalid active repository map generation metadata";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === "boolean";
+}
+
+function isRepoMapImport(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.source === "string" &&
+    isStringArray(value.names) &&
+    typeof value.typeOnly === "boolean" &&
+    isOptionalBoolean(value.static) &&
+    isOptionalBoolean(value.wildcard)
+  );
+}
+
+function isRepoMapExport(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    isOptionalString(value.source) &&
+    typeof value.typeOnly === "boolean"
+  );
+}
+
+function isRepoMapRelationships(value: unknown): boolean {
+  return (
+    isRecord(value) && isStringArray(value.extends) && isStringArray(value.implements) && isStringArray(value.permits)
+  );
+}
+
+function isRepoMapSymbol(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.kind === "string" &&
+    REPO_MAP_SYMBOL_KINDS.has(value.kind) &&
+    typeof value.signature === "string" &&
+    typeof value.exported === "boolean" &&
+    Number.isSafeInteger(value.line) &&
+    (value.line as number) > 0 &&
+    isOptionalString(value.container) &&
+    (value.annotations === undefined || isStringArray(value.annotations)) &&
+    (value.modifiers === undefined || isStringArray(value.modifiers)) &&
+    (value.typeParameters === undefined || isStringArray(value.typeParameters)) &&
+    (value.relationships === undefined || isRepoMapRelationships(value.relationships))
+  );
+}
+
+function isRepoMapFile(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.path === "string" &&
+    typeof value.kind === "string" &&
+    REPO_MAP_FILE_KINDS.has(value.kind) &&
+    typeof value.language === "string" &&
+    REPO_MAP_LANGUAGES.has(value.language) &&
+    typeof value.contentHash === "string" &&
+    SHA256_PATTERN.test(value.contentHash) &&
+    Number.isSafeInteger(value.sizeBytes) &&
+    (value.sizeBytes as number) >= 0 &&
+    isStringArray(value.lexicalTerms) &&
+    Array.isArray(value.imports) &&
+    value.imports.every(isRepoMapImport) &&
+    Array.isArray(value.exports) &&
+    value.exports.every(isRepoMapExport) &&
+    Array.isArray(value.symbols) &&
+    value.symbols.every(isRepoMapSymbol) &&
+    isStringArray(value.dependencies) &&
+    isOptionalString(value.packageName) &&
+    isOptionalString(value.degradedReason)
+  );
+}
+
+function isRepoMapWarning(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.path === "string" &&
+    typeof value.code === "string" &&
+    REPO_MAP_WARNING_CODES.has(value.code) &&
+    typeof value.message === "string"
+  );
+}
+
+function isRepoMapSnapshot(value: unknown): value is RepoMapSnapshot {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !isRecord(value.provenance)) return false;
+  const provenance = value.provenance;
+  return (
+    provenance.generator === "pi-context-vault" &&
+    provenance.generatorVersion === "0.1.0" &&
+    provenance.parser === "typescript-compiler-api" &&
+    typeof provenance.typescriptVersion === "string" &&
+    (provenance.javaParser === undefined || provenance.javaParser === "java-parser@3.0.1") &&
+    typeof provenance.generatedAt === "string" &&
+    Number.isFinite(Date.parse(provenance.generatedAt)) &&
+    typeof provenance.projectRoot === "string" &&
+    Array.isArray(value.files) &&
+    value.files.every(isRepoMapFile) &&
+    Array.isArray(value.warnings) &&
+    value.warnings.every(isRepoMapWarning)
+  );
+}
+
+function isRepoMapGeneration(value: unknown, expectedGeneration: number): value is RepoMapGeneration {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === 1 &&
+    Number.isSafeInteger(value.generation) &&
+    (value.generation as number) > 0 &&
+    value.generation === expectedGeneration &&
+    typeof value.gitHead === "string" &&
+    Array.isArray(value.dirtyFiles) &&
+    value.dirtyFiles.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.path === "string" &&
+        typeof entry.contentHash === "string" &&
+        (SHA256_PATTERN.test(entry.contentHash) || entry.contentHash === DELETED_HASH),
+    ) &&
+    typeof value.workspaceRevision === "string" &&
+    SHA256_PATTERN.test(value.workspaceRevision) &&
+    typeof value.freshness === "string" &&
+    REPO_MAP_FRESHNESS.has(value.freshness) &&
+    isStringArray(value.pendingFiles) &&
+    isRepoMapSnapshot(value.snapshot) &&
+    typeof value.activatedAt === "string" &&
+    Number.isFinite(Date.parse(value.activatedAt))
+  );
+}
+
+interface GenerationFile {
+  generation: number;
+  path: string;
+  bytes: number;
+}
+
 export class RepoMapRuntime {
-  readonly #options: Required<Pick<RepoMapRuntimeOptions, "mapDebounceMs" | "watch">> & RepoMapRuntimeOptions;
+  readonly #options: Required<
+    Pick<RepoMapRuntimeOptions, "mapDebounceMs" | "mapGenerationRetention" | "mapQuotaBytes" | "watch">
+  > &
+    RepoMapRuntimeOptions;
   readonly #scheduler: RepoMapScheduler;
   readonly #atomicWriter: typeof atomicWriteFile;
   readonly #telemetry?: Telemetry;
@@ -222,6 +414,7 @@ export class RepoMapRuntime {
   #pending = new Set<string>();
   #freshness: RepoMapFreshness = "stale";
   #error?: string;
+  #maintenance?: RepoMapMaintenanceResult | { error: string };
   #watcher?: RepoMapWatcher;
   #scheduled?: unknown;
   #updateChain: Promise<void> = Promise.resolve();
@@ -231,7 +424,22 @@ export class RepoMapRuntime {
     if (!Number.isInteger(options.mapDebounceMs ?? 300) || (options.mapDebounceMs ?? 300) <= 0) {
       throw new Error("mapDebounceMs must be a positive integer");
     }
-    this.#options = { ...options, mapDebounceMs: options.mapDebounceMs ?? 300, watch: options.watch ?? true };
+    if (!Number.isSafeInteger(options.mapGenerationRetention ?? 3) || (options.mapGenerationRetention ?? 3) <= 0) {
+      throw new Error("mapGenerationRetention must be a positive safe integer");
+    }
+    if (
+      !Number.isSafeInteger(options.mapQuotaBytes ?? 128 * 1024 * 1024) ||
+      (options.mapQuotaBytes ?? 128 * 1024 * 1024) <= 0
+    ) {
+      throw new Error("mapQuotaBytes must be a positive safe integer");
+    }
+    this.#options = {
+      ...options,
+      mapDebounceMs: options.mapDebounceMs ?? 300,
+      mapGenerationRetention: options.mapGenerationRetention ?? 3,
+      mapQuotaBytes: options.mapQuotaBytes ?? 128 * 1024 * 1024,
+      watch: options.watch ?? true,
+    };
     this.#scheduler = options.scheduler ?? defaultScheduler;
     this.#atomicWriter = options.atomicWriter ?? atomicWriteFile;
     this.#telemetry = options.telemetry;
@@ -380,7 +588,10 @@ export class RepoMapRuntime {
     };
   }
 
-  status(): Omit<RepoMapRuntimeQuery, "results" | "fallbackEvidence"> & { dirtyFiles: string[] } {
+  status(): Omit<RepoMapRuntimeQuery, "results" | "fallbackEvidence"> & {
+    dirtyFiles: string[];
+    maintenance?: RepoMapMaintenanceResult | { error: string };
+  } {
     return {
       freshness: this.#freshness,
       generation: this.#generation,
@@ -388,8 +599,24 @@ export class RepoMapRuntime {
       workspaceRevision: revision(this.#head, this.#dirty),
       pendingFiles: [...this.#pending].sort(),
       dirtyFiles: [...this.#dirty.keys()].sort(),
+      ...(this.#maintenance ? { maintenance: this.#maintenance } : {}),
       ...(this.#error ? { error: this.#error } : {}),
     };
+  }
+
+  async maintenance(): Promise<RepoMapMaintenanceResult> {
+    try {
+      const result = await withFileLock(join(this.#options.stateRoot, "activation.lock"), async () => {
+        const active = await loadActiveRepoMapGeneration(this.#options.stateRoot);
+        return this.#pruneUnlocked(active.generation);
+      });
+      this.#maintenance = result;
+      return result;
+    } catch (error) {
+      this.#maintenance = { error: error instanceof Error ? error.message : String(error) };
+      this.#telemetry?.recordMaintenanceFailure();
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
@@ -463,11 +690,18 @@ export class RepoMapRuntime {
   async #activate(): Promise<void> {
     if (!this.#effective) throw new Error("repository map is unavailable");
     await withFileLock(join(this.#options.stateRoot, "activation.lock"), async () => {
-      const activeGeneration = await readActiveGenerationNumber(this.#options.stateRoot).catch(() => 0);
-      const nextGeneration = Math.max(this.#generation, activeGeneration) + 1;
-      const generation: RepoMapGeneration = {
+      let active: RepoMapGeneration | undefined;
+      try {
+        active = await loadActiveRepoMapGeneration(this.#options.stateRoot);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      const files = await this.#listGenerationFiles();
+      const candidateGeneration =
+        Math.max(this.#generation, active?.generation ?? 0, ...files.map((file) => file.generation)) + 1;
+      const candidate: RepoMapGeneration = {
         schemaVersion: 1,
-        generation: nextGeneration,
+        generation: candidateGeneration,
         gitHead: this.#head,
         dirtyFiles: [...this.#dirty]
           .sort(([left], [right]) => left.localeCompare(right))
@@ -478,16 +712,101 @@ export class RepoMapRuntime {
         snapshot: this.#effective as RepoMapSnapshot,
         activatedAt: (this.#options.now ?? (() => new Date()))().toISOString(),
       };
-      const generationPath = join(this.#options.stateRoot, "generations", `${nextGeneration}.json`);
-      const serialized = `${JSON.stringify(generation, null, 2)}\n`;
+      if (active && semanticGeneration(active) === semanticGeneration(candidate)) {
+        this.#generation = active.generation;
+        await this.#maintainUnlockedNonFatal();
+        return;
+      }
+
+      const generationPath = join(this.#options.stateRoot, "generations", `${candidateGeneration}.json`);
+      const serialized = `${JSON.stringify(candidate)}\n`;
       await this.#atomicWriter(generationPath, serialized);
       await this.#atomicWriter(
         join(this.#options.stateRoot, "active.json"),
-        `${JSON.stringify({ generation: nextGeneration, path: slash(relative(this.#options.stateRoot, generationPath)) })}\n`,
+        `${JSON.stringify({
+          generation: candidateGeneration,
+          path: slash(relative(this.#options.stateRoot, generationPath)),
+        })}\n`,
       );
-      this.#generation = nextGeneration;
+      this.#generation = candidateGeneration;
       this.#telemetry?.recordGenerationCreated(Buffer.byteLength(serialized, "utf8"));
+      await this.#maintainUnlockedNonFatal();
     });
+  }
+
+  async #maintainUnlockedNonFatal(): Promise<void> {
+    try {
+      const active = await loadActiveRepoMapGeneration(this.#options.stateRoot);
+      this.#maintenance = await this.#pruneUnlocked(active.generation);
+    } catch (error) {
+      this.#maintenance = { error: error instanceof Error ? error.message : String(error) };
+      this.#telemetry?.recordMaintenanceFailure();
+    }
+  }
+
+  async #listGenerationFiles(): Promise<GenerationFile[]> {
+    const generationsRoot = join(this.#options.stateRoot, "generations");
+    let names: string[];
+    try {
+      names = await readdir(generationsRoot);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const files: GenerationFile[] = [];
+    for (const name of names) {
+      const match = /^(\d+)\.json$/u.exec(name);
+      if (!match) continue;
+      const generation = Number(match[1]);
+      if (!Number.isSafeInteger(generation) || generation <= 0) continue;
+      const path = join(generationsRoot, name);
+      const info = await stat(path);
+      if (info.isFile()) files.push({ generation, path, bytes: info.size });
+    }
+    return files.sort((left, right) => left.generation - right.generation);
+  }
+
+  async #pruneUnlocked(activeGeneration: number): Promise<RepoMapMaintenanceResult> {
+    let files = await this.#listGenerationFiles();
+    const active = files.find((file) => file.generation === activeGeneration);
+    if (!active) throw new Error(`active repository map generation ${activeGeneration} is missing`);
+    const deletedGenerations: number[] = [];
+    let bytesFreed = 0;
+    const remove = async (file: GenerationFile): Promise<void> => {
+      if (file.generation === activeGeneration) return;
+      try {
+        await unlink(file.path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      deletedGenerations.push(file.generation);
+      bytesFreed += file.bytes;
+      files = files.filter((candidate) => candidate.generation !== file.generation);
+    };
+
+    for (const file of [...files]) {
+      if (files.length <= this.#options.mapGenerationRetention) break;
+      if (file.generation >= activeGeneration) continue;
+      await remove(file);
+    }
+    let remainingBytes = files.reduce((total, file) => total + file.bytes, 0);
+    for (const file of [...files]) {
+      if (remainingBytes <= this.#options.mapQuotaBytes) break;
+      if (file.generation >= activeGeneration) continue;
+      await remove(file);
+      remainingBytes -= file.bytes;
+    }
+    remainingBytes = files.reduce((total, file) => total + file.bytes, 0);
+    this.#telemetry?.recordRepoMapTotalBytes(remainingBytes);
+    deletedGenerations.sort((left, right) => left - right);
+    return {
+      activeGeneration,
+      deletedGenerations,
+      bytesFreed,
+      remainingGenerations: files.length,
+      remainingBytes,
+      quotaSatisfied: remainingBytes <= this.#options.mapQuotaBytes,
+    };
   }
 
   #degrade(error: unknown): void {
@@ -500,32 +819,14 @@ export class RepoMapRuntime {
 export async function loadActiveRepoMapGeneration(stateRoot: string): Promise<RepoMapGeneration> {
   const pointer = await readActivePointer(stateRoot);
   const generationPath = resolve(stateRoot, pointer.path);
-  const value = JSON.parse(await readFile(generationPath, "utf8")) as RepoMapGeneration;
-  if (
-    value.schemaVersion !== 1 ||
-    value.generation !== pointer.generation ||
-    typeof value.gitHead !== "string" ||
-    !Array.isArray(value.dirtyFiles) ||
-    value.dirtyFiles.some(
-      (entry) =>
-        !entry ||
-        typeof entry.path !== "string" ||
-        typeof entry.contentHash !== "string" ||
-        (!/^[a-f0-9]{64}$/u.test(entry.contentHash) && entry.contentHash !== DELETED_HASH),
-    ) ||
-    !/^[a-f0-9]{64}$/u.test(value.workspaceRevision) ||
-    !(["fresh", "dirty", "stale", "unsupported"] as const).includes(value.freshness) ||
-    !Array.isArray(value.pendingFiles) ||
-    value.pendingFiles.some((path) => typeof path !== "string") ||
-    !value.snapshot ||
-    value.snapshot.schemaVersion !== 1 ||
-    !value.snapshot.provenance ||
-    !Array.isArray(value.snapshot.files) ||
-    !Array.isArray(value.snapshot.warnings) ||
-    !Number.isFinite(Date.parse(value.activatedAt))
-  ) {
-    throw new Error("invalid active repository map generation metadata");
+  const serialized = await readFile(generationPath, "utf8");
+  let value: unknown;
+  try {
+    value = JSON.parse(serialized);
+  } catch {
+    throw new Error(INVALID_GENERATION_MESSAGE);
   }
+  if (!isRepoMapGeneration(value, pointer.generation)) throw new Error(INVALID_GENERATION_MESSAGE);
   return value;
 }
 
@@ -535,10 +836,19 @@ interface ActiveGenerationPointer {
 }
 
 async function readActivePointer(stateRoot: string): Promise<ActiveGenerationPointer> {
-  const pointer = JSON.parse(
-    await readFile(join(stateRoot, "active.json"), "utf8"),
-  ) as Partial<ActiveGenerationPointer>;
-  if (!Number.isSafeInteger(pointer.generation) || (pointer.generation ?? 0) <= 0 || typeof pointer.path !== "string") {
+  const serialized = await readFile(join(stateRoot, "active.json"), "utf8");
+  let pointer: unknown;
+  try {
+    pointer = JSON.parse(serialized);
+  } catch {
+    throw new Error("invalid active repository map generation");
+  }
+  if (
+    !isRecord(pointer) ||
+    !Number.isSafeInteger(pointer.generation) ||
+    (pointer.generation as number) <= 0 ||
+    typeof pointer.path !== "string"
+  ) {
     throw new Error("invalid active repository map generation");
   }
   const expectedPath = `generations/${pointer.generation}.json`;
@@ -550,9 +860,5 @@ async function readActivePointer(stateRoot: string): Promise<ActiveGenerationPoi
   ) {
     throw new Error("invalid active repository map generation path");
   }
-  return pointer as ActiveGenerationPointer;
-}
-
-async function readActiveGenerationNumber(stateRoot: string): Promise<number> {
-  return (await readActivePointer(stateRoot)).generation;
+  return { generation: pointer.generation as number, path: pointer.path };
 }

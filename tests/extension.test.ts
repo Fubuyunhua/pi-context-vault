@@ -638,6 +638,52 @@ describe("extension observation adapter", () => {
     expect(runtimes[1]?.close).toHaveBeenCalledOnce();
   });
 
+  it("runs repository-map maintenance together with artifact garbage collection", async () => {
+    const maintenance = vi.fn(async () => ({
+      activeGeneration: 1,
+      deletedGenerations: [2],
+      bytesFreed: 100,
+      remainingGenerations: 1,
+      remainingBytes: 200,
+      quotaSatisfied: true,
+    }));
+    const { handlers, commands, ctx, notify } = await harness({
+      repoMapRuntimeFactory: () => ({
+        start: async () => undefined,
+        close: async () => undefined,
+        ensureFresh: async () => undefined,
+        rebuild: async () => undefined,
+        maintenance,
+        status: () => ({
+          freshness: "fresh" as const,
+          generation: 1,
+          gitHead: "no-head",
+          workspaceRevision: "revision",
+          pendingFiles: [],
+          dirtyFiles: [],
+        }),
+        query: async () => ({
+          results: [],
+          freshness: "fresh" as const,
+          generation: 1,
+          gitHead: "no-head",
+          workspaceRevision: "revision",
+          pendingFiles: [],
+          fallbackEvidence: [],
+        }),
+      }),
+    });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    await commands.get("context-vault")?.handler("gc", ctx);
+
+    expect(maintenance).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(notify.mock.calls.at(-1)?.[0]))).toMatchObject({
+      artifacts: { quotaSatisfied: true },
+      repoMap: { activeGeneration: 1, deletedGenerations: [2], quotaSatisfied: true },
+    });
+  });
+
   it("supports status, rebuild, gc, and doctor commands and reports degraded initialization safely", async () => {
     const { handlers, tools, commands, ctx, notify } = await harness({
       repoMapRuntimeFactory: () => ({
