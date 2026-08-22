@@ -372,6 +372,9 @@ and verify with direct `read`, search, `git diff`, and tests.
 - `.git`, `.pi`, `.gradle`, `node_modules`, `dist`, `build`, and `target` path segments are always excluded from the
   map. Java source symlinks are not followed.
 - Repository maps are navigation indexes, not authoritative summaries or substitutes for source inspection and tests.
+- Incremental reconciliation reindexes when filesystem fingerprints are coarse or incomplete and otherwise uses size,
+  inode/device identity, and nanosecond timestamps. A metadata-preserving content rewrite with no watcher event can still
+  evade detection until another event or an explicit rebuild; this is unavoidable without rereading and hashing every file.
 - Secret redaction reduces accidental persistence risk but cannot prove that arbitrary sensitive data was detected.
 
 ## Development and acceptance

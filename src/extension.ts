@@ -30,6 +30,8 @@ interface RepoMapController {
   ensureFresh(): Promise<void>;
   rebuild(): Promise<void>;
   maintenance?: RepoMapRuntime["maintenance"];
+  /** Optional for backward-compatible injected controllers; automatic context prefers it when available. */
+  queryCurrent?(query: string, options?: { limit?: number }): Promise<RepoMapRuntimeQuery>;
   query(query: string, options?: { limit?: number }): Promise<RepoMapRuntimeQuery>;
   status(): ReturnType<RepoMapRuntime["status"]>;
 }
@@ -374,7 +376,9 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
           let result: RepoMapRuntimeQuery;
           runtime.telemetry.recordAutomaticQuery();
           try {
-            result = await runtime.repoMap.query(query, { limit: 8 });
+            result = await (runtime.repoMap.queryCurrent ?? runtime.repoMap.query).call(runtime.repoMap, query, {
+              limit: 8,
+            });
           } catch (error) {
             result = {
               results: [],

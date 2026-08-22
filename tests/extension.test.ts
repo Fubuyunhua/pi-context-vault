@@ -391,6 +391,90 @@ describe("extension observation adapter", () => {
     expect(query).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes once per turn and queries the already-coherent snapshot for automatic context", async () => {
+    const query = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: 1,
+      gitHead: "h",
+      workspaceRevision: "r",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const queryCurrent = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: 1,
+      gitHead: "h",
+      workspaceRevision: "r",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 1,
+        gitHead: "h",
+        workspaceRevision: "r",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query,
+      queryCurrent,
+    };
+    const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
+    await handlers.get("context")?.(
+      { type: "context", messages: [{ role: "user", content: "map query", timestamp: 1 }] },
+      ctx,
+    );
+
+    expect(runtime.ensureFresh).toHaveBeenCalledTimes(1);
+    expect(queryCurrent).toHaveBeenCalledTimes(1);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit repository-map tool queries on the live freshness path", async () => {
+    const liveResult = {
+      results: [],
+      freshness: "fresh" as const,
+      generation: 1,
+      gitHead: "h",
+      workspaceRevision: "r",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    };
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 1,
+        gitHead: "h",
+        workspaceRevision: "r",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query: vi.fn(async () => liveResult),
+      queryCurrent: vi.fn(async () => liveResult),
+    };
+    const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    await tools.get("context_vault_repo_map")?.execute("map-1", { query: "explicit" });
+
+    expect(runtime.query).toHaveBeenCalledWith("explicit", { limit: undefined });
+    expect(runtime.queryCurrent).not.toHaveBeenCalled();
+  });
+
   it("resets the turn sequence and freeze on session lifecycle", async () => {
     const query = vi.fn(async () => ({
       results: [],

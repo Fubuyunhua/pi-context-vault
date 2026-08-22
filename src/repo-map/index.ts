@@ -126,7 +126,19 @@ export interface RepoMapQueryOptions {
 }
 
 export interface RepoMapFileSystem {
-  lstat(path: string): Promise<{ isFile(): boolean }>;
+  lstat(path: string): Promise<{
+    isFile(): boolean;
+    /** Optional metadata lets the runtime avoid rereading unchanged dirty files. */
+    size?: number | bigint;
+    mtimeMs?: number;
+    ctimeMs?: number;
+    /** Nanosecond timestamps are preferred when the filesystem adapter exposes them. */
+    mtimeNs?: bigint;
+    ctimeNs?: bigint;
+    mode?: number | bigint;
+    ino?: number | bigint;
+    dev?: number | bigint;
+  }>;
   readFile(path: string): Promise<Buffer>;
 }
 
@@ -588,11 +600,7 @@ function baseFile(path: string, content: Buffer): Omit<RepoMapFile, "kind" | "la
   };
 }
 
-export async function indexRepoMapFile(
-  projectRoot: string,
-  path: string,
-  options: RepoMapIndexOptions = {},
-): Promise<RepoMapIndexOutcome> {
+function normalizedRepoMapPath(path: string): string {
   const normalizedPath = slash(path);
   if (
     !normalizedPath ||
@@ -602,11 +610,29 @@ export async function indexRepoMapFile(
   ) {
     throw new Error(`repository map path must be project-relative: ${path}`);
   }
-  if (isRepoMapPathExcluded(normalizedPath, options.exclude)) return { kind: "ignored" };
-  if (options.gitignorePatterns && rootGitignoreMatcher(options.gitignorePatterns)(normalizedPath)) {
-    return { kind: "ignored" };
-  }
-  if ((options.checkGitIgnore ?? true) && (await isGitIgnored(projectRoot, normalizedPath))) return { kind: "ignored" };
+  return normalizedPath;
+}
+
+/** Perform the current bounded admission checks without reading or parsing the file. */
+export async function isRepoMapFileAdmitted(
+  projectRoot: string,
+  path: string,
+  options: Pick<RepoMapIndexOptions, "exclude" | "checkGitIgnore" | "gitignorePatterns"> = {},
+): Promise<boolean> {
+  const normalizedPath = normalizedRepoMapPath(path);
+  if (isRepoMapPathExcluded(normalizedPath, options.exclude)) return false;
+  if (options.gitignorePatterns && rootGitignoreMatcher(options.gitignorePatterns)(normalizedPath)) return false;
+  if ((options.checkGitIgnore ?? true) && (await isGitIgnored(projectRoot, normalizedPath))) return false;
+  return true;
+}
+
+export async function indexRepoMapFile(
+  projectRoot: string,
+  path: string,
+  options: RepoMapIndexOptions = {},
+): Promise<RepoMapIndexOutcome> {
+  const normalizedPath = normalizedRepoMapPath(path);
+  if (!(await isRepoMapFileAdmitted(projectRoot, normalizedPath, options))) return { kind: "ignored" };
   const fileSystem = options.fileSystem ?? { lstat, readFile };
   const absolute = resolve(projectRoot, normalizedPath);
   let info: { isFile(): boolean };

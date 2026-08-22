@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,6 +56,14 @@ class FakeWatcher implements RepoMapWatcher {
   }
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe("isWatcherIgnoredPath", () => {
   it("ignores git internals regardless of path separator style", () => {
     // Windows-style paths (backslashes) are what chokidar previously failed to
@@ -96,6 +105,265 @@ async function fixture(files: Record<string, string>, git = true): Promise<{ roo
 }
 
 describe("incremental repository map runtime", () => {
+  it("attaches watcher observation before initial non-Git enumeration", async () => {
+    const { root, stateRoot } = await fixture(
+      { "src/existing.ts": "export const beforeWatcherAttachment = true;" },
+      false,
+    );
+    const fakeWatcher = new FakeWatcher();
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watcherFactory() {
+        writeFileSync(join(root, "src/existing.ts"), "export const changedDuringWatcherAttachment = true;");
+        writeFileSync(join(root, "src/created.ts"), "export const createdDuringWatcherAttachment = true;");
+        return fakeWatcher;
+      },
+    });
+
+    await runtime.start();
+
+    expect((await runtime.query("changedDuringWatcherAttachment")).results[0]?.path).toBe("src/existing.ts");
+    expect((await runtime.query("createdDuringWatcherAttachment")).results[0]?.path).toBe("src/created.ts");
+    await runtime.close();
+  });
+
+  it("keeps an explicit query behind watcher work notified during reconciliation", async () => {
+    const { root, stateRoot } = await fixture({
+      "src/a.ts": "export const initialA = true;",
+      "src/b.ts": "export const initialB = true;",
+    });
+    const reconciliationRead = deferred();
+    const releaseReconciliation = deferred();
+    let armed = false;
+    let readsAfterArm = 0;
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      indexFileSystem: {
+        async lstat(path) {
+          const info = await lstat(path);
+          return { isFile: () => info.isFile(), size: info.size, mtimeMs: 1, ctimeMs: 1 };
+        },
+        async readFile(path) {
+          if (armed && path === join(root, "src/a.ts") && ++readsAfterArm === 2) {
+            reconciliationRead.resolve();
+            await releaseReconciliation.promise;
+          }
+          return readFile(path);
+        },
+      },
+    });
+    await runtime.start();
+    await writeFile(join(root, "src/a.ts"), "export const changedA = true;");
+    runtime.notify("change", "src/a.ts");
+    armed = true;
+
+    const query = runtime.query("queuedDuringReconciliation");
+    await reconciliationRead.promise;
+    await writeFile(join(root, "src/b.ts"), "export const queuedDuringReconciliation = true;");
+    runtime.notify("change", "src/b.ts");
+    releaseReconciliation.resolve();
+
+    await expect(query).resolves.toMatchObject({
+      freshness: "dirty",
+      pendingFiles: [],
+      results: [{ path: "src/b.ts" }],
+    });
+    await runtime.close();
+  });
+
+  it("returns one captured query state when a flush interleaves with stale fallback reads", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const capturedBeforeFlush = true;" });
+    const fallbackRead = deferred();
+    const releaseFallback = deferred();
+    let blockFallback = false;
+    let fallbackBlocked = false;
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      indexFileSystem: {
+        lstat,
+        async readFile(path) {
+          if (blockFallback && !fallbackBlocked && path === join(root, "src/value.ts")) {
+            fallbackBlocked = true;
+            fallbackRead.resolve();
+            await releaseFallback.promise;
+          }
+          return readFile(path);
+        },
+      },
+    });
+    await runtime.start();
+    await writeFile(join(root, "src/value.ts"), "export const capturedAfterFlush = true;");
+    runtime.notify("change", "src/value.ts");
+    const capturedStatus = runtime.status();
+    blockFallback = true;
+
+    const query = runtime.queryCurrent("capturedBeforeFlush");
+    await fallbackRead.promise;
+    await runtime.flush();
+    const currentStatus = runtime.status();
+    releaseFallback.resolve();
+    const result = await query;
+
+    expect(result).toMatchObject({
+      freshness: capturedStatus.freshness,
+      generation: capturedStatus.generation,
+      gitHead: capturedStatus.gitHead,
+      workspaceRevision: capturedStatus.workspaceRevision,
+      pendingFiles: capturedStatus.pendingFiles,
+      results: [{ path: "src/value.ts" }],
+    });
+    expect(result.error).toBe(capturedStatus.error);
+    expect(currentStatus).toMatchObject({ freshness: "dirty", pendingFiles: [] });
+    expect(currentStatus.generation).toBeGreaterThan(result.generation);
+    expect((await runtime.queryCurrent("capturedAfterFlush")).results[0]?.path).toBe("src/value.ts");
+    await runtime.close();
+  });
+
+  it("bounds flush under a sustained watcher-event storm and later converges", async () => {
+    const { root, stateRoot } = await fixture({ "src/storm.ts": "export const beforeStorm = true;" });
+    const scheduler = new ManualScheduler();
+    let stormEvents = 100;
+    let armed = false;
+    let runtime!: RepoMapRuntime;
+    runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      scheduler,
+      indexFileSystem: {
+        lstat,
+        async readFile(path) {
+          const content = await readFile(path);
+          if (armed && stormEvents > 0 && path === join(root, "src/storm.ts")) {
+            stormEvents -= 1;
+            runtime.notify("change", "src/storm.ts");
+          }
+          return content;
+        },
+      },
+    });
+    await runtime.start();
+    await writeFile(join(root, "src/storm.ts"), "export const duringStorm = true;");
+    armed = true;
+    runtime.notify("change", "src/storm.ts");
+
+    await runtime.flush();
+
+    expect(stormEvents).toBeGreaterThan(0);
+    expect(runtime.status()).toMatchObject({ freshness: "stale", pendingFiles: ["src/storm.ts"] });
+    expect(scheduler.tasks.size).toBeGreaterThan(0);
+
+    armed = false;
+    scheduler.run();
+    await runtime.flush();
+    expect(runtime.status()).toMatchObject({ freshness: "dirty", pendingFiles: [] });
+    await runtime.close();
+  });
+
+  it("bounds ensureFresh under watcher starvation and preserves scheduled convergence", async () => {
+    const { root, stateRoot } = await fixture({ "src/starved.ts": "export const beforeStarvation = true;" });
+    const scheduler = new ManualScheduler();
+    let stormEvents = 100;
+    let armed = false;
+    let runtime!: RepoMapRuntime;
+    runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      scheduler,
+      indexFileSystem: {
+        lstat,
+        async readFile(path) {
+          const content = await readFile(path);
+          if (armed && stormEvents > 0 && path === join(root, "src/starved.ts")) {
+            stormEvents -= 1;
+            runtime.notify("change", "src/starved.ts");
+          }
+          return content;
+        },
+      },
+    });
+    await runtime.start();
+    await writeFile(join(root, "src/starved.ts"), "export const duringStarvation = true;");
+    armed = true;
+    runtime.notify("change", "src/starved.ts");
+
+    await runtime.ensureFresh();
+
+    expect(stormEvents).toBeGreaterThan(0);
+    expect(runtime.status()).toMatchObject({ freshness: "stale", pendingFiles: ["src/starved.ts"] });
+    expect(scheduler.tasks.size).toBeGreaterThan(0);
+
+    armed = false;
+    scheduler.run();
+    await runtime.flush();
+    expect(runtime.status()).toMatchObject({ freshness: "dirty", pendingFiles: [] });
+    await runtime.close();
+  });
+
+  it("keeps rebuild behind watcher work notified during activation", async () => {
+    const { root, stateRoot } = await fixture({ "src/a.ts": "export const initialA = true;" });
+    const activationWrite = deferred();
+    const releaseActivation = deferred();
+    const queuedRead = deferred();
+    const releaseQueuedRead = deferred();
+    let gateActivation = false;
+    let gateQueuedRead = false;
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      atomicWriter: async (path, content) => {
+        if (gateActivation && path === join(stateRoot, "active.json")) {
+          gateActivation = false;
+          activationWrite.resolve();
+          await releaseActivation.promise;
+        }
+        await atomicWriteFile(path, content);
+      },
+      indexFileSystem: {
+        lstat,
+        async readFile(path) {
+          if (gateQueuedRead && path === join(root, "src/queued.ts")) {
+            gateQueuedRead = false;
+            queuedRead.resolve();
+            await releaseQueuedRead.promise;
+          }
+          return readFile(path);
+        },
+      },
+    });
+    await runtime.start();
+    await writeFile(join(root, "src/a.ts"), "export const rebuiltA = true;");
+    gateActivation = true;
+    gateQueuedRead = true;
+
+    let rebuildSettled = false;
+    const rebuild = runtime.rebuild().then(() => {
+      rebuildSettled = true;
+    });
+    await activationWrite.promise;
+    await writeFile(join(root, "src/queued.ts"), "export const queuedDuringActivation = true;");
+    runtime.notify("add", "src/queued.ts");
+    releaseActivation.resolve();
+    await queuedRead.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(rebuildSettled).toBe(false);
+    releaseQueuedRead.resolve();
+    await rebuild;
+
+    expect((await runtime.queryCurrent("queuedDuringActivation")).results[0]?.path).toBe("src/queued.ts");
+    expect(
+      (await loadActiveRepoMapGeneration(stateRoot)).snapshot.files.some(({ path }) => path === "src/queued.ts"),
+    ).toBe(true);
+    await runtime.close();
+  });
+
   it("fast-updates a changed signature and deep-flushes a deterministic dirty revision", async () => {
     const { root, stateRoot } = await fixture({
       "src/service.ts": "export function createUser(name: string): string { return name; }",
@@ -876,6 +1144,252 @@ describe("incremental repository map runtime", () => {
       "1.json",
     ]);
     await Promise.all([first.close(), second.close()]);
+  });
+
+  it("caches search by effective content version and invalidates only for searchable content changes", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const cachedValue = true;" });
+    const telemetry = new Telemetry();
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false, telemetry });
+    await runtime.start();
+
+    expect((await runtime.query("cachedValue")).results[0]?.path).toBe("src/value.ts");
+    await runtime.query("cachedValue");
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(1);
+
+    // Freshness reconciliation, generation bookkeeping, and a same-content
+    // watcher event do not change the effective searchable content.
+    await runtime.ensureFresh();
+    await runtime.rebuild();
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+    await runtime.queryCurrent("cachedValue");
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(1);
+
+    await writeFile(join(root, "src/value.ts"), "export const changedValue = true;");
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+    expect((await runtime.queryCurrent("changedValue")).results[0]?.path).toBe("src/value.ts");
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(2);
+
+    // Parse degradation is still indexed lexical content and gets a new search index.
+    await writeFile(join(root, "src/value.ts"), "export const parseDegraded = ;");
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+    expect((await runtime.queryCurrent("parseDegraded")).freshness).toBe("unsupported");
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(3);
+
+    // Each transition from indexed content to an unavailable file outcome
+    // invalidates the search index; status-only transitions above do not.
+    await writeFile(join(root, "src/value.ts"), Buffer.from([0, 1, 2, 3]));
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+    expect((await runtime.queryCurrent("parseDegraded")).results).toEqual([]);
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(4);
+
+    await writeFile(join(root, "src/value.ts"), "export const beforeNonregular = true;");
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+    await runtime.queryCurrent("beforeNonregular");
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(5);
+    await rm(join(root, "src/value.ts"));
+    await mkdir(join(root, "src/value.ts"));
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+    await runtime.queryCurrent("beforeNonregular");
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(6);
+
+    await rm(join(root, "src/value.ts"), { recursive: true });
+    await writeFile(join(root, "src/value.ts"), "export const beforeDelete = true;");
+    runtime.notify("add", "src/value.ts");
+    await runtime.flush();
+    await runtime.queryCurrent("beforeDelete");
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(7);
+    await rm(join(root, "src/value.ts"));
+    runtime.notify("unlink", "src/value.ts");
+    await runtime.flush();
+    await runtime.queryCurrent("beforeDelete");
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(8);
+    await runtime.close();
+  });
+
+  it("rechecks root .gitignore admission when its watcher event is missed", async () => {
+    const { root, stateRoot } = await fixture({ ".gitignore": "", "src/tracked.ts": "export const tracked = true;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    await writeFile(join(root, "src/missed.ts"), "export const missedRootIgnore = true;");
+    runtime.notify("add", "src/missed.ts");
+    await runtime.flush();
+    expect((await runtime.queryCurrent("missedRootIgnore")).results[0]?.path).toBe("src/missed.ts");
+
+    // Neither the ignored path nor .gitignore is notified. Git status must
+    // cause the prior dirty path's cached outcome to be admission-checked.
+    await writeFile(join(root, ".gitignore"), "src/missed.ts\n");
+    await runtime.ensureFresh();
+
+    expect((await runtime.queryCurrent("missedRootIgnore")).results).toEqual([]);
+    expect(runtime.status().dirtyFiles).not.toContain("src/missed.ts");
+    await runtime.close();
+  });
+
+  it("rechecks non-Git root patterns when the .gitignore watcher event is missed", async () => {
+    const { root, stateRoot } = await fixture(
+      { ".gitignore": "", "src/non-git.ts": "export const initialNonGitValue = true;" },
+      false,
+    );
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    await writeFile(join(root, "src/non-git.ts"), "export const missedNonGitIgnore = true;");
+    runtime.notify("change", "src/non-git.ts");
+    await runtime.flush();
+    expect((await runtime.queryCurrent("missedNonGitIgnore")).results[0]?.path).toBe("src/non-git.ts");
+    expect(runtime.status().dirtyFiles).toContain("src/non-git.ts");
+
+    // The unchanged dirty file has a cached indexing outcome. Refreshing must
+    // still apply newly supplied root patterns even without either watcher event.
+    await writeFile(join(root, ".gitignore"), "src/non-git.ts\n");
+    await runtime.ensureFresh();
+
+    expect((await runtime.queryCurrent("missedNonGitIgnore")).results).toEqual([]);
+    expect(runtime.status().dirtyFiles).not.toContain("src/non-git.ts");
+    await runtime.close();
+  });
+
+  it("rechecks .git/info/exclude admission when its watcher event is missed", async () => {
+    const { root, stateRoot } = await fixture({ "src/tracked.ts": "export const tracked = true;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    await writeFile(join(root, "src/local-only.ts"), "export const missedInfoExclude = true;");
+    runtime.notify("add", "src/local-only.ts");
+    await runtime.flush();
+    expect((await runtime.queryCurrent("missedInfoExclude")).results[0]?.path).toBe("src/local-only.ts");
+
+    await writeFile(join(root, ".git/info/exclude"), "\nsrc/local-only.ts\n", { flag: "a" });
+    await runtime.ensureFresh();
+
+    expect((await runtime.queryCurrent("missedInfoExclude")).results).toEqual([]);
+    expect(runtime.status().dirtyFiles).not.toContain("src/local-only.ts");
+    await runtime.close();
+  });
+
+  it("drops an omitted current-dirty path that becomes ignored", async () => {
+    const { root, stateRoot } = await fixture({ ".gitignore": "", "src/tracked.ts": "export const tracked = true;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    await writeFile(join(root, "src/untracked.ts"), "export const removedByAdmissionChange = true;");
+    runtime.notify("add", "src/untracked.ts");
+    await runtime.flush();
+    expect((await runtime.queryCurrent("removedByAdmissionChange")).results[0]?.path).toBe("src/untracked.ts");
+
+    await writeFile(join(root, ".gitignore"), "src/untracked.ts\n");
+    runtime.notify("change", ".gitignore");
+    await runtime.flush();
+
+    expect((await runtime.queryCurrent("removedByAdmissionChange")).results).toEqual([]);
+    expect(runtime.status().dirtyFiles).not.toContain("src/untracked.ts");
+    expect(
+      (await loadActiveRepoMapGeneration(stateRoot)).snapshot.files.some(({ path }) => path === "src/untracked.ts"),
+    ).toBe(false);
+    await runtime.close();
+  });
+
+  it("skips reparsing unchanged dirty paths but detects missed external changes", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const initialValue = true;" });
+    const telemetry = new Telemetry();
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false, telemetry });
+    await runtime.start();
+
+    await writeFile(join(root, "src/value.ts"), "export const dirtyValue = true;");
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+    const afterFirstIndex = telemetry.snapshot().filesReindexed;
+    expect(afterFirstIndex).toBe(1);
+
+    await runtime.query("dirtyValue");
+    await runtime.query("dirtyValue");
+    expect(telemetry.snapshot().filesReindexed).toBe(afterFirstIndex);
+
+    // No watcher notification: ensureFresh must still notice a changed file fingerprint.
+    await writeFile(join(root, "src/value.ts"), "export const externallyChangedValue = 12345;");
+    const changed = await runtime.query("externallyChangedValue");
+    expect(changed.results[0]?.path).toBe("src/value.ts");
+    expect(telemetry.snapshot().filesReindexed).toBe(afterFirstIndex + 1);
+    await runtime.close();
+  });
+
+  it("conservatively reindexes coarse fingerprints with unchanged size and timestamps", async () => {
+    const original = "export const originalToken = 1;";
+    const replacement = "export const replacedToken = 1;";
+    expect(Buffer.byteLength(replacement)).toBe(Buffer.byteLength(original));
+    const { root, stateRoot } = await fixture({ "src/value.ts": original });
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      indexFileSystem: {
+        async lstat(path) {
+          const info = await lstat(path);
+          return {
+            isFile: () => info.isFile(),
+            size: info.size,
+            mtimeMs: 1_700_000_000_000,
+            ctimeMs: 1_700_000_000_000,
+            ino: 42,
+            dev: 7,
+          };
+        },
+        readFile,
+      },
+    });
+    await runtime.start();
+    await writeFile(join(root, "src/value.ts"), original.replace(" = 1", " = 2"));
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+    expect((await runtime.query("originalToken")).results[0]?.path).toBe("src/value.ts");
+
+    // No watcher notification and deliberately identical coarse metadata.
+    await writeFile(join(root, "src/value.ts"), replacement);
+    const result = await runtime.query("replacedToken");
+    expect(result.results[0]?.path).toBe("src/value.ts");
+    expect((await runtime.queryCurrent("originalToken")).results).toEqual([]);
+    await runtime.close();
+  });
+
+  it("keeps the cached coherent search on read errors and rebuilds after changed-content recovery", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const coherentCachedValue = true;" });
+    const telemetry = new Telemetry();
+    let failReads = false;
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      telemetry,
+      indexFileSystem: {
+        lstat,
+        async readFile(path) {
+          if (failReads && path === join(root, "src/value.ts")) throw new Error("simulated cached read failure");
+          return readFile(path);
+        },
+      },
+    });
+    await runtime.start();
+    await runtime.query("coherentCachedValue");
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(1);
+
+    await writeFile(join(root, "src/value.ts"), "export const recoveredCachedValue = true;");
+    failReads = true;
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+    const stale = await runtime.queryCurrent("coherentCachedValue");
+    expect(stale.freshness).toBe("stale");
+    expect(stale.results[0]?.path).toBe("src/value.ts");
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(1);
+
+    failReads = false;
+    await runtime.ensureFresh();
+    const recovered = await runtime.queryCurrent("recoveredCachedValue");
+    expect(recovered.results[0]?.path).toBe("src/value.ts");
+    expect(telemetry.snapshot().searchIndexBuildCount).toBe(2);
+    await runtime.close();
   });
 
   it("telemetry: ensureFresh records failed invocations and durations", async () => {

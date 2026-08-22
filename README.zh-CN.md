@@ -361,6 +361,9 @@ pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
 - `.git`、`.pi`、`.gradle`、`node_modules`、`dist`、`build` 和 `target` path segment 始终排除，Java source
   symlink 不会被跟随。
 - Repo Map 是导航索引，不是权威 summary，也不能代替源码检查和测试。
+- 增量 reconciliation 会在文件系统 fingerprint 粗糙或不完整时重新索引；其他情况下会使用文件大小、
+  inode/device identity 和纳秒时间戳。若内容改写同时保留全部 metadata 且没有 watcher event，仍可能要等到下一次
+  event 或显式 rebuild 才能发现；除非每次都重读并 hash 所有文件，否则无法彻底消除这一残余风险。
 - Secret 脱敏降低意外持久化风险，但无法证明任意敏感数据均被识别。
 
 ## 开发与验收

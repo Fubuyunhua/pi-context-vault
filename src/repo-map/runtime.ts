@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, realpath, stat, unlink } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import chokidar, { type FSWatcher } from "chokidar";
@@ -9,6 +9,7 @@ import type { Telemetry } from "../telemetry.js";
 import {
   buildRepoMap,
   indexRepoMapFile,
+  isRepoMapFileAdmitted,
   isRepoMapPathExcluded,
   loadRootGitignorePatterns,
   type RepoMapFile,
@@ -24,6 +25,12 @@ import {
 
 const execFileAsync = promisify(execFile);
 const DELETED_HASH = "deleted";
+// A freshness request performs at most this many complete reconciliation
+// passes and consumes at most this many already-queued watcher updates per pass.
+// Remaining work is kept stale/pending and rescheduled rather than starving a turn.
+const MAX_FLUSH_PASSES = 8;
+const MAX_WATCHER_UPDATES_PER_PASS = 64;
+const MAX_FLUSH_DURATION_MS = 1_000;
 
 export type RepoMapFreshness = "fresh" | "dirty" | "stale" | "unsupported";
 export type RepoMapChangeEvent = "add" | "change" | "unlink";
@@ -408,6 +415,25 @@ interface GenerationFile {
   bytes: number;
 }
 
+interface CachedFileOutcome {
+  fingerprint: string;
+  outcome: RepoMapIndexOutcome;
+}
+
+interface FileFingerprint {
+  value: string;
+  reusable: boolean;
+}
+
+interface PendingWatcherUpdate {
+  event: RepoMapChangeEvent;
+  path: string;
+}
+
+function searchableContent(snapshot: RepoMapSnapshot | undefined): string {
+  return JSON.stringify(snapshot?.files ?? []);
+}
+
 export class RepoMapRuntime {
   readonly #options: Required<
     Pick<RepoMapRuntimeOptions, "mapDebounceMs" | "mapGenerationRetention" | "mapQuotaBytes" | "watch">
@@ -424,6 +450,11 @@ export class RepoMapRuntime {
   #dirty = new Map<string, string>();
   #pending = new Set<string>();
   #readFailures = new Map<string, RepoMapWarning>();
+  #fileOutcomes = new Map<string, CachedFileOutcome>();
+  /** Monotonic runtime-local version of snapshot.files, independent of object and generation identity. */
+  #effectiveContentVersion = 0;
+  #searchVersion = -1;
+  #search?: RepoMapSearch;
   #gitWorkspace?: boolean;
   #nonGitIgnorePatterns: string[] = [];
   #freshness: RepoMapFreshness = "stale";
@@ -431,7 +462,9 @@ export class RepoMapRuntime {
   #maintenance?: RepoMapMaintenanceResult | { error: string };
   #watcher?: RepoMapWatcher;
   #scheduled?: unknown;
-  #updateChain: Promise<void> = Promise.resolve();
+  #watcherUpdates: PendingWatcherUpdate[] = [];
+  #mutationEpoch = 0;
+  #started = false;
   #flushChain: Promise<void> = Promise.resolve();
 
   constructor(options: RepoMapRuntimeOptions) {
@@ -463,7 +496,6 @@ export class RepoMapRuntime {
     this.#projectRoot = await realpath(resolve(this.#options.projectRoot));
     await mkdir(this.#options.stateRoot, { recursive: true, mode: 0o700 });
     await this.#hydratePriorGeneration();
-    await this.#rebuildBase();
     if (this.#options.watch) {
       this.#watcher = (this.#options.watcherFactory ?? watcher)(this.#projectRoot);
       for (const event of ["add", "change", "unlink"] as const) {
@@ -471,6 +503,9 @@ export class RepoMapRuntime {
       }
       await this.#watcher.ready?.();
     }
+    await this.#rebuildBase();
+    this.#started = true;
+    await this.flush();
   }
 
   notify(event: RepoMapChangeEvent, changedPath: string): void {
@@ -478,9 +513,12 @@ export class RepoMapRuntime {
     if (!path || path.startsWith("../") || isRepoMapPathExcluded(path, this.#options.exclude)) return;
     this.#pending.add(path);
     this.#freshness = "stale";
-    this.#updateChain = this.#updateChain
-      .then(() => this.#fastUpdate(event, path))
-      .catch((error) => this.#degrade(error));
+    this.#watcherUpdates.push({ event, path });
+    this.#mutationEpoch += 1;
+    if (this.#started) this.#scheduleFlush();
+  }
+
+  #scheduleFlush(): void {
     if (this.#scheduled !== undefined) this.#scheduler.cancel(this.#scheduled);
     this.#scheduled = this.#scheduler.schedule(this.#options.mapDebounceMs, () => {
       this.#scheduled = undefined;
@@ -494,26 +532,62 @@ export class RepoMapRuntime {
     await operation;
   }
 
+  async #drainWatcherUpdates(): Promise<void> {
+    // Snapshot a bounded batch. Notifications received while it is processed
+    // belong to a later pass, preventing an event producer from extending this
+    // drain indefinitely.
+    const updates = this.#watcherUpdates.splice(0, MAX_WATCHER_UPDATES_PER_PASS);
+    for (const update of updates) {
+      try {
+        await this.#fastUpdate(update.event, update.path);
+      } catch (error) {
+        this.#degrade(error);
+      }
+    }
+    // An older update for a path can clear pending while a newer one is queued.
+    // Reassert every queued path as explicit stale evidence.
+    for (const { path } of this.#watcherUpdates) this.#pending.add(path);
+  }
+
+  #deferRemainingFlushWork(): void {
+    for (const { path } of this.#watcherUpdates) this.#pending.add(path);
+    this.#freshness = "stale";
+    if (this.#started && this.#watcherUpdates.length > 0) this.#scheduleFlush();
+  }
+
   async #flush(): Promise<void> {
     if (this.#scheduled !== undefined) {
       this.#scheduler.cancel(this.#scheduled);
       this.#scheduled = undefined;
     }
-    await this.#updateChain;
-    const currentHead = await gitHead(this.#projectRoot);
-    if (currentHead !== this.#head) {
-      await this.#rebuildBase();
-      return;
-    }
-    const reconciled = await this.#reconcileDirtyOverlay();
-    const previousFreshness = this.#freshness;
-    this.#freshness = this.#computedFreshness();
-    if (this.#pending.size === 0 && previousFreshness === this.#freshness && !reconciled) return;
-    try {
-      await this.#activate();
-      if (this.#readFailures.size === 0) this.#error = undefined;
-    } catch (error) {
-      this.#degrade(error);
+    const startedAt = performance.now();
+    for (let pass = 1; ; pass += 1) {
+      const epoch = this.#mutationEpoch;
+      await this.#drainWatcherUpdates();
+      const currentHead = await gitHead(this.#projectRoot);
+      if (currentHead !== this.#head) {
+        await this.#rebuildBase();
+      } else {
+        const reconciled = await this.#reconcileDirtyOverlay();
+        const previousFreshness = this.#freshness;
+        this.#freshness = this.#computedFreshness();
+        if (this.#pending.size > 0 || previousFreshness !== this.#freshness || reconciled) {
+          try {
+            await this.#activate();
+            if (this.#readFailures.size === 0) this.#error = undefined;
+          } catch (error) {
+            this.#degrade(error);
+          }
+        }
+      }
+      // No notification can interleave between this synchronous check and
+      // promise resolution. A notification observed during any awaited phase
+      // changes the epoch and normally forces another complete pass.
+      if (epoch === this.#mutationEpoch && this.#watcherUpdates.length === 0) return;
+      if (pass >= MAX_FLUSH_PASSES || performance.now() - startedAt >= MAX_FLUSH_DURATION_MS) {
+        this.#deferRemainingFlushWork();
+        return;
+      }
     }
   }
 
@@ -529,37 +603,65 @@ export class RepoMapRuntime {
   /** Rebuild the base snapshot and atomically activate it as a new generation. */
   async rebuild(): Promise<void> {
     const operation = this.#flushChain.then(async () => {
-      await this.#updateChain;
       await this.#rebuildBase();
+      await this.#flush();
     });
     this.#flushChain = operation.catch(() => undefined);
     await operation;
   }
 
+  /** Live query path used by the explicit tool: reconcile Git and watcher work first. */
   async query(query: string, options: RepoMapQueryOptions = {}): Promise<RepoMapRuntimeQuery> {
     const startedAt = performance.now();
     try {
-      return await this.#queryUninstrumented(query, options);
+      await this.ensureFresh();
+      return await this.#queryCurrentUninstrumented(query, options);
     } finally {
       this.#telemetry?.recordRepoMapQuery(performance.now() - startedAt);
     }
   }
 
-  async #queryUninstrumented(query: string, options: RepoMapQueryOptions = {}): Promise<RepoMapRuntimeQuery> {
-    await this.ensureFresh();
+  /** Query the current coherent snapshot without another freshness reconciliation. */
+  async queryCurrent(query: string, options: RepoMapQueryOptions = {}): Promise<RepoMapRuntimeQuery> {
+    const startedAt = performance.now();
+    try {
+      return await this.#queryCurrentUninstrumented(query, options);
+    } finally {
+      this.#telemetry?.recordRepoMapQuery(performance.now() - startedAt);
+    }
+  }
+
+  async #queryCurrentUninstrumented(query: string, options: RepoMapQueryOptions = {}): Promise<RepoMapRuntimeQuery> {
+    // Capture all query-visible state before the first await. Fallback source
+    // and Git reads may interleave with a scheduled flush, but the returned
+    // search results and provenance must describe this one captured state.
+    const files = this.#effective?.files ?? [];
+    const freshness = this.#freshness;
+    const generation = this.#generation;
+    const gitHead = this.#head;
+    const workspaceRevision = revision(gitHead, this.#dirty);
+    const pendingFiles = [...this.#pending].sort();
+    const error = this.#error;
     const fallbackEvidence: RepoMapFallbackEvidence[] = [];
     let results: RepoMapQueryResult[] = [];
     if (this.#effective) {
-      this.#telemetry?.recordSearchIndexBuild();
-      results = new RepoMapSearch(this.#effective).query(query, options);
+      if (!this.#search || this.#searchVersion !== this.#effectiveContentVersion) {
+        this.#search = new RepoMapSearch(this.#effective);
+        this.#searchVersion = this.#effectiveContentVersion;
+        this.#telemetry?.recordSearchIndexBuild();
+      }
+      results = this.#search.query(query, options);
     }
-    if (this.#freshness === "stale") {
+    if (freshness === "stale") {
       const terms = query.toLowerCase().match(/[\p{L}\p{N}_$-]{2,}/gu) ?? [];
-      for (const file of this.#effective?.files ?? []) {
+      for (const file of files) {
         if (terms.some((term) => file.lexicalTerms.includes(term))) {
           let excerpt = file.lexicalTerms.slice(0, 40).join(" ");
           try {
-            excerpt = (await readFile(join(this.#projectRoot, file.path), "utf8")).slice(0, 4 * 1024);
+            const content = this.#options.indexFileSystem
+              ? await this.#options.indexFileSystem.readFile(join(this.#projectRoot, file.path))
+              : await readFile(join(this.#projectRoot, file.path));
+            excerpt = content.toString("utf8").slice(0, 4 * 1024);
           } catch {
             // The indexed lexical terms remain useful evidence when a file disappeared mid-query.
           }
@@ -570,11 +672,14 @@ export class RepoMapRuntime {
       const diff = await gitDiff(this.#projectRoot);
       if (diff) fallbackEvidence.push({ kind: "git-diff", excerpt: diff });
       if (fallbackEvidence.length === 0) {
-        const firstFile = this.#effective?.files[0];
+        const firstFile = files[0];
         if (firstFile) {
           let excerpt = firstFile.lexicalTerms.slice(0, 40).join(" ");
           try {
-            excerpt = (await readFile(join(this.#projectRoot, firstFile.path), "utf8")).slice(0, 4 * 1024);
+            const content = this.#options.indexFileSystem
+              ? await this.#options.indexFileSystem.readFile(join(this.#projectRoot, firstFile.path))
+              : await readFile(join(this.#projectRoot, firstFile.path));
+            excerpt = content.toString("utf8").slice(0, 4 * 1024);
           } catch {
             // Lexical terms from the last coherent generation remain an explicit degraded fallback.
           }
@@ -589,13 +694,13 @@ export class RepoMapRuntime {
     }
     return {
       results,
-      freshness: this.#freshness,
-      generation: this.#generation,
-      gitHead: this.#head,
-      workspaceRevision: revision(this.#head, this.#dirty),
-      pendingFiles: [...this.#pending].sort(),
+      freshness,
+      generation,
+      gitHead,
+      workspaceRevision,
+      pendingFiles,
       fallbackEvidence,
-      ...(this.#error ? { error: this.#error } : {}),
+      ...(error ? { error } : {}),
     };
   }
 
@@ -631,31 +736,33 @@ export class RepoMapRuntime {
   }
 
   async close(): Promise<void> {
+    this.#started = false;
     if (this.#scheduled !== undefined) this.#scheduler.cancel(this.#scheduled);
     this.#scheduled = undefined;
-    await this.#updateChain;
-    await this.#flushChain;
     await this.#watcher?.close();
     this.#watcher = undefined;
+    await this.flush();
   }
 
   async #fastUpdate(event: RepoMapChangeEvent, path: string): Promise<void> {
     if (!this.#effective) throw new Error("repository map runtime has not started");
+    if (path === ".gitignore") this.#fileOutcomes.clear();
     if (path === ".gitignore" && this.#gitWorkspace === false) {
       await this.#refreshNonGitIgnorePatterns();
       await this.#rebuildBase();
       return;
     }
+    this.#fileOutcomes.delete(path);
     if (event === "unlink") {
-      replaceFile(this.#effective, path);
+      this.#mutateEffective(() => replaceFile(this.#effective as RepoMapSnapshot, path));
       this.#readFailures.delete(path);
       this.#pending.delete(path);
       if (this.#base?.files.some((file) => file.path === path)) this.#dirty.set(path, DELETED_HASH);
       else this.#dirty.delete(path);
+      this.#fileOutcomes.set(path, { fingerprint: "missing", outcome: { kind: "missing" } });
       return;
     }
-    const outcome = await indexRepoMapFile(this.#projectRoot, path, this.#indexOptions());
-    this.#telemetry?.recordFileReindexed();
+    const outcome = await this.#indexPath(path, this.#indexOptions(), false);
     this.#applyOutcome(path, outcome);
   }
 
@@ -663,7 +770,7 @@ export class RepoMapRuntime {
     if (!this.#effective) return;
     const baseHash = this.#base?.files.find((file) => file.path === path)?.contentHash;
     if (outcome.kind === "read-error") {
-      replaceWarning(this.#effective, path, outcome.warning);
+      this.#mutateEffective(() => replaceWarning(this.#effective as RepoMapSnapshot, path, outcome.warning));
       this.#readFailures.set(path, outcome.warning);
       this.#pending.add(path);
       this.#error = outcome.warning.message;
@@ -673,18 +780,18 @@ export class RepoMapRuntime {
     this.#readFailures.delete(path);
     this.#pending.delete(path);
     if (outcome.kind === "indexed") {
-      replaceFile(this.#effective, path, outcome.file, outcome.warning);
+      this.#mutateEffective(() => replaceFile(this.#effective as RepoMapSnapshot, path, outcome.file, outcome.warning));
       if (outcome.file.contentHash !== baseHash) this.#dirty.set(path, outcome.file.contentHash);
       else this.#dirty.delete(path);
       return;
     }
     if (outcome.kind === "ignored") {
-      replaceFile(this.#effective, path);
+      this.#mutateEffective(() => replaceFile(this.#effective as RepoMapSnapshot, path));
       this.#dirty.delete(path);
       return;
     }
 
-    replaceFile(this.#effective, path);
+    this.#mutateEffective(() => replaceFile(this.#effective as RepoMapSnapshot, path));
     if (!baseHash) {
       this.#dirty.delete(path);
     } else if (outcome.kind === "missing") {
@@ -693,6 +800,101 @@ export class RepoMapRuntime {
       this.#dirty.set(path, outcome.contentHash);
     } else {
       this.#dirty.set(path, hash(`non-regular\0${path}`));
+    }
+  }
+
+  #mutateEffective(mutation: () => void): void {
+    const before = searchableContent(this.#effective);
+    mutation();
+    if (searchableContent(this.#effective) !== before) this.#effectiveContentVersion += 1;
+  }
+
+  #replaceEffective(snapshot: RepoMapSnapshot): void {
+    const before = searchableContent(this.#effective);
+    this.#effective = snapshot;
+    if (searchableContent(snapshot) !== before) this.#effectiveContentVersion += 1;
+  }
+
+  async #fileFingerprint(path: string): Promise<FileFingerprint | undefined> {
+    try {
+      const info = this.#options.indexFileSystem
+        ? await this.#options.indexFileSystem.lstat(join(this.#projectRoot, path))
+        : await lstat(join(this.#projectRoot, path), { bigint: true });
+      const size = info.size;
+      const mtime = info.mtimeNs ?? info.mtimeMs;
+      const ctime = info.ctimeNs ?? info.ctimeMs;
+      if ((typeof size !== "number" && typeof size !== "bigint") || mtime === undefined || ctime === undefined) {
+        return undefined;
+      }
+      const highPrecision =
+        typeof info.mtimeNs === "bigint" &&
+        typeof info.ctimeNs === "bigint" &&
+        info.ino !== undefined &&
+        info.dev !== undefined;
+      return {
+        value: [
+          info.isFile() ? "file" : "non-regular",
+          size.toString(),
+          mtime.toString(),
+          ctime.toString(),
+          info.mode?.toString() ?? "",
+          info.ino?.toString() ?? "",
+          info.dev?.toString() ?? "",
+        ].join(":"),
+        // Millisecond-only or identity-poor metadata can alias after a rapid,
+        // same-size rewrite, so it is evidence for change but never for reuse.
+        reusable: highPrecision,
+      };
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT" ? { value: "missing", reusable: true } : undefined;
+    }
+  }
+
+  async #indexPath(path: string, options: RepoMapIndexOptions, useCache = true): Promise<RepoMapIndexOutcome> {
+    const before = await this.#fileFingerprint(path);
+    const cached = this.#fileOutcomes.get(path);
+    if (
+      useCache &&
+      before?.reusable === true &&
+      cached?.fingerprint === before.value &&
+      cached.outcome.kind !== "read-error"
+    ) {
+      // Fingerprints establish content stability, not current admission. Git
+      // ignore sources and supplied root patterns can change without touching
+      // this path or its watcher. Static built-in/config excludes were already
+      // authoritative when this cache entry was created.
+      const admissionCanChange = (options.checkGitIgnore ?? true) || options.gitignorePatterns !== undefined;
+      if (admissionCanChange && !(await isRepoMapFileAdmitted(this.#projectRoot, path, options))) {
+        this.#fileOutcomes.delete(path);
+        return { kind: "ignored" };
+      }
+      return cached.outcome;
+    }
+
+    const outcome = await indexRepoMapFile(this.#projectRoot, path, options);
+    this.#telemetry?.recordFileReindexed();
+    const after = await this.#fileFingerprint(path);
+    // A stable high-precision metadata fingerprint makes the outcome reusable.
+    // Read failures are retried so recovery is never hidden; ignored admission
+    // can change independently of file metadata and is therefore not cached.
+    if (
+      before?.reusable === true &&
+      after?.reusable === true &&
+      before.value === after.value &&
+      outcome.kind !== "read-error" &&
+      outcome.kind !== "ignored"
+    ) {
+      this.#fileOutcomes.set(path, { fingerprint: before.value, outcome });
+    } else {
+      this.#fileOutcomes.delete(path);
+    }
+    return outcome;
+  }
+
+  #retainFileOutcomes(paths: Iterable<string>): void {
+    const retained = new Set(paths);
+    for (const path of this.#fileOutcomes.keys()) {
+      if (!retained.has(path)) this.#fileOutcomes.delete(path);
     }
   }
 
@@ -734,11 +936,12 @@ export class RepoMapRuntime {
     if (!discovered) {
       await this.#refreshNonGitIgnorePatterns();
       const previous = new Map(this.#dirty);
-      for (const path of [...this.#readFailures.keys()]) {
-        const outcome = await indexRepoMapFile(this.#projectRoot, path, this.#indexOptions());
-        this.#telemetry?.recordFileReindexed();
+      const pathsToRefresh = new Set([...this.#dirty.keys(), ...this.#readFailures.keys()]);
+      for (const path of pathsToRefresh) {
+        const outcome = await this.#indexPath(path, this.#indexOptions());
         this.#applyOutcome(path, outcome);
       }
+      this.#retainFileOutcomes([...this.#dirty.keys(), ...this.#readFailures.keys()]);
       return JSON.stringify([...previous].sort()) !== JSON.stringify([...this.#dirty].sort());
     }
     this.#nonGitIgnorePatterns = [];
@@ -748,12 +951,11 @@ export class RepoMapRuntime {
     const pathsToRefresh = new Set([...dirtyPaths.keys(), ...previous.keys(), ...this.#readFailures.keys()]);
     const next = new Map<string, string>();
     for (const path of pathsToRefresh) {
-      const outcome = await indexRepoMapFile(this.#projectRoot, path, {
+      const outcome = await this.#indexPath(path, {
         exclude: this.#options.exclude,
         checkGitIgnore: !dirtyPaths.has(path),
         ...(this.#options.indexFileSystem ? { fileSystem: this.#options.indexFileSystem } : {}),
       });
-      this.#telemetry?.recordFileReindexed();
       this.#applyOutcome(path, outcome);
       if (outcome.kind === "read-error" && previous.has(path)) {
         next.set(path, previous.get(path) as string);
@@ -766,17 +968,21 @@ export class RepoMapRuntime {
       else if (outcome.kind === "non-regular" && dirtyPaths.get(path)) next.set(path, hash(`non-regular\0${path}`));
     }
     this.#dirty = next;
+    this.#retainFileOutcomes([...next.keys(), ...this.#readFailures.keys()]);
     return JSON.stringify([...previous].sort()) !== JSON.stringify([...next].sort());
   }
 
   #computedFreshness(): RepoMapFreshness {
-    if (this.#readFailures.size > 0) return "stale";
+    if (this.#pending.size > 0 || this.#watcherUpdates.length > 0 || this.#readFailures.size > 0) return "stale";
     if (this.#effective?.files.some((file) => file.degradedReason)) return "unsupported";
     return this.#dirty.size > 0 ? "dirty" : "fresh";
   }
 
   async #rebuildBase(): Promise<void> {
     try {
+      // Full enumeration and admission are authoritative; no per-path outcome
+      // from an older admission context may be overlaid onto the new base.
+      this.#fileOutcomes.clear();
       const previousBase = this.#base;
       const previousEffective = this.#effective;
       const previousDirty = new Map(this.#dirty);
@@ -798,7 +1004,7 @@ export class RepoMapRuntime {
       }
       this.#head = head;
       this.#base = nextBase;
-      this.#effective = nextEffective;
+      this.#replaceEffective(nextEffective);
       this.#dirty = nextDirty;
       this.#readFailures = nextReadFailures;
       this.#pending = nextPending;
