@@ -11,7 +11,26 @@ import { analyzeJava } from "./java.js";
 const execFileAsync = promisify(execFile);
 export const REPO_MAP_SCHEMA_VERSION = 1;
 const SEMANTIC_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".java"]);
-const BUILT_IN_EXCLUDED_SEGMENTS = new Set([".git", ".pi", ".gradle", "node_modules", "dist", "build", "target"]);
+const BUILT_IN_EXCLUDED_SEGMENTS = new Set([
+  ".git",
+  ".pi",
+  ".gradle",
+  "node_modules",
+  "dist",
+  "build",
+  "target",
+  "__pycache__",
+  ".pytest_cache",
+  ".tox",
+  ".venv",
+  "venv",
+  ".mypy_cache",
+  ".ruff_cache",
+  "_build",
+  ".cache",
+  ".parcel-cache",
+  ".turbo",
+]);
 
 export type RepoMapFileKind = "semantic" | "lexical";
 export type RepoMapLanguage = "typescript" | "javascript" | "java" | "text";
@@ -106,6 +125,29 @@ export interface RepoMapQueryOptions {
   limit?: number;
 }
 
+export interface RepoMapFileSystem {
+  lstat(path: string): Promise<{ isFile(): boolean }>;
+  readFile(path: string): Promise<Buffer>;
+}
+
+export interface RepoMapIndexOptions {
+  exclude?: string[];
+  /** Enumeration and Git-status callers already apply Git admission in a batch. */
+  checkGitIgnore?: boolean;
+  /** Root .gitignore rules already loaded by a non-Git runtime. */
+  gitignorePatterns?: string[];
+  /** Injectable file operations for deterministic filesystem race handling. */
+  fileSystem?: RepoMapFileSystem;
+}
+
+export type RepoMapIndexOutcome =
+  | { kind: "indexed"; file: RepoMapFile; warning?: RepoMapWarning }
+  | { kind: "missing" }
+  | { kind: "ignored" }
+  | { kind: "non-regular" }
+  | { kind: "non-text"; contentHash: string }
+  | { kind: "read-error"; warning: RepoMapWarning };
+
 export interface RepoMapQueryResult {
   path: string;
   score: number;
@@ -157,6 +199,72 @@ function exclusionMatcher(patterns: string[]): (path: string) => boolean {
   };
 }
 
+interface GitignoreRule {
+  negated: boolean;
+  anchored: boolean;
+  directoryOnly: boolean;
+  hasSlash: boolean;
+  expression: RegExp;
+}
+
+function gitignoreExpression(pattern: string): RegExp {
+  let expression = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    if (character === "*" && pattern[index + 1] === "*") {
+      if (pattern[index + 2] === "/") {
+        expression += "(?:.*/)?";
+        index += 2;
+      } else {
+        expression += ".*";
+        index += 1;
+      }
+    } else if (character === "*") expression += "[^/]*";
+    else if (character === "?") expression += "[^/]";
+    else expression += character?.replace(/[|\\{}()[\]^$+?.]/g, "\\$&") ?? "";
+  }
+  return new RegExp(`^${expression}$`);
+}
+
+function rootGitignoreMatcher(patterns: string[]): (path: string) => boolean {
+  const rules = patterns.flatMap((rawPattern): GitignoreRule[] => {
+    const negated = rawPattern.startsWith("!");
+    let pattern = negated ? rawPattern.slice(1) : rawPattern;
+    const anchored = pattern.startsWith("/");
+    if (anchored) pattern = pattern.slice(1);
+    const directoryOnly = pattern.endsWith("/");
+    if (directoryOnly) pattern = pattern.slice(0, -1);
+    if (!pattern) return [];
+    return [
+      {
+        negated,
+        anchored,
+        directoryOnly,
+        hasSlash: pattern.includes("/"),
+        expression: gitignoreExpression(pattern),
+      },
+    ];
+  });
+
+  return (inputPath) => {
+    const parts = slash(inputPath).split("/").filter(Boolean);
+    for (let index = 0; index < parts.length; index += 1) {
+      const candidate = parts.slice(0, index + 1).join("/");
+      const isDirectory = index < parts.length - 1;
+      let ignored = false;
+      for (const rule of rules) {
+        if (rule.directoryOnly && !isDirectory) continue;
+        const matchTarget = rule.anchored || rule.hasSlash ? candidate : (parts[index] as string);
+        if (rule.expression.test(matchTarget)) ignored = !rule.negated;
+      }
+      // Git cannot re-include a child while one of its parent directories is
+      // still ignored; the parent itself needs an earlier negation rule.
+      if (ignored) return true;
+    }
+    return false;
+  };
+}
+
 export function isRepoMapPathExcluded(path: string, patterns: string[] = []): boolean {
   return exclusionMatcher(patterns)(slash(path));
 }
@@ -191,7 +299,7 @@ async function fallbackFiles(projectRoot: string): Promise<string[]> {
   return output;
 }
 
-async function rootGitignorePatterns(projectRoot: string): Promise<string[]> {
+export async function loadRootGitignorePatterns(projectRoot: string): Promise<string[]> {
   try {
     return (await readFile(join(projectRoot, ".gitignore"), "utf8"))
       .split(/\r?\n/u)
@@ -205,9 +313,26 @@ async function rootGitignorePatterns(projectRoot: string): Promise<string[]> {
 
 export async function enumerateRepoMapFiles(projectRoot: string, exclude: string[]): Promise<string[]> {
   const fromGit = await gitFiles(projectRoot);
-  const patterns = [...exclude, ...(fromGit ? [] : await rootGitignorePatterns(projectRoot))];
-  const isExcluded = exclusionMatcher(patterns);
-  return [...new Set(fromGit ?? (await fallbackFiles(projectRoot)))].filter((path) => !isExcluded(path)).sort();
+  const isExcluded = exclusionMatcher(exclude);
+  const isFallbackIgnored = rootGitignoreMatcher(fromGit ? [] : await loadRootGitignorePatterns(projectRoot));
+  return [...new Set(fromGit ?? (await fallbackFiles(projectRoot)))]
+    .filter((path) => !isExcluded(path) && !isFallbackIgnored(path))
+    .sort();
+}
+
+async function isGitIgnored(projectRoot: string, path: string): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["check-ignore", "--quiet", "--", path], { cwd: projectRoot });
+    return true;
+  } catch (error) {
+    // Git exits 1 for an admitted path. Outside a worktree (128), apply the
+    // same root .gitignore fallback used by initial non-Git enumeration.
+    const code = (error as { code?: unknown }).code;
+    if (code === 128 || code === "128") {
+      return rootGitignoreMatcher(await loadRootGitignorePatterns(projectRoot))(path);
+    }
+    return false;
+  }
 }
 
 function lexicalTerms(path: string, text: string): string[] {
@@ -466,7 +591,8 @@ function baseFile(path: string, content: Buffer): Omit<RepoMapFile, "kind" | "la
 export async function indexRepoMapFile(
   projectRoot: string,
   path: string,
-): Promise<{ file?: RepoMapFile; warning?: RepoMapWarning }> {
+  options: RepoMapIndexOptions = {},
+): Promise<RepoMapIndexOutcome> {
   const normalizedPath = slash(path);
   if (
     !normalizedPath ||
@@ -476,15 +602,37 @@ export async function indexRepoMapFile(
   ) {
     throw new Error(`repository map path must be project-relative: ${path}`);
   }
+  if (isRepoMapPathExcluded(normalizedPath, options.exclude)) return { kind: "ignored" };
+  if (options.gitignorePatterns && rootGitignoreMatcher(options.gitignorePatterns)(normalizedPath)) {
+    return { kind: "ignored" };
+  }
+  if ((options.checkGitIgnore ?? true) && (await isGitIgnored(projectRoot, normalizedPath))) return { kind: "ignored" };
+  const fileSystem = options.fileSystem ?? { lstat, readFile };
+  const absolute = resolve(projectRoot, normalizedPath);
+  let info: { isFile(): boolean };
   try {
-    const absolute = resolve(projectRoot, normalizedPath);
-    const info = await lstat(absolute);
-    if (!info.isFile()) return {};
-    const content = await readFile(absolute);
-    if (!isText(content)) return {};
+    info = await fileSystem.lstat(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+    const message = (error instanceof Error ? error.message : String(error)).replace(/\s+/gu, " ").slice(0, 512);
+    return { kind: "read-error", warning: { path: normalizedPath, code: "read-error", message } };
+  }
+  if (!info.isFile()) return { kind: "non-regular" };
+  let content: Buffer;
+  try {
+    content = await fileSystem.readFile(absolute);
+  } catch (error) {
+    const message = (error instanceof Error ? error.message : String(error)).replace(/\s+/gu, " ").slice(0, 512);
+    return { kind: "read-error", warning: { path: normalizedPath, code: "read-error", message } };
+  }
+  const contentHash = createHash("sha256").update(content).digest("hex");
+  try {
+    if (!isText(content)) return { kind: "non-text", contentHash };
     const base = baseFile(normalizedPath, content);
     const extension = extname(normalizedPath).toLowerCase();
-    if (!SEMANTIC_EXTENSIONS.has(extension)) return { file: { ...base, kind: "lexical", language: "text" } };
+    if (!SEMANTIC_EXTENSIONS.has(extension)) {
+      return { kind: "indexed", file: { ...base, kind: "lexical", language: "text" } };
+    }
     const language: RepoMapLanguage =
       extension === ".java"
         ? "java"
@@ -493,6 +641,7 @@ export async function indexRepoMapFile(
           : "typescript";
     try {
       return {
+        kind: "indexed",
         file: {
           ...base,
           ...(language === "java"
@@ -510,25 +659,23 @@ export async function indexRepoMapFile(
         : `parse error: Java syntax is unsupported or malformed${location ? ` at line ${location[1]}, column ${location[2]}` : ""}`;
       const message = (language === "java" ? safeJavaMessage : detail).slice(0, 512);
       return {
+        kind: "indexed",
         file: { ...base, kind: "lexical", language, degradedReason: message },
         warning: { path: normalizedPath, code: "parse-error", message },
       };
     }
   } catch (error) {
-    return {
-      warning: {
-        path: normalizedPath,
-        code: "read-error",
-        message: error instanceof Error ? error.message : String(error),
-      },
-    };
+    const message = (error instanceof Error ? error.message : String(error)).replace(/\s+/gu, " ").slice(0, 512);
+    return { kind: "read-error", warning: { path: normalizedPath, code: "read-error", message } };
   }
 }
 
 export async function buildRepoMap(options: BuildRepoMapOptions): Promise<RepoMapSnapshot> {
   const projectRoot = await realpath(resolve(options.projectRoot));
   const paths = await enumerateRepoMapFiles(projectRoot, options.exclude ?? []);
-  const indexed = await Promise.all(paths.map((path) => indexRepoMapFile(projectRoot, path)));
+  const indexed = await Promise.all(
+    paths.map((path) => indexRepoMapFile(projectRoot, path, { exclude: options.exclude, checkGitIgnore: false })),
+  );
   const snapshot: RepoMapSnapshot = {
     schemaVersion: REPO_MAP_SCHEMA_VERSION,
     provenance: {
@@ -540,8 +687,10 @@ export async function buildRepoMap(options: BuildRepoMapOptions): Promise<RepoMa
       generatedAt: new Date().toISOString(),
       projectRoot,
     },
-    files: indexed.flatMap(({ file }) => (file ? [file] : [])),
-    warnings: indexed.flatMap(({ warning }) => (warning ? [warning] : [])),
+    files: indexed.flatMap((outcome) => (outcome.kind === "indexed" ? [outcome.file] : [])),
+    warnings: indexed.flatMap((outcome) =>
+      (outcome.kind === "indexed" || outcome.kind === "read-error") && outcome.warning ? [outcome.warning] : [],
+    ),
   };
   if (options.outputPath) await atomicWriteFile(options.outputPath, `${JSON.stringify(snapshot, null, 2)}\n`);
   return snapshot;

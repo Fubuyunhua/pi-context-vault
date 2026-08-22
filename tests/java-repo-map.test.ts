@@ -224,7 +224,12 @@ describe("Java semantic repository map", () => {
   it("bounds adversarial source diagnostics and rejects traversal", async () => {
     const root = await fixture({ "src/Deep.java": `${"class N { ".repeat(5_000)} broken` });
     const indexed = await indexRepoMapFile(root, "src/Deep.java");
-    expect(indexed.file).toMatchObject({ kind: "lexical", language: "java" });
+    expect(indexed).toMatchObject({
+      kind: "indexed",
+      file: { kind: "lexical", language: "java" },
+      warning: { message: expect.any(String) },
+    });
+    if (indexed.kind !== "indexed") throw new Error("expected indexed Java outcome");
     expect(indexed.warning?.message.length).toBeLessThanOrEqual(512);
     await expect(indexRepoMapFile(root, "../Outside.java")).rejects.toThrow("project-relative");
   });

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -205,6 +205,294 @@ describe("incremental repository map runtime", () => {
     expect((await runtime.query("generatedClient")).results).toEqual([]);
     expect(runtime.status().pendingFiles).toEqual([]);
     await runtime.close();
+  });
+
+  it("does not revise or activate for ignored and untracked binary additions", async () => {
+    const { root, stateRoot } = await fixture({
+      ".gitignore": "ignored/**\n",
+      "src/visible.ts": "export const visible = true;",
+    });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    const initial = runtime.status();
+
+    await mkdir(join(root, "ignored"), { recursive: true });
+    await writeFile(join(root, "ignored/new.ts"), "export const shouldStayIgnored = true;");
+    runtime.notify("add", "ignored/new.ts");
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets/new.bin"), new Uint8Array([0, 1, 2, 3]));
+    runtime.notify("add", "assets/new.bin");
+    await runtime.flush();
+
+    expect(runtime.status()).toMatchObject({
+      generation: initial.generation,
+      workspaceRevision: initial.workspaceRevision,
+      dirtyFiles: [],
+      pendingFiles: [],
+      freshness: "fresh",
+    });
+    expect((await runtime.query("shouldStayIgnored")).results).toEqual([]);
+    await runtime.close();
+  });
+
+  it("applies root gitignore rules consistently in a non-Git workspace", async () => {
+    const { root, stateRoot } = await fixture(
+      {
+        ".gitignore": "ignored/**\n",
+        "configured/initial.ts": "export const initiallyConfiguredOut = true;",
+        "ignored/initial.ts": "export const initiallyIgnored = true;",
+        "src/visible.ts": "export const visibleWithoutGit = true;",
+      },
+      false,
+    );
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      exclude: ["configured/**"],
+      watch: false,
+    });
+    await runtime.start();
+    const initial = runtime.status();
+
+    expect((await runtime.query("initiallyIgnored")).results).toEqual([]);
+    expect((await runtime.query("initiallyConfiguredOut")).results).toEqual([]);
+    await writeFile(join(root, "ignored/added.ts"), "export const addedButIgnored = true;");
+    runtime.notify("add", "ignored/added.ts");
+    await writeFile(join(root, "configured/added.ts"), "export const addedButConfiguredOut = true;");
+    runtime.notify("add", "configured/added.ts");
+    await runtime.flush();
+
+    expect((await runtime.query("addedButIgnored")).results).toEqual([]);
+    expect((await runtime.query("addedButConfiguredOut")).results).toEqual([]);
+    expect(runtime.status()).toMatchObject({
+      generation: initial.generation,
+      workspaceRevision: initial.workspaceRevision,
+      dirtyFiles: [],
+      pendingFiles: [],
+      freshness: "fresh",
+    });
+
+    await writeFile(join(root, ".gitignore"), "other/**\n");
+    runtime.notify("change", ".gitignore");
+    await runtime.flush();
+    expect((await runtime.query("addedButIgnored")).results[0]?.path).toBe("ignored/added.ts");
+    await runtime.close();
+  });
+
+  it("records tracked text-to-binary as dirty content, not deletion", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const textValue = true;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    const initialGeneration = runtime.status().generation;
+    await writeFile(join(root, "src/value.ts"), new Uint8Array([0, 1, 2, 3]));
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+
+    const status = runtime.status();
+    const active = await loadActiveRepoMapGeneration(stateRoot);
+    expect(status).toMatchObject({ freshness: "dirty", dirtyFiles: ["src/value.ts"] });
+    expect(status.generation).toBeGreaterThan(initialGeneration);
+    expect(active.dirtyFiles[0]?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(active.dirtyFiles[0]?.contentHash).not.toBe("deleted");
+    expect((await runtime.query("textValue")).results).toEqual([]);
+    await runtime.close();
+  });
+
+  it("records a tracked nonregular transition as dirty content, not deletion", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const regularValue = true;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    await rm(join(root, "src/value.ts"));
+    await mkdir(join(root, "src/value.ts"));
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+
+    const active = await loadActiveRepoMapGeneration(stateRoot);
+    expect(active.dirtyFiles[0]?.path).toBe("src/value.ts");
+    expect(active.dirtyFiles[0]?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(active.dirtyFiles[0]?.contentHash).not.toBe("deleted");
+    expect((await runtime.query("regularValue")).results).toEqual([]);
+    await runtime.close();
+  });
+
+  it("preserves coherent content and stays stale on transient read errors until recovery", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const coherentValue = true;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    const initialRevision = runtime.status().workspaceRevision;
+    await chmod(join(root, "src/value.ts"), 0o000);
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+
+    const stale = await runtime.query("coherentValue");
+    expect(stale).toMatchObject({ freshness: "stale", workspaceRevision: initialRevision });
+    expect(stale.results[0]?.path).toBe("src/value.ts");
+    expect(stale.pendingFiles).toEqual(["src/value.ts"]);
+    expect(stale.fallbackEvidence.length).toBeGreaterThan(0);
+    expect(stale.error?.length).toBeLessThanOrEqual(512);
+
+    await chmod(join(root, "src/value.ts"), 0o644);
+    await runtime.flush();
+    expect(runtime.status()).toMatchObject({ freshness: "fresh", pendingFiles: [] });
+    await runtime.close();
+  });
+
+  it("preserves coherent evidence for deterministic ENOENT between lstat and readFile", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const racedCoherentValue = true;" });
+    let failReads = false;
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      indexFileSystem: {
+        lstat,
+        async readFile(path) {
+          if (failReads && path === join(root, "src/value.ts")) {
+            throw Object.assign(new Error("simulated ENOENT after successful lstat"), { code: "ENOENT" });
+          }
+          return readFile(path);
+        },
+      },
+    });
+    await runtime.start();
+    const coherentRevision = runtime.status().workspaceRevision;
+
+    failReads = true;
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+
+    const stale = await runtime.query("racedCoherentValue");
+    expect(stale).toMatchObject({ freshness: "stale", workspaceRevision: coherentRevision });
+    expect(stale.results[0]?.path).toBe("src/value.ts");
+    expect(stale.pendingFiles).toEqual(["src/value.ts"]);
+    expect(stale.fallbackEvidence).toEqual(expect.arrayContaining([expect.objectContaining({ path: "src/value.ts" })]));
+    expect((await loadActiveRepoMapGeneration(stateRoot)).dirtyFiles).toEqual([]);
+
+    failReads = false;
+    await runtime.flush();
+    expect(runtime.status()).toMatchObject({ freshness: "fresh", pendingFiles: [] });
+    await runtime.close();
+  });
+
+  it("keeps a prior dirty overlay when Git temporarily omits its read-error path", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const originalValue = true;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    await writeFile(join(root, "src/value.ts"), "export const omittedDirtyValue = true;");
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+    const dirtyRevision = runtime.status().workspaceRevision;
+    await execFileAsync("git", ["update-index", "--assume-unchanged", "src/value.ts"], { cwd: root });
+    await chmod(join(root, "src/value.ts"), 0o000);
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+
+    const query = await runtime.query("omittedDirtyValue");
+    expect(query).toMatchObject({ freshness: "stale", workspaceRevision: dirtyRevision });
+    expect(query.results[0]?.path).toBe("src/value.ts");
+    expect(runtime.status().dirtyFiles).toEqual(["src/value.ts"]);
+    await chmod(join(root, "src/value.ts"), 0o644);
+    await runtime.close();
+  });
+
+  it("preserves a coherent dirty overlay when an explicit rebuild hits a read error", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const originalValue = true;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    await writeFile(join(root, "src/value.ts"), "export const coherentDirtyValue = true;");
+    runtime.notify("change", "src/value.ts");
+    await runtime.flush();
+    const dirtyRevision = runtime.status().workspaceRevision;
+
+    await chmod(join(root, "src/value.ts"), 0o000);
+    await runtime.rebuild();
+
+    const query = await runtime.query("coherentDirtyValue");
+    expect(query).toMatchObject({ freshness: "stale", workspaceRevision: dirtyRevision });
+    expect(query.results[0]?.path).toBe("src/value.ts");
+    expect(query.pendingFiles).toEqual(["src/value.ts"]);
+    expect(query.fallbackEvidence.length).toBeGreaterThan(0);
+    expect(query.error?.length).toBeLessThanOrEqual(512);
+    await chmod(join(root, "src/value.ts"), 0o644);
+    await runtime.close();
+  });
+
+  it("preserves coherent evidence when a HEAD-change rebuild hits a read error", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const coherentHeadValue = true;" });
+    const runtime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    await runtime.start();
+    const oldHead = runtime.status().gitHead;
+    await writeFile(join(root, "README.md"), "new head\n");
+    await execFileAsync("git", ["add", "README.md"], { cwd: root });
+    await execFileAsync("git", ["commit", "-qm", "new head"], { cwd: root });
+    await chmod(join(root, "src/value.ts"), 0o000);
+
+    const query = await runtime.query("coherentHeadValue");
+    expect(query.gitHead).not.toBe(oldHead);
+    expect(query.freshness).toBe("stale");
+    expect(query.results[0]?.path).toBe("src/value.ts");
+    expect(query.pendingFiles).toEqual(["src/value.ts"]);
+    expect(query.fallbackEvidence.length).toBeGreaterThan(0);
+    await chmod(join(root, "src/value.ts"), 0o644);
+    await runtime.close();
+  });
+
+  it("hydrates coherent persisted evidence on restart, but reports no evidence without a prior generation", async () => {
+    const withPrior = await fixture({ "src/value.ts": "export const restartValue = true;" });
+    const first = new RepoMapRuntime({ projectRoot: withPrior.root, stateRoot: withPrior.stateRoot, watch: false });
+    await first.start();
+    await first.close();
+    await chmod(join(withPrior.root, "src/value.ts"), 0o000);
+
+    const restarted = new RepoMapRuntime({ projectRoot: withPrior.root, stateRoot: withPrior.stateRoot, watch: false });
+    await restarted.start();
+    const preserved = await restarted.query("restartValue");
+    expect(preserved.freshness).toBe("stale");
+    expect(preserved.results[0]?.path).toBe("src/value.ts");
+
+    const withoutPrior = await fixture({ "src/value.ts": "export const unavailableValue = true;" });
+    await chmod(join(withoutPrior.root, "src/value.ts"), 0o000);
+    const cold = new RepoMapRuntime({
+      projectRoot: withoutPrior.root,
+      stateRoot: withoutPrior.stateRoot,
+      watch: false,
+    });
+    await cold.start();
+    const unavailable = await cold.query("unavailableValue");
+    expect(unavailable.freshness).toBe("stale");
+    expect(unavailable.results).toEqual([]);
+    expect(unavailable.pendingFiles).toEqual(["src/value.ts"]);
+    expect(unavailable.fallbackEvidence).toEqual([
+      { kind: "source", excerpt: "No indexed source file is available; use direct filesystem search." },
+    ]);
+    await chmod(join(withPrior.root, "src/value.ts"), 0o644);
+    await chmod(join(withoutPrior.root, "src/value.ts"), 0o644);
+    await restarted.close();
+    await cold.close();
+  });
+
+  it("uses the same deleted revision for confirmed missing and unlink outcomes", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const deletedValue = true;" });
+    const unlinkStateRoot = await mkdtemp(join(tmpdir(), "context-vault-runtime-state-"));
+    roots.push(unlinkStateRoot);
+    const missingRuntime = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    const unlinkRuntime = new RepoMapRuntime({ projectRoot: root, stateRoot: unlinkStateRoot, watch: false });
+    await missingRuntime.start();
+    await unlinkRuntime.start();
+    await rm(join(root, "src/value.ts"));
+    missingRuntime.notify("change", "src/value.ts");
+    unlinkRuntime.notify("unlink", "src/value.ts");
+    await missingRuntime.flush();
+    await unlinkRuntime.flush();
+
+    const missingActive = await loadActiveRepoMapGeneration(stateRoot);
+    const unlinkActive = await loadActiveRepoMapGeneration(unlinkStateRoot);
+    expect(missingActive.dirtyFiles).toEqual([{ path: "src/value.ts", contentHash: "deleted" }]);
+    expect(unlinkActive.dirtyFiles).toEqual(missingActive.dirtyFiles);
+    expect(missingRuntime.status().workspaceRevision).toBe(unlinkRuntime.status().workspaceRevision);
+    expect((await missingRuntime.query("deletedValue")).results).toEqual([]);
+    await missingRuntime.close();
+    await unlinkRuntime.close();
   });
 
   it("invalidates the base generation when Git HEAD changes at query time", async () => {

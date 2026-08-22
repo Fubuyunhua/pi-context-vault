@@ -10,7 +10,11 @@ import {
   buildRepoMap,
   indexRepoMapFile,
   isRepoMapPathExcluded,
+  loadRootGitignorePatterns,
   type RepoMapFile,
+  type RepoMapFileSystem,
+  type RepoMapIndexOptions,
+  type RepoMapIndexOutcome,
   type RepoMapQueryOptions,
   type RepoMapQueryResult,
   RepoMapSearch,
@@ -84,6 +88,8 @@ export interface RepoMapRuntimeOptions {
   watcherFactory?: (root: string) => RepoMapWatcher;
   scheduler?: RepoMapScheduler;
   atomicWriter?: typeof atomicWriteFile;
+  /** Injectable file operations used by incremental indexing. */
+  indexFileSystem?: RepoMapFileSystem;
   now?: () => Date;
   telemetry?: Telemetry;
 }
@@ -107,20 +113,9 @@ function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-const IGNORED_DIR_NAMES = new Set([".git", ".pi", ".gradle", "node_modules", "dist", "build", "target"]);
-
-/**
- * True when any path segment is an ignored directory name.
- *
- * chokidar normalizes every path to forward slashes before invoking `ignored`
- * (matchPatterns -> normalizePath), so splitting on the platform `sep` alone
- * would miss `.git` on Windows and watch volatile git internals (lock files),
- * which previously crashed the host with EPERM. Normalize explicitly so both
- * separators match on every platform.
- */
+/** True when a complete path segment is excluded from repository maps and watching. */
 export function isWatcherIgnoredPath(path: string): boolean {
-  const parts = path.replaceAll("\\", "/").split("/");
-  return parts.some((part) => IGNORED_DIR_NAMES.has(part));
+  return isRepoMapPathExcluded(path.replaceAll("\\", "/"));
 }
 
 /** Error codes that are expected during normal operation (e.g. git lock files on Windows). */
@@ -177,7 +172,12 @@ async function gitDiff(projectRoot: string): Promise<string> {
   }
 }
 
-async function gitDirtyPaths(projectRoot: string): Promise<string[] | undefined> {
+interface GitDirtyPath {
+  path: string;
+  tracked: boolean;
+}
+
+async function gitDirtyPaths(projectRoot: string): Promise<GitDirtyPath[] | undefined> {
   try {
     const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
       cwd: projectRoot,
@@ -185,17 +185,22 @@ async function gitDirtyPaths(projectRoot: string): Promise<string[] | undefined>
       maxBuffer: 16 * 1024 * 1024,
     });
     const records = stdout.toString("utf8").split("\0").filter(Boolean);
-    const paths: string[] = [];
+    const paths = new Map<string, boolean>();
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index] as string;
       const status = record.slice(0, 2);
+      const tracked = status !== "??";
       const path = record.slice(3);
+      if (path) paths.set(slash(path), tracked);
       if (status.includes("R") || status.includes("C")) {
-        paths.push(path, records[index + 1] ?? "");
+        const source = records[index + 1] ?? "";
+        if (source) paths.set(slash(source), true);
         index += 1;
-      } else paths.push(path);
+      }
     }
-    return [...new Set(paths.filter(Boolean).map(slash))].sort();
+    return [...paths]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([path, tracked]) => ({ path, tracked }));
   } catch {
     return undefined;
   }
@@ -212,6 +217,12 @@ function replaceFile(snapshot: RepoMapSnapshot, path: string, file?: RepoMapFile
   if (file) snapshot.files.push(file);
   if (warning) snapshot.warnings.push(warning);
   snapshot.files.sort((left, right) => left.path.localeCompare(right.path));
+  snapshot.warnings.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function replaceWarning(snapshot: RepoMapSnapshot, path: string, warning?: RepoMapWarning): void {
+  snapshot.warnings = snapshot.warnings.filter((candidate) => candidate.path !== path);
+  if (warning) snapshot.warnings.push(warning);
   snapshot.warnings.sort((left, right) => left.path.localeCompare(right.path));
 }
 
@@ -412,6 +423,9 @@ export class RepoMapRuntime {
   #generation = 0;
   #dirty = new Map<string, string>();
   #pending = new Set<string>();
+  #readFailures = new Map<string, RepoMapWarning>();
+  #gitWorkspace?: boolean;
+  #nonGitIgnorePatterns: string[] = [];
   #freshness: RepoMapFreshness = "stale";
   #error?: string;
   #maintenance?: RepoMapMaintenanceResult | { error: string };
@@ -448,6 +462,7 @@ export class RepoMapRuntime {
   async start(): Promise<void> {
     this.#projectRoot = await realpath(resolve(this.#options.projectRoot));
     await mkdir(this.#options.stateRoot, { recursive: true, mode: 0o700 });
+    await this.#hydratePriorGeneration();
     await this.#rebuildBase();
     if (this.#options.watch) {
       this.#watcher = (this.#options.watcherFactory ?? watcher)(this.#projectRoot);
@@ -491,16 +506,12 @@ export class RepoMapRuntime {
       return;
     }
     const reconciled = await this.#reconcileDirtyOverlay();
-    if (this.#pending.size === 0 && this.#freshness !== "stale" && !reconciled) return;
+    const previousFreshness = this.#freshness;
+    this.#freshness = this.#computedFreshness();
+    if (this.#pending.size === 0 && previousFreshness === this.#freshness && !reconciled) return;
     try {
-      this.#pending.clear();
-      this.#freshness = this.#effective?.files.some((file) => file.degradedReason)
-        ? "unsupported"
-        : this.#dirty.size > 0
-          ? "dirty"
-          : "fresh";
       await this.#activate();
-      this.#error = undefined;
+      if (this.#readFailures.size === 0) this.#error = undefined;
     } catch (error) {
       this.#degrade(error);
     }
@@ -630,58 +641,172 @@ export class RepoMapRuntime {
 
   async #fastUpdate(event: RepoMapChangeEvent, path: string): Promise<void> {
     if (!this.#effective) throw new Error("repository map runtime has not started");
+    if (path === ".gitignore" && this.#gitWorkspace === false) {
+      await this.#refreshNonGitIgnorePatterns();
+      await this.#rebuildBase();
+      return;
+    }
     if (event === "unlink") {
       replaceFile(this.#effective, path);
+      this.#readFailures.delete(path);
+      this.#pending.delete(path);
       if (this.#base?.files.some((file) => file.path === path)) this.#dirty.set(path, DELETED_HASH);
       else this.#dirty.delete(path);
       return;
     }
-    const indexed = await indexRepoMapFile(this.#projectRoot, path);
+    const outcome = await indexRepoMapFile(this.#projectRoot, path, this.#indexOptions());
     this.#telemetry?.recordFileReindexed();
-    replaceFile(this.#effective, path, indexed.file, indexed.warning);
+    this.#applyOutcome(path, outcome);
+  }
+
+  #applyOutcome(path: string, outcome: RepoMapIndexOutcome): void {
+    if (!this.#effective) return;
     const baseHash = this.#base?.files.find((file) => file.path === path)?.contentHash;
-    if (indexed.file && indexed.file.contentHash !== baseHash) this.#dirty.set(path, indexed.file.contentHash);
-    else if (indexed.file) this.#dirty.delete(path);
-    else this.#dirty.set(path, DELETED_HASH);
+    if (outcome.kind === "read-error") {
+      replaceWarning(this.#effective, path, outcome.warning);
+      this.#readFailures.set(path, outcome.warning);
+      this.#pending.add(path);
+      this.#error = outcome.warning.message;
+      return;
+    }
+
+    this.#readFailures.delete(path);
+    this.#pending.delete(path);
+    if (outcome.kind === "indexed") {
+      replaceFile(this.#effective, path, outcome.file, outcome.warning);
+      if (outcome.file.contentHash !== baseHash) this.#dirty.set(path, outcome.file.contentHash);
+      else this.#dirty.delete(path);
+      return;
+    }
+    if (outcome.kind === "ignored") {
+      replaceFile(this.#effective, path);
+      this.#dirty.delete(path);
+      return;
+    }
+
+    replaceFile(this.#effective, path);
+    if (!baseHash) {
+      this.#dirty.delete(path);
+    } else if (outcome.kind === "missing") {
+      this.#dirty.set(path, DELETED_HASH);
+    } else if (outcome.kind === "non-text") {
+      this.#dirty.set(path, outcome.contentHash);
+    } else {
+      this.#dirty.set(path, hash(`non-regular\0${path}`));
+    }
+  }
+
+  #indexOptions(): RepoMapIndexOptions {
+    return {
+      exclude: this.#options.exclude ?? [],
+      checkGitIgnore: this.#gitWorkspace !== false,
+      ...(this.#gitWorkspace === false ? { gitignorePatterns: this.#nonGitIgnorePatterns } : {}),
+      ...(this.#options.indexFileSystem ? { fileSystem: this.#options.indexFileSystem } : {}),
+    };
+  }
+
+  async #refreshNonGitIgnorePatterns(): Promise<void> {
+    this.#nonGitIgnorePatterns = await loadRootGitignorePatterns(this.#projectRoot);
+  }
+
+  async #hydratePriorGeneration(): Promise<void> {
+    let active: RepoMapGeneration;
+    try {
+      active = await loadActiveRepoMapGeneration(this.#options.stateRoot);
+    } catch {
+      // Rebuild remains authoritative when there is no valid persisted prior.
+      return;
+    }
+    if (resolve(active.snapshot.provenance.projectRoot) !== this.#projectRoot) return;
+    this.#generation = active.generation;
+    this.#head = active.gitHead;
+    this.#dirty = new Map(active.dirtyFiles.map(({ path, contentHash }) => [path, contentHash]));
+    this.#pending = new Set(active.pendingFiles);
+    this.#base = cloneSnapshot(active.snapshot);
+    this.#effective = cloneSnapshot(active.snapshot);
+    this.#freshness = active.freshness;
   }
 
   async #reconcileDirtyOverlay(): Promise<boolean> {
     if (!this.#effective) return false;
-    const discoveredDirtyPaths = await gitDirtyPaths(this.#projectRoot);
-    if (!discoveredDirtyPaths) return false;
-    const dirtyPaths = discoveredDirtyPaths.filter((path) => !isRepoMapPathExcluded(path, this.#options.exclude));
+    const discovered = await gitDirtyPaths(this.#projectRoot);
+    this.#gitWorkspace = discovered !== undefined;
+    if (!discovered) {
+      await this.#refreshNonGitIgnorePatterns();
+      const previous = new Map(this.#dirty);
+      for (const path of [...this.#readFailures.keys()]) {
+        const outcome = await indexRepoMapFile(this.#projectRoot, path, this.#indexOptions());
+        this.#telemetry?.recordFileReindexed();
+        this.#applyOutcome(path, outcome);
+      }
+      return JSON.stringify([...previous].sort()) !== JSON.stringify([...this.#dirty].sort());
+    }
+    this.#nonGitIgnorePatterns = [];
+    const admitted = discovered.filter(({ path }) => !isRepoMapPathExcluded(path, this.#options.exclude));
+    const dirtyPaths = new Map(admitted.map(({ path, tracked }) => [path, tracked]));
     const previous = new Map(this.#dirty);
-    const pathsToRefresh = new Set([...dirtyPaths, ...previous.keys()]);
+    const pathsToRefresh = new Set([...dirtyPaths.keys(), ...previous.keys(), ...this.#readFailures.keys()]);
     const next = new Map<string, string>();
     for (const path of pathsToRefresh) {
-      const indexed = await indexRepoMapFile(this.#projectRoot, path);
+      const outcome = await indexRepoMapFile(this.#projectRoot, path, {
+        exclude: this.#options.exclude,
+        checkGitIgnore: !dirtyPaths.has(path),
+        ...(this.#options.indexFileSystem ? { fileSystem: this.#options.indexFileSystem } : {}),
+      });
       this.#telemetry?.recordFileReindexed();
-      replaceFile(this.#effective, path, indexed.file, indexed.warning);
-      if (dirtyPaths.includes(path)) next.set(path, indexed.file?.contentHash ?? DELETED_HASH);
+      this.#applyOutcome(path, outcome);
+      if (outcome.kind === "read-error" && previous.has(path)) {
+        next.set(path, previous.get(path) as string);
+        continue;
+      }
+      if (!dirtyPaths.has(path)) continue;
+      if (outcome.kind === "indexed") next.set(path, outcome.file.contentHash);
+      else if (outcome.kind === "missing") next.set(path, DELETED_HASH);
+      else if (outcome.kind === "non-text" && dirtyPaths.get(path)) next.set(path, outcome.contentHash);
+      else if (outcome.kind === "non-regular" && dirtyPaths.get(path)) next.set(path, hash(`non-regular\0${path}`));
     }
     this.#dirty = next;
     return JSON.stringify([...previous].sort()) !== JSON.stringify([...next].sort());
   }
 
+  #computedFreshness(): RepoMapFreshness {
+    if (this.#readFailures.size > 0) return "stale";
+    if (this.#effective?.files.some((file) => file.degradedReason)) return "unsupported";
+    return this.#dirty.size > 0 ? "dirty" : "fresh";
+  }
+
   async #rebuildBase(): Promise<void> {
     try {
+      const previousBase = this.#base;
+      const previousEffective = this.#effective;
+      const previousDirty = new Map(this.#dirty);
       const head = await gitHead(this.#projectRoot);
       const snapshot = await buildRepoMap({ projectRoot: this.#projectRoot, exclude: this.#options.exclude });
-      this.#head = head;
-      this.#base = cloneSnapshot(snapshot);
-      this.#effective = cloneSnapshot(snapshot);
-      this.#dirty.clear();
-      for (const path of (await gitDirtyPaths(this.#projectRoot)) ?? []) {
-        this.#dirty.set(path, snapshot.files.find((file) => file.path === path)?.contentHash ?? DELETED_HASH);
+      const nextBase = cloneSnapshot(snapshot);
+      const nextEffective = cloneSnapshot(snapshot);
+      const nextDirty = new Map<string, string>();
+      const nextReadFailures = new Map<string, RepoMapWarning>();
+      const nextPending = new Set<string>();
+      for (const warning of snapshot.warnings.filter((candidate) => candidate.code === "read-error")) {
+        const priorBaseFile = previousBase?.files.find((file) => file.path === warning.path);
+        const priorEffectiveFile = previousEffective?.files.find((file) => file.path === warning.path);
+        if (priorBaseFile) replaceFile(nextBase, warning.path, priorBaseFile, warning);
+        if (priorEffectiveFile) replaceFile(nextEffective, warning.path, priorEffectiveFile, warning);
+        if (previousDirty.has(warning.path)) nextDirty.set(warning.path, previousDirty.get(warning.path) as string);
+        nextReadFailures.set(warning.path, warning);
+        nextPending.add(warning.path);
       }
-      this.#pending.clear();
-      this.#freshness = snapshot.files.some((file) => file.degradedReason)
-        ? "unsupported"
-        : this.#dirty.size > 0
-          ? "dirty"
-          : "fresh";
+      this.#head = head;
+      this.#base = nextBase;
+      this.#effective = nextEffective;
+      this.#dirty = nextDirty;
+      this.#readFailures = nextReadFailures;
+      this.#pending = nextPending;
+      await this.#reconcileDirtyOverlay();
+      this.#freshness = this.#computedFreshness();
       await this.#activate();
-      this.#error = undefined;
+      if (this.#readFailures.size === 0) this.#error = undefined;
+      else this.#error = [...this.#readFailures.values()][0]?.message;
     } catch (error) {
       this.#degrade(error);
     }

@@ -1,10 +1,16 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildRepoMap, loadRepoMapSnapshot, RepoMapSearch } from "../src/repo-map/index.js";
+import {
+  buildRepoMap,
+  indexRepoMapFile,
+  isRepoMapPathExcluded,
+  loadRepoMapSnapshot,
+  RepoMapSearch,
+} from "../src/repo-map/index.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -56,6 +62,80 @@ describe("initial repository map", () => {
 
     const snapshot = await buildRepoMap({ projectRoot: root });
     expect(snapshot.files.map((file) => file.path)).toEqual([".gitignore", "notes.txt"]);
+    await expect(indexRepoMapFile(root, "debug.log")).resolves.toEqual({ kind: "ignored" });
+    await expect(indexRepoMapFile(root, "notes.txt")).resolves.toMatchObject({ kind: "indexed" });
+  });
+
+  it("applies bare root gitignore names to matching files, directories, and nested descendants", async () => {
+    const root = await fixture({
+      ".gitignore": "cache\n",
+      cache: "ignored file",
+      "other/cache/value.ts": "export const nestedCacheValue = true;",
+      "other/cacheable/value.ts": "export const cacheableValue = true;",
+      "src/cache.ts": "export const cacheFileValue = true;",
+    });
+
+    expect((await buildRepoMap({ projectRoot: root })).files.map((file) => file.path)).toEqual([
+      ".gitignore",
+      "other/cacheable/value.ts",
+      "src/cache.ts",
+    ]);
+    await expect(indexRepoMapFile(root, "other/cache/value.ts")).resolves.toEqual({ kind: "ignored" });
+  });
+
+  it("requires ignored parents to be re-included before a child negation can apply", async () => {
+    const withoutParent = await fixture({
+      ".gitignore": "cache\n!cache/keep.ts\n",
+      "cache/keep.ts": "export const stillIgnored = true;",
+    });
+    const withParent = await fixture({
+      ".gitignore": "cache\n!cache/\ncache/drop.ts\n!cache/keep.ts\n",
+      "cache/drop.ts": "export const droppedByLaterRule = true;",
+      "cache/keep.ts": "export const reIncluded = true;",
+    });
+
+    expect((await buildRepoMap({ projectRoot: withoutParent })).files.map((file) => file.path)).toEqual([".gitignore"]);
+    expect((await buildRepoMap({ projectRoot: withParent })).files.map((file) => file.path)).toEqual([
+      ".gitignore",
+      "cache/keep.ts",
+    ]);
+    await expect(indexRepoMapFile(withParent, "cache/keep.ts")).resolves.toMatchObject({ kind: "indexed" });
+  });
+
+  it("keeps built-in and configured excludes authoritative over gitignore negation", async () => {
+    const root = await fixture({
+      ".gitignore": "!generated/value.ts\n!node_modules/pkg/value.ts\n",
+      "generated/value.ts": "export const configuredOut = true;",
+      "node_modules/pkg/value.ts": "export const builtInOut = true;",
+      "src/value.ts": "export const admitted = true;",
+    });
+
+    expect(
+      (await buildRepoMap({ projectRoot: root, exclude: ["generated/**"] })).files.map((file) => file.path),
+    ).toEqual([".gitignore", "src/value.ts"]);
+    await expect(indexRepoMapFile(root, "generated/value.ts", { exclude: ["generated/**"] })).resolves.toEqual({
+      kind: "ignored",
+    });
+    await expect(indexRepoMapFile(root, "node_modules/pkg/value.ts")).resolves.toEqual({ kind: "ignored" });
+  });
+
+  it("honors anchored root gitignore patterns and last matching rule order", async () => {
+    const root = await fixture({
+      ".gitignore": "/cache\n*.tmp\n!keep.tmp\nkeep.tmp\n!nested/keep.tmp\n",
+      "cache/root.ts": "export const anchoredRoot = true;",
+      "nested/cache/visible.ts": "export const nestedVisible = true;",
+      "keep.tmp": "ignored by the later rule",
+      "nested/keep.tmp": "re-included by the last rule",
+      "nested/drop.tmp": "ignored wildcard",
+    });
+
+    expect((await buildRepoMap({ projectRoot: root })).files.map((file) => file.path)).toEqual([
+      ".gitignore",
+      "nested/cache/visible.ts",
+      "nested/keep.tmp",
+    ]);
+    await expect(indexRepoMapFile(root, "keep.tmp")).resolves.toEqual({ kind: "ignored" });
+    await expect(indexRepoMapFile(root, "nested/keep.tmp")).resolves.toMatchObject({ kind: "indexed" });
   });
 
   it("extracts TS/JS imports, exports, symbols, signatures, and dependencies", async () => {
@@ -235,6 +315,87 @@ describe("initial repository map", () => {
     const search = new RepoMapSearch(await buildRepoMap({ projectRoot: root }));
     expect(() => search.query("start", { limit: 0 })).toThrow("positive integer");
     expect(search.query("term-that-does-not-exist")).toEqual([]);
+  });
+
+  it("returns distinct admission, filesystem, content, and indexed outcomes", async () => {
+    const root = await fixture(
+      {
+        ".gitignore": "ignored/**\n",
+        "src/good.ts": "export const good = true;",
+        "src/broken.ts": "export function broken( {",
+        "assets/data.bin": new Uint8Array([0, 1, 2, 3]),
+        "ignored/value.ts": "export const ignored = true;",
+      },
+      true,
+    );
+    await symlink("good.ts", join(root, "src/link.ts"));
+
+    await expect(indexRepoMapFile(root, "missing.ts")).resolves.toMatchObject({ kind: "missing" });
+    await expect(indexRepoMapFile(root, "src/link.ts")).resolves.toMatchObject({ kind: "non-regular" });
+    await expect(indexRepoMapFile(root, "assets/data.bin")).resolves.toMatchObject({
+      kind: "non-text",
+      contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    await expect(indexRepoMapFile(root, "ignored/value.ts")).resolves.toMatchObject({ kind: "ignored" });
+    await expect(indexRepoMapFile(root, "generated/value.ts", { exclude: ["generated/**"] })).resolves.toMatchObject({
+      kind: "ignored",
+    });
+    await expect(indexRepoMapFile(root, "src/good.ts")).resolves.toMatchObject({
+      kind: "indexed",
+      file: { kind: "semantic" },
+    });
+    await expect(indexRepoMapFile(root, "src/broken.ts")).resolves.toMatchObject({
+      kind: "indexed",
+      file: { kind: "lexical", degradedReason: expect.stringContaining("parse") },
+      warning: { code: "parse-error" },
+    });
+    await chmod(join(root, "src/good.ts"), 0o000);
+    await expect(indexRepoMapFile(root, "src/good.ts")).resolves.toMatchObject({
+      kind: "read-error",
+      warning: { code: "read-error", message: expect.any(String) },
+    });
+  });
+
+  it("treats ENOENT from readFile after a successful lstat as a transient read error", async () => {
+    const root = await fixture({ "src/raced.ts": "export const coherentBeforeRace = true;" });
+    let lstatCompleted = false;
+
+    const outcome = await indexRepoMapFile(root, "src/raced.ts", {
+      fileSystem: {
+        async lstat(path) {
+          const info = await lstat(path);
+          lstatCompleted = true;
+          return info;
+        },
+        async readFile() {
+          expect(lstatCompleted).toBe(true);
+          throw Object.assign(new Error("simulated disappearance after lstat"), { code: "ENOENT" });
+        },
+      },
+    });
+
+    expect(outcome).toMatchObject({
+      kind: "read-error",
+      warning: { path: "src/raced.ts", code: "read-error", message: expect.stringContaining("simulated") },
+    });
+  });
+
+  it("expands cache exclusions by exact segment without excluding similar legitimate names", () => {
+    for (const segment of [
+      "__pycache__",
+      ".pytest_cache",
+      ".tox",
+      ".venv",
+      "venv",
+      ".mypy_cache",
+      ".ruff_cache",
+      "_build",
+    ]) {
+      expect(isRepoMapPathExcluded(`packages/${segment}/output.py`), segment).toBe(true);
+    }
+    for (const path of ["src/venv_notes.py", "src/my__pycache__file.py", "src/_builder/output.py"]) {
+      expect(isRepoMapPathExcluded(path)).toBe(false);
+    }
   });
 
   it("degrades malformed and unsupported files without aborting the scan", async () => {

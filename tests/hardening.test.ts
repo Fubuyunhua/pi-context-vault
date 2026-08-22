@@ -31,7 +31,7 @@ describe("release security and corrupt-state handling", () => {
     await expect(indexRepoMapFile(project, join(outside, "secret.ts"))).rejects.toThrow("project-relative");
 
     await symlink(join(outside, "secret.ts"), join(project, "linked-secret.ts"));
-    expect(await indexRepoMapFile(project, "linked-secret.ts")).toEqual({});
+    expect(await indexRepoMapFile(project, "linked-secret.ts")).toEqual({ kind: "non-regular" });
   });
 
   it("rejects corrupt active pointers and generation metadata", async () => {
