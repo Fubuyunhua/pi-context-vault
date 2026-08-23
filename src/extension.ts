@@ -184,39 +184,92 @@ function recordRuntimeFailure(state: RuntimeState, component: string, error: unk
   state.failures.splice(0, Math.max(0, state.failures.length - 20));
 }
 
-function boundedMapCapsule(query: string, result: RepoMapRuntimeQuery, maxBytes: number): string {
-  const fallbackEvidence = result.fallbackEvidence.slice(0, 3).map((evidence) => ({
-    ...evidence,
-    excerpt: evidence.excerpt.slice(0, 1024),
-  }));
-  if (result.freshness === "stale" && fallbackEvidence.length === 0) {
-    fallbackEvidence.push({
+type MapCapsuleCaptureSemantics = "turn-start-snapshot" | "context-call-snapshot";
+
+function boundedMapCapsule(
+  query: string,
+  result: RepoMapRuntimeQuery,
+  maxBytes: number,
+  captureSemantics: MapCapsuleCaptureSemantics,
+): string {
+  const description =
+    captureSemantics === "turn-start-snapshot"
+      ? "Frozen repository-map data captured at turn start; it does not reflect later tool edits."
+      : "Repository-map data captured for this context call; it is not live state.";
+  const completeFallbackEvidence = result.fallbackEvidence.map((evidence) => ({ ...evidence }));
+  if (result.freshness === "stale" && completeFallbackEvidence.length === 0) {
+    completeFallbackEvidence.push({
       kind: "source",
-      excerpt: "Direct source/read/grep fallback is required because the map is stale.",
+      excerpt: "Direct source/read/grep fallback is required because the map was stale at capture time.",
     });
   }
+  const completeResults = result.results.map((entry) => ({
+    path: entry.path,
+    kind: entry.kind,
+    matchedSymbols: entry.matchedSymbols,
+    symbols: entry.symbols,
+    dependencies: entry.dependencies,
+  }));
   const payload = {
     type: "context_vault_repo_map_capsule",
     trust: "untrusted-derived-navigation-data",
+    captureSemantics,
+    description,
     query,
-    freshness: result.freshness,
-    generation: result.generation,
-    gitHead: result.gitHead,
-    workspaceRevision: result.workspaceRevision,
-    pendingFiles: [...result.pendingFiles],
-    results: result.results.map((entry) => ({
-      path: entry.path,
-      kind: entry.kind,
-      matchedSymbols: entry.matchedSymbols,
+    freshnessAtCapture: result.freshness,
+    generationAtCapture: result.generation,
+    gitHeadAtCapture: result.gitHead,
+    workspaceRevisionAtCapture: result.workspaceRevision,
+    pendingFilesAtCapture: [...result.pendingFiles],
+    results: completeResults.map((entry) => ({
+      ...entry,
       symbols: entry.symbols.slice(0, 8),
       dependencies: entry.dependencies.slice(0, 12),
     })),
-    fallbackEvidence,
-    ...(result.error ? { error: result.error.slice(0, 512) } : {}),
+    fallbackEvidence: completeFallbackEvidence.slice(0, 3).map((evidence) => ({
+      ...evidence,
+      excerpt: utf8Prefix(evidence.excerpt, 1024),
+    })),
+    ...(result.error !== undefined ? { error: utf8Prefix(result.error, 512) } : {}),
   };
-  const render = () => `CONTEXT_VAULT_REPO_MAP\n${JSON.stringify(payload)}`;
+  const sameJson = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+  const truncatedFields = (
+    renderedQuery: string,
+    renderedError: string | undefined,
+    renderedRevision: string,
+    renderedHead: string,
+    renderedPendingFiles: string[],
+    renderedEvidence: unknown[],
+    renderedResults: unknown[],
+  ): string[] => {
+    const fields: string[] = [];
+    if (renderedRevision !== result.workspaceRevision) fields.push("workspaceRevisionAtCapture");
+    if (renderedHead !== result.gitHead) fields.push("gitHeadAtCapture");
+    if (renderedQuery !== query) fields.push("query");
+    if (renderedError !== result.error) fields.push("error");
+    if (!sameJson(renderedEvidence, completeFallbackEvidence)) fields.push("fallbackEvidence");
+    if (!sameJson(renderedResults, completeResults)) fields.push("results");
+    if (!sameJson(renderedPendingFiles, result.pendingFiles)) fields.push("pendingFilesAtCapture");
+    return fields;
+  };
+  const render = () => {
+    const fields = truncatedFields(
+      payload.query,
+      payload.error,
+      payload.workspaceRevisionAtCapture,
+      payload.gitHeadAtCapture,
+      payload.pendingFilesAtCapture,
+      payload.fallbackEvidence,
+      payload.results,
+    );
+    return `CONTEXT_VAULT_REPO_MAP\n${JSON.stringify({
+      ...payload,
+      ...(fields.length > 0 ? { truncatedFields: fields } : {}),
+    })}`;
+  };
   while (Buffer.byteLength(render()) > maxBytes && payload.results.length > 0) payload.results.pop();
-  while (Buffer.byteLength(render()) > maxBytes && payload.pendingFiles.length > 0) payload.pendingFiles.pop();
+  while (Buffer.byteLength(render()) > maxBytes && payload.pendingFilesAtCapture.length > 0)
+    payload.pendingFilesAtCapture.pop();
   while (Buffer.byteLength(render()) > maxBytes && payload.fallbackEvidence.length > 1) {
     payload.fallbackEvidence.pop();
   }
@@ -227,24 +280,51 @@ function boundedMapCapsule(query: string, result: RepoMapRuntimeQuery, maxBytes:
     payload.fallbackEvidence.some((entry) => entry.excerpt.length > 96)
   ) {
     for (const evidence of payload.fallbackEvidence)
-      evidence.excerpt = evidence.excerpt.slice(0, Math.max(96, evidence.excerpt.length / 2));
+      evidence.excerpt = evidence.excerpt.slice(0, Math.max(96, Math.floor(evidence.excerpt.length / 2)));
   }
   const rendered = render();
   if (Buffer.byteLength(rendered, "utf8") <= maxBytes) return rendered;
 
-  // Configuration enforces a 512-byte minimum. This compact, valid JSON form
-  // retains the consistency fields even when untrusted excerpts/errors are huge.
-  const revision = utf8Prefix(result.workspaceRevision, 64);
+  // Configuration enforces a 512-byte minimum. This compact form retains the
+  // capture provenance, a bounded error when present, and explicit final-loss flags.
+  let revision = utf8Prefix(result.workspaceRevision, 64);
+  let head = utf8Prefix(result.gitHead, 40);
+  let boundedError = result.error !== undefined ? utf8Prefix(result.error, 64) : undefined;
+  const minimalEvidence =
+    completeFallbackEvidence.length > 0 ? [{ kind: completeFallbackEvidence[0]?.kind ?? "source" }] : [];
   const minimal = {
     type: "context_vault_repo_map_capsule",
-    freshness: result.freshness,
-    workspaceRevision: revision,
-    ...(revision !== result.workspaceRevision ? { workspaceRevisionTruncated: true } : {}),
-    fallbackEvidence:
-      result.freshness === "stale" ? [{ kind: result.fallbackEvidence[0]?.kind ?? "source", truncated: true }] : [],
-    truncated: true,
+    captureSemantics,
+    description: "Snapshot, not live.",
+    freshnessAtCapture: result.freshness,
+    workspaceRevisionAtCapture: revision,
+    generationAtCapture: result.generation,
+    gitHeadAtCapture: head,
+    pendingFileCountAtCapture: result.pendingFiles.length,
+    fallbackEvidence: minimalEvidence,
+    ...(boundedError !== undefined ? { error: boundedError } : {}),
   };
-  return `CONTEXT_VAULT_REPO_MAP\n${JSON.stringify(minimal)}`;
+  const renderMinimal = () => {
+    const fields = truncatedFields("", boundedError, revision, head, [], minimalEvidence, []);
+    return `CONTEXT_VAULT_REPO_MAP\n${JSON.stringify({ ...minimal, truncatedFields: fields })}`;
+  };
+  while (
+    Buffer.byteLength(renderMinimal()) > maxBytes &&
+    boundedError !== undefined &&
+    Buffer.byteLength(boundedError, "utf8") > 1
+  ) {
+    boundedError = utf8Prefix(boundedError, Math.max(1, Buffer.byteLength(boundedError, "utf8") - 8));
+    minimal.error = boundedError;
+  }
+  while (Buffer.byteLength(renderMinimal()) > maxBytes && Buffer.byteLength(revision, "utf8") > 8) {
+    revision = utf8Prefix(revision, Math.max(8, Buffer.byteLength(revision, "utf8") - 8));
+    minimal.workspaceRevisionAtCapture = revision;
+  }
+  while (Buffer.byteLength(renderMinimal()) > maxBytes && Buffer.byteLength(head, "utf8") > 8) {
+    head = utf8Prefix(head, Math.max(8, Buffer.byteLength(head, "utf8") - 8));
+    minimal.gitHeadAtCapture = head;
+  }
+  return renderMinimal();
 }
 
 function projectTreeContainsState(state: ProjectStatePaths): boolean {
@@ -468,12 +548,21 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
             freeze && lastUserIndex >= 0
               ? (messages[lastUserIndex]?.timestamp ?? 0)
               : Math.max(0, (messages[0]?.timestamp ?? Date.now()) - 1);
+          const captureSemantics: MapCapsuleCaptureSemantics = freeze ? "turn-start-snapshot" : "context-call-snapshot";
           const capsule: Extract<ContextEvent["messages"][number], { role: "custom" }> = {
             role: "custom",
             customType: MAP_CAPSULE_TYPE,
-            content: boundedMapCapsule(query, result, runtime.config.mapContextMaxBytes),
+            content: boundedMapCapsule(query, result, runtime.config.mapContextMaxBytes, captureSemantics),
             display: false,
-            details: { persistent: false, freshness: result.freshness, workspaceRevision: result.workspaceRevision },
+            details: {
+              persistent: false,
+              captureSemantics,
+              freshnessAtCapture: result.freshness,
+              workspaceRevisionAtCapture: result.workspaceRevision,
+              generationAtCapture: result.generation,
+              gitHeadAtCapture: result.gitHead,
+              pendingFilesAtCapture: [...result.pendingFiles],
+            },
             timestamp,
           };
           if (freeze) runtime.mapCapsule = { turn: runtime.turnSequence, index: insertIndex, message: capsule };

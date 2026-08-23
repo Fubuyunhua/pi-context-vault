@@ -615,7 +615,7 @@ export class RepoMapRuntime {
     const startedAt = performance.now();
     try {
       await this.ensureFresh();
-      return await this.#queryCurrentUninstrumented(query, options);
+      return await this.#queryCurrentUninstrumented(query, options, true);
     } finally {
       this.#telemetry?.recordRepoMapQuery(performance.now() - startedAt);
     }
@@ -625,16 +625,20 @@ export class RepoMapRuntime {
   async queryCurrent(query: string, options: RepoMapQueryOptions = {}): Promise<RepoMapRuntimeQuery> {
     const startedAt = performance.now();
     try {
-      return await this.#queryCurrentUninstrumented(query, options);
+      return await this.#queryCurrentUninstrumented(query, options, false);
     } finally {
       this.#telemetry?.recordRepoMapQuery(performance.now() - startedAt);
     }
   }
 
-  async #queryCurrentUninstrumented(query: string, options: RepoMapQueryOptions = {}): Promise<RepoMapRuntimeQuery> {
-    // Capture all query-visible state before the first await. Fallback source
-    // and Git reads may interleave with a scheduled flush, but the returned
-    // search results and provenance must describe this one captured state.
+  async #queryCurrentUninstrumented(
+    query: string,
+    options: RepoMapQueryOptions,
+    liveFallback: boolean,
+  ): Promise<RepoMapRuntimeQuery> {
+    // Capture all query-visible state before the first await. Automatic
+    // queryCurrent calls derive fallback excerpts only from this indexed
+    // snapshot; explicit live queries may additionally read source/Git bytes.
     const files = this.#effective?.files ?? [];
     const freshness = this.#freshness;
     const generation = this.#generation;
@@ -657,31 +661,37 @@ export class RepoMapRuntime {
       for (const file of files) {
         if (terms.some((term) => file.lexicalTerms.includes(term))) {
           let excerpt = file.lexicalTerms.slice(0, 40).join(" ");
-          try {
-            const content = this.#options.indexFileSystem
-              ? await this.#options.indexFileSystem.readFile(join(this.#projectRoot, file.path))
-              : await readFile(join(this.#projectRoot, file.path));
-            excerpt = content.toString("utf8").slice(0, 4 * 1024);
-          } catch {
-            // The indexed lexical terms remain useful evidence when a file disappeared mid-query.
+          if (liveFallback) {
+            try {
+              const content = this.#options.indexFileSystem
+                ? await this.#options.indexFileSystem.readFile(join(this.#projectRoot, file.path))
+                : await readFile(join(this.#projectRoot, file.path));
+              excerpt = content.toString("utf8").slice(0, 4 * 1024);
+            } catch {
+              // Indexed terms remain useful when a live source read fails.
+            }
           }
           fallbackEvidence.push({ kind: "source", path: file.path, excerpt });
           if (fallbackEvidence.length >= 3) break;
         }
       }
-      const diff = await gitDiff(this.#projectRoot);
-      if (diff) fallbackEvidence.push({ kind: "git-diff", excerpt: diff });
+      if (liveFallback) {
+        const diff = await gitDiff(this.#projectRoot);
+        if (diff) fallbackEvidence.push({ kind: "git-diff", excerpt: diff });
+      }
       if (fallbackEvidence.length === 0) {
         const firstFile = files[0];
         if (firstFile) {
           let excerpt = firstFile.lexicalTerms.slice(0, 40).join(" ");
-          try {
-            const content = this.#options.indexFileSystem
-              ? await this.#options.indexFileSystem.readFile(join(this.#projectRoot, firstFile.path))
-              : await readFile(join(this.#projectRoot, firstFile.path));
-            excerpt = content.toString("utf8").slice(0, 4 * 1024);
-          } catch {
-            // Lexical terms from the last coherent generation remain an explicit degraded fallback.
+          if (liveFallback) {
+            try {
+              const content = this.#options.indexFileSystem
+                ? await this.#options.indexFileSystem.readFile(join(this.#projectRoot, firstFile.path))
+                : await readFile(join(this.#projectRoot, firstFile.path));
+              excerpt = content.toString("utf8").slice(0, 4 * 1024);
+            } catch {
+              // Indexed terms remain useful when a live source read fails.
+            }
           }
           fallbackEvidence.push({ kind: "source", path: firstFile.path, excerpt });
         } else {

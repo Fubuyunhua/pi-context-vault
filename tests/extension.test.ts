@@ -261,11 +261,28 @@ describe("extension observation adapter", () => {
     expect(transformed.messages[0]).toEqual(canonical[0]);
     const capsule = transformed.messages[1] as { content: string; details: Record<string, unknown> };
     expect(Buffer.byteLength(capsule.content)).toBeLessThanOrEqual(6 * 1024);
-    expect(capsule.content).toContain('"freshness":"stale"');
-    expect(capsule.content).toContain('"workspaceRevision":"revision-7"');
-    expect(capsule.content).toContain('"fallbackEvidence"');
-    expect(capsule.content).not.toContain('"freshness":"fresh"');
-    expect(capsule.details).toMatchObject({ persistent: false, freshness: "stale" });
+    const payload = JSON.parse(capsule.content.slice(capsule.content.indexOf("\n") + 1));
+    expect(payload).toMatchObject({
+      captureSemantics: "turn-start-snapshot",
+      freshnessAtCapture: "stale",
+      workspaceRevisionAtCapture: "revision-7",
+      generationAtCapture: 7,
+      gitHeadAtCapture: "abc123",
+      pendingFilesAtCapture: ["src/auth.ts"],
+      error: "index activation failed",
+    });
+    expect(payload.description).toMatch(/not live|does not reflect/u);
+    expect(payload).not.toHaveProperty("freshness");
+    expect(payload).not.toHaveProperty("workspaceRevision");
+    expect(capsule.details).toMatchObject({
+      persistent: false,
+      captureSemantics: "turn-start-snapshot",
+      freshnessAtCapture: "stale",
+      workspaceRevisionAtCapture: "revision-7",
+      generationAtCapture: 7,
+      gitHeadAtCapture: "abc123",
+      pendingFilesAtCapture: ["src/auth.ts"],
+    });
 
     // A same-turn repeat must reuse the frozen capsule without re-querying.
     const repeated = (await handlers.get("context")?.({ type: "context", messages: transformed.messages }, ctx)) as {
@@ -284,18 +301,27 @@ describe("extension observation adapter", () => {
       status: vi.fn(() => ({
         freshness: "stale" as const,
         generation: 9,
-        gitHead: "a".repeat(40),
-        workspaceRevision: "revision-minimal",
+        gitHead: "a".repeat(200),
+        workspaceRevision: "revision-minimal".repeat(20),
         pendingFiles: ["src/oversized.ts"],
         dirtyFiles: ["src/oversized.ts"],
         error: "failure ".repeat(200),
       })),
       query: vi.fn(async () => ({
-        results: [],
+        results: [
+          {
+            path: "src/oversized.ts",
+            kind: "semantic" as const,
+            score: 1,
+            matchedSymbols: ["oversized"],
+            symbols: [],
+            dependencies: [],
+          },
+        ],
         freshness: "stale" as const,
         generation: 9,
-        gitHead: "a".repeat(40),
-        workspaceRevision: "revision-minimal",
+        gitHead: "a".repeat(200),
+        workspaceRevision: "revision-minimal".repeat(20),
         pendingFiles: Array.from({ length: 30 }, (_, index) => `src/pending-${index}.ts`),
         fallbackEvidence: [
           { kind: "git-diff" as const, excerpt: "oversized evidence ".repeat(1_000) },
@@ -315,36 +341,53 @@ describe("extension observation adapter", () => {
     expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(512);
     const payload = JSON.parse(content.slice(content.indexOf("\n") + 1));
     expect(payload).toMatchObject({
-      freshness: "stale",
-      workspaceRevision: "revision-minimal",
-      truncated: true,
+      captureSemantics: "turn-start-snapshot",
+      freshnessAtCapture: "stale",
+      generationAtCapture: 9,
+      pendingFileCountAtCapture: 30,
     });
+    expect(payload.description).toMatch(/not live/u);
+    expect(payload).not.toHaveProperty("freshness");
+    expect(payload).not.toHaveProperty("workspaceRevision");
+    expect(payload.workspaceRevisionAtCapture.length).toBeGreaterThan(0);
+    expect(payload.gitHeadAtCapture.length).toBeGreaterThan(0);
+    expect(payload.error.length).toBeGreaterThan(0);
+    expect("failure ".repeat(2_000).startsWith(payload.error)).toBe(true);
     expect(payload.fallbackEvidence).toHaveLength(1);
+    expect(payload.truncatedFields).toEqual(
+      expect.arrayContaining([
+        "workspaceRevisionAtCapture",
+        "gitHeadAtCapture",
+        "query",
+        "error",
+        "fallbackEvidence",
+        "results",
+        "pendingFilesAtCapture",
+      ]),
+    );
   });
 
-  it("freezes the map capsule within one user turn and refreshes on the next prompt", async () => {
-    const query = vi.fn(async () => ({
-      results: [],
-      freshness: "fresh" as const,
+  it("labels the first capture, freezes its bytes after same-turn mutation, and rebuilds next turn", async () => {
+    let liveState: {
+      freshness: "fresh" | "dirty";
+      generation: number;
+      gitHead: string;
+      workspaceRevision: string;
+      pendingFiles: string[];
+    } = {
+      freshness: "fresh",
       generation: 3,
       gitHead: "head-1",
       workspaceRevision: "revision-1",
       pendingFiles: [],
-      fallbackEvidence: [],
-    }));
+    };
+    const query = vi.fn(async () => ({ results: [], ...liveState, fallbackEvidence: [] }));
     const runtime = {
       start: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
       ensureFresh: vi.fn(async () => undefined),
       rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 3,
-        gitHead: "head-1",
-        workspaceRevision: "revision-1",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
+      status: vi.fn(() => ({ ...liveState, dirtyFiles: liveState.pendingFiles })),
       query,
     };
     const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
@@ -356,22 +399,39 @@ describe("extension observation adapter", () => {
     };
     expect(first.messages[0]).toEqual(turnStart[0]);
     const capsule = first.messages[1] as { content: string; details: Record<string, unknown> };
+    const firstPayload = JSON.parse(capsule.content.slice(capsule.content.indexOf("\n") + 1));
+    expect(firstPayload).toMatchObject({
+      captureSemantics: "turn-start-snapshot",
+      freshnessAtCapture: "fresh",
+      workspaceRevisionAtCapture: "revision-1",
+      generationAtCapture: 3,
+      gitHeadAtCapture: "head-1",
+      pendingFilesAtCapture: [],
+    });
+    expect(firstPayload.description).toMatch(/not live|does not reflect/u);
     expect(capsule).toMatchObject({ role: "custom", customType: "context-vault-repo-map", display: false });
     expect(query).toHaveBeenCalledTimes(1);
 
-    // Same turn, appended tool-call/tool-result messages: the frozen capsule is
-    // re-inserted byte-for-byte at its original index without re-querying.
+    // A tool edit changes the live workspace, but same-turn context must retain
+    // the exact capture bytes and must not imply that its old freshness is live.
+    liveState = {
+      freshness: "dirty",
+      generation: 4,
+      gitHead: "head-2",
+      workspaceRevision: "revision-2",
+      pendingFiles: ["src/auth.ts"],
+    };
     const grown = [
       ...turnStart,
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
         timestamp: 11,
       },
       {
         role: "toolResult",
         toolCallId: "call-1",
-        toolName: "read",
+        toolName: "write",
         content: [{ type: "text", text: "ok" }],
         isError: false,
         timestamp: 12,
@@ -380,19 +440,25 @@ describe("extension observation adapter", () => {
     const second = (await handlers.get("context")?.({ type: "context", messages: grown }, ctx)) as {
       messages: Array<Record<string, unknown>>;
     };
-    expect(second.messages[0]).toEqual(turnStart[0]);
-    expect(second.messages[1]).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
+    const repeatedCapsule = second.messages[1] as { content: string };
+    expect(repeatedCapsule.content).toBe(capsule.content);
     expect(second.messages[1]).toEqual(capsule);
     expect(query).toHaveBeenCalledTimes(1);
 
-    // New user turn (before_agent_start): the capsule is rebuilt exactly once,
-    // even when the user message text is byte-identical to the previous turn.
     await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
     const third = (await handlers.get("context")?.({ type: "context", messages: turnStart }, ctx)) as {
       messages: Array<Record<string, unknown>>;
     };
-    expect(third.messages[1]).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
-    expect(third.messages[1]).not.toBe(capsule);
+    const nextPayload = JSON.parse(String(third.messages[1]?.content).split("\n").slice(1).join("\n"));
+    expect(nextPayload).toMatchObject({
+      captureSemantics: "turn-start-snapshot",
+      freshnessAtCapture: "dirty",
+      workspaceRevisionAtCapture: "revision-2",
+      generationAtCapture: 4,
+      gitHeadAtCapture: "head-2",
+      pendingFilesAtCapture: ["src/auth.ts"],
+    });
+    expect(third.messages[1]).not.toEqual(capsule);
     expect(query).toHaveBeenCalledTimes(2);
   });
 
@@ -446,13 +512,13 @@ describe("extension observation adapter", () => {
   });
 
   it("keeps explicit repository-map tool queries on the live freshness path", async () => {
-    const liveResult = {
+    let liveResult = {
       results: [],
-      freshness: "fresh" as const,
+      freshness: "fresh" as "fresh" | "dirty",
       generation: 1,
-      gitHead: "h",
-      workspaceRevision: "r",
-      pendingFiles: [],
+      gitHead: "head-1",
+      workspaceRevision: "revision-1",
+      pendingFiles: [] as string[],
       fallbackEvidence: [],
     };
     const runtime = {
@@ -460,24 +526,35 @@ describe("extension observation adapter", () => {
       close: vi.fn(async () => undefined),
       ensureFresh: vi.fn(async () => undefined),
       rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 1,
-        gitHead: "h",
-        workspaceRevision: "r",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
+      status: vi.fn(() => ({ ...liveResult, dirtyFiles: liveResult.pendingFiles })),
       query: vi.fn(async () => liveResult),
       queryCurrent: vi.fn(async () => liveResult),
     };
     const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    await handlers.get("context")?.(
+      { type: "context", messages: [{ role: "user", content: "capture", timestamp: 1 }] },
+      ctx,
+    );
 
-    await tools.get("context_vault_repo_map")?.execute("map-1", { query: "explicit" });
+    liveResult = {
+      results: [],
+      freshness: "dirty",
+      generation: 2,
+      gitHead: "head-2",
+      workspaceRevision: "revision-2",
+      pendingFiles: ["src/edited.ts"],
+      fallbackEvidence: [],
+    };
+    const result = (await tools.get("context_vault_repo_map")?.execute("map-1", { query: "explicit" })) as ToolResult;
+    const parsed = JSON.parse(result.content[0].text);
 
     expect(runtime.query).toHaveBeenCalledWith("explicit", { limit: undefined });
-    expect(runtime.queryCurrent).not.toHaveBeenCalled();
+    expect(runtime.queryCurrent).toHaveBeenCalledTimes(1);
+    expect(parsed).toEqual(liveResult);
+    expect(parsed).toMatchObject({ freshness: "dirty", workspaceRevision: "revision-2" });
+    expect(parsed).not.toHaveProperty("captureSemantics");
+    expect(parsed).not.toHaveProperty("freshnessAtCapture");
   });
 
   it("resets the turn sequence and freeze on session lifecycle", async () => {
@@ -529,34 +606,29 @@ describe("extension observation adapter", () => {
     expect(query).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps a capsule per LLM call in every-llm-call mode", async () => {
-    const query = vi.fn(async () => ({
+  it("captures bounded, non-live details on every LLM call in every-llm-call mode", async () => {
+    let capture = {
       results: [],
-      freshness: "fresh" as const,
+      freshness: "fresh" as "fresh" | "dirty",
       generation: 1,
-      gitHead: "h",
-      workspaceRevision: "r",
-      pendingFiles: [],
-      fallbackEvidence: [],
-    }));
+      gitHead: "head-1",
+      workspaceRevision: "revision-1",
+      pendingFiles: [] as string[],
+      fallbackEvidence: [] as Array<{ kind: "source"; path: string; excerpt: string }>,
+    };
+    const queryCurrent = vi.fn(async () => capture);
     const runtime = {
       start: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
       ensureFresh: vi.fn(async () => undefined),
       rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 1,
-        gitHead: "h",
-        workspaceRevision: "r",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query,
+      status: vi.fn(() => ({ ...capture, dirtyFiles: capture.pendingFiles })),
+      query: vi.fn(async () => capture),
+      queryCurrent,
     };
     const { handlers, ctx } = await harness(
       { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "every-llm-call" },
+      { mapInjectionMode: "every-llm-call", mapContextMaxBytes: 1024 },
     );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
@@ -564,9 +636,45 @@ describe("extension observation adapter", () => {
     const first = (await handlers.get("context")?.({ type: "context", messages }, ctx)) as {
       messages: Array<Record<string, unknown>>;
     };
-    expect(first.messages[0]).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
-    expect(query).toHaveBeenCalledTimes(1);
+    const firstCapsule = first.messages[0] as { content: string; details: Record<string, unknown> };
+    const firstPayload = JSON.parse(firstCapsule.content.slice(firstCapsule.content.indexOf("\n") + 1));
+    expect(firstCapsule).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
+    expect(Buffer.byteLength(firstCapsule.content, "utf8")).toBeLessThanOrEqual(1024);
+    expect(firstPayload).toMatchObject({
+      captureSemantics: "context-call-snapshot",
+      freshnessAtCapture: "fresh",
+      workspaceRevisionAtCapture: "revision-1",
+      generationAtCapture: 1,
+      gitHeadAtCapture: "head-1",
+      pendingFilesAtCapture: [],
+    });
+    expect(firstPayload.description).toMatch(/not live/u);
+    expect(firstPayload).not.toHaveProperty("freshness");
+    expect(firstPayload).not.toHaveProperty("workspaceRevision");
+    expect(firstPayload).not.toHaveProperty("gitHead");
+    expect(firstPayload).not.toHaveProperty("pendingFiles");
+    expect(firstCapsule.details).toEqual({
+      persistent: false,
+      captureSemantics: "context-call-snapshot",
+      freshnessAtCapture: "fresh",
+      workspaceRevisionAtCapture: "revision-1",
+      generationAtCapture: 1,
+      gitHeadAtCapture: "head-1",
+      pendingFilesAtCapture: [],
+    });
+    expect(firstCapsule.details).not.toHaveProperty("freshness");
+    expect(firstCapsule.details).not.toHaveProperty("workspaceRevision");
+    expect(queryCurrent).toHaveBeenCalledTimes(1);
 
+    capture = {
+      results: [],
+      freshness: "dirty",
+      generation: 2,
+      gitHead: "head-2",
+      workspaceRevision: "revision-2",
+      pendingFiles: ["src/auth.ts"],
+      fallbackEvidence: [{ kind: "source", path: "src/auth.ts", excerpt: "captured evidence" }],
+    };
     const grown = [
       ...messages,
       {
@@ -586,8 +694,34 @@ describe("extension observation adapter", () => {
     const second = (await handlers.get("context")?.({ type: "context", messages: grown }, ctx)) as {
       messages: Array<Record<string, unknown>>;
     };
-    expect(second.messages[0]).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
-    expect(query).toHaveBeenCalledTimes(2);
+    const secondCapsule = second.messages[0] as { content: string; details: Record<string, unknown> };
+    const secondPayload = JSON.parse(secondCapsule.content.slice(secondCapsule.content.indexOf("\n") + 1));
+    expect(secondCapsule).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
+    expect(Buffer.byteLength(secondCapsule.content, "utf8")).toBeLessThanOrEqual(1024);
+    expect(secondPayload).toMatchObject({
+      captureSemantics: "context-call-snapshot",
+      freshnessAtCapture: "dirty",
+      workspaceRevisionAtCapture: "revision-2",
+      generationAtCapture: 2,
+      gitHeadAtCapture: "head-2",
+      pendingFilesAtCapture: ["src/auth.ts"],
+    });
+    expect(secondPayload.description).toMatch(/not live/u);
+    expect(secondPayload).not.toHaveProperty("freshness");
+    expect(secondPayload).not.toHaveProperty("workspaceRevision");
+    expect(secondCapsule.details).toMatchObject({
+      persistent: false,
+      captureSemantics: "context-call-snapshot",
+      freshnessAtCapture: "dirty",
+      workspaceRevisionAtCapture: "revision-2",
+      generationAtCapture: 2,
+      gitHeadAtCapture: "head-2",
+      pendingFilesAtCapture: ["src/auth.ts"],
+    });
+    expect(secondCapsule.details).not.toHaveProperty("freshness");
+    expect(secondCapsule.details).not.toHaveProperty("workspaceRevision");
+    expect(queryCurrent).toHaveBeenCalledTimes(2);
+    expect(runtime.query).not.toHaveBeenCalled();
   });
 
   it("injects no automatic capsule in off mode", async () => {
@@ -1141,7 +1275,7 @@ describe("extension observation adapter", () => {
 
     expect(query).toHaveBeenCalledTimes(2);
     expect(second.messages).toHaveLength(2);
-    expect(String(second.messages[1]?.content)).toContain('"workspaceRevision":"revision-after"');
+    expect(String(second.messages[1]?.content)).toContain('"workspaceRevisionAtCapture":"revision-after"');
     expect(second.messages[1]).not.toEqual(first.messages[1]);
   });
 
@@ -1185,9 +1319,23 @@ describe("extension observation adapter", () => {
     const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
-    await expect(
-      handlers.get("context")?.({ type: "context", messages: [{ role: "user", content: "first", timestamp: 1 }] }, ctx),
-    ).resolves.toBeDefined();
+    const failedQueryCapsule = (await handlers.get("context")?.(
+      { type: "context", messages: [{ role: "user", content: "first", timestamp: 1 }] },
+      ctx,
+    )) as { messages: Array<{ content: string }> };
+    const failedQueryPayload = JSON.parse(
+      failedQueryCapsule.messages[1]?.content.split("\n").slice(1).join("\n") ?? "",
+    );
+    expect(failedQueryPayload).toMatchObject({
+      captureSemantics: "turn-start-snapshot",
+      freshnessAtCapture: "stale",
+      workspaceRevisionAtCapture: "unavailable",
+      generationAtCapture: 0,
+      gitHeadAtCapture: "unavailable",
+      pendingFilesAtCapture: [],
+      error: "query failed",
+    });
+    expect(failedQueryPayload).not.toHaveProperty("freshness");
     await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
     await expect(
       handlers.get("context")?.(

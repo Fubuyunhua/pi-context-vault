@@ -174,12 +174,12 @@ describe("incremental repository map runtime", () => {
     await runtime.close();
   });
 
-  it("returns one captured query state when a flush interleaves with stale fallback reads", async () => {
+  it("keeps queryCurrent fallback evidence coherent while a flush interleaves", async () => {
     const { root, stateRoot } = await fixture({ "src/value.ts": "export const capturedBeforeFlush = true;" });
-    const fallbackRead = deferred();
-    const releaseFallback = deferred();
-    let blockFallback = false;
-    let fallbackBlocked = false;
+    const flushRead = deferred();
+    const releaseFlush = deferred();
+    let blockFlush = false;
+    let flushBlocked = false;
     const runtime = new RepoMapRuntime({
       projectRoot: root,
       stateRoot,
@@ -187,10 +187,10 @@ describe("incremental repository map runtime", () => {
       indexFileSystem: {
         lstat,
         async readFile(path) {
-          if (blockFallback && !fallbackBlocked && path === join(root, "src/value.ts")) {
-            fallbackBlocked = true;
-            fallbackRead.resolve();
-            await releaseFallback.promise;
+          if (blockFlush && !flushBlocked && path === join(root, "src/value.ts")) {
+            flushBlocked = true;
+            flushRead.resolve();
+            await releaseFlush.promise;
           }
           return readFile(path);
         },
@@ -200,14 +200,14 @@ describe("incremental repository map runtime", () => {
     await writeFile(join(root, "src/value.ts"), "export const capturedAfterFlush = true;");
     runtime.notify("change", "src/value.ts");
     const capturedStatus = runtime.status();
-    blockFallback = true;
+    blockFlush = true;
 
-    const query = runtime.queryCurrent("capturedBeforeFlush");
-    await fallbackRead.promise;
-    await runtime.flush();
+    const flush = runtime.flush();
+    await flushRead.promise;
+    const result = await runtime.queryCurrent("capturedBeforeFlush");
+    releaseFlush.resolve();
+    await flush;
     const currentStatus = runtime.status();
-    releaseFallback.resolve();
-    const result = await query;
 
     expect(result).toMatchObject({
       freshness: capturedStatus.freshness,
@@ -218,6 +218,9 @@ describe("incremental repository map runtime", () => {
       results: [{ path: "src/value.ts" }],
     });
     expect(result.error).toBe(capturedStatus.error);
+    expect(result.fallbackEvidence).toEqual([expect.objectContaining({ kind: "source", path: "src/value.ts" })]);
+    expect(result.fallbackEvidence[0]?.excerpt).toContain("capturedbeforeflush");
+    expect(result.fallbackEvidence[0]?.excerpt).not.toContain("capturedAfterFlush");
     expect(currentStatus).toMatchObject({ freshness: "dirty", pendingFiles: [] });
     expect(currentStatus.generation).toBeGreaterThan(result.generation);
     expect((await runtime.queryCurrent("capturedAfterFlush")).results[0]?.path).toBe("src/value.ts");
