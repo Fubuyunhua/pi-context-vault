@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { readdir, readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import type { Telemetry } from "../telemetry.js";
 import { redactSecrets } from "./redaction.js";
 
 const METADATA_FILE = "observations.jsonl";
+const ACTIVE_SESSIONS_FILE = "active-sessions.json";
 const LOCK_FILE = "artifacts.lock";
 
 export interface ArtifactStoreOptions {
@@ -14,6 +15,8 @@ export interface ArtifactStoreOptions {
   metadataRoot: string;
   now?: () => Date;
   telemetry?: Telemetry;
+  /** Test seam for determining whether a local lease-owning process demonstrably exists. */
+  isProcessAlive?: (pid: number) => boolean;
 }
 
 export interface ArchiveObservationInput {
@@ -46,6 +49,21 @@ export interface ArchivedArtifact {
   deduplicated: boolean;
 }
 
+export interface ActiveSessionLease {
+  sessionId: string;
+  ownerId: string;
+}
+
+interface ActiveSessionLeaseRecord extends ActiveSessionLease {
+  pid: number;
+  registeredAt: string;
+}
+
+interface ActiveSessionRegistry {
+  schemaVersion: 1;
+  leases: ActiveSessionLeaseRecord[];
+}
+
 export interface GarbageCollectOptions {
   retentionDays: number;
   quotaBytes: number;
@@ -65,6 +83,51 @@ function assertArtifactId(artifactId: string): void {
 
 function encodeMetadata(entries: readonly ArtifactMetadata[]): string {
   return entries.length === 0 ? "" : `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+}
+
+function parseActiveSessions(source: string): ActiveSessionRegistry {
+  let value: unknown;
+  try {
+    value = JSON.parse(source) as unknown;
+  } catch (error) {
+    throw new Error(`Invalid active session registry: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (value === null || typeof value !== "object") throw new Error("Invalid active session registry");
+  const registry = value as Partial<ActiveSessionRegistry>;
+  if (registry.schemaVersion !== 1 || !Array.isArray(registry.leases)) {
+    throw new Error("Invalid active session registry");
+  }
+  const owners = new Set<string>();
+  for (const lease of registry.leases) {
+    if (
+      lease === null ||
+      typeof lease !== "object" ||
+      typeof lease.sessionId !== "string" ||
+      lease.sessionId.length === 0 ||
+      typeof lease.ownerId !== "string" ||
+      lease.ownerId.length === 0 ||
+      !Number.isSafeInteger(lease.pid) ||
+      lease.pid <= 0 ||
+      typeof lease.registeredAt !== "string" ||
+      !Number.isFinite(Date.parse(lease.registeredAt)) ||
+      owners.has(lease.ownerId)
+    ) {
+      throw new Error("Invalid active session registry");
+    }
+    owners.add(lease.ownerId);
+  }
+  return registry as ActiveSessionRegistry;
+}
+
+function defaultProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // ESRCH is the only result that demonstrates the local process is gone.
+    // Permission and other failures retain the lease and therefore fail safe.
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }
 
 function parseMetadata(source: string): ArtifactMetadata[] {
@@ -103,21 +166,59 @@ function parseMetadata(source: string): ArtifactMetadata[] {
 export class ArtifactStore {
   readonly #artifactsRoot: string;
   readonly #metadataPath: string;
+  readonly #activeSessionsPath: string;
   readonly #lockPath: string;
   readonly #now: () => Date;
   readonly #telemetry?: Telemetry;
+  readonly #isProcessAlive: (pid: number) => boolean;
 
   constructor(options: ArtifactStoreOptions) {
     this.#artifactsRoot = options.artifactsRoot;
     this.#metadataPath = join(options.metadataRoot, METADATA_FILE);
+    this.#activeSessionsPath = join(options.metadataRoot, ACTIVE_SESSIONS_FILE);
     this.#lockPath = join(options.metadataRoot, LOCK_FILE);
     this.#now = options.now ?? (() => new Date());
     this.#telemetry = options.telemetry;
+    this.#isProcessAlive = options.isProcessAlive ?? defaultProcessAlive;
   }
 
   artifactPath(artifactId: string): string {
     assertArtifactId(artifactId);
     return join(this.#artifactsRoot, artifactId.slice(0, 2), `${artifactId}.txt`);
+  }
+
+  async registerActiveSession(sessionId: string): Promise<ActiveSessionLease> {
+    if (sessionId.length === 0) throw new Error("sessionId must not be empty");
+    const lease: ActiveSessionLeaseRecord = {
+      sessionId,
+      ownerId: randomUUID(),
+      pid: process.pid,
+      registeredAt: this.#now().toISOString(),
+    };
+    await withFileLock(this.#lockPath, async () => {
+      const registry = await this.#readActiveSessionsUnlocked();
+      const liveLeases = registry.leases.filter((candidate) => this.#isProcessAlive(candidate.pid));
+      liveLeases.push(lease);
+      await atomicWriteFile(
+        this.#activeSessionsPath,
+        JSON.stringify({ schemaVersion: 1, leases: liveLeases } satisfies ActiveSessionRegistry),
+      );
+    });
+    return { sessionId: lease.sessionId, ownerId: lease.ownerId };
+  }
+
+  async releaseActiveSession(lease: ActiveSessionLease): Promise<void> {
+    await withFileLock(this.#lockPath, async () => {
+      const registry = await this.#readActiveSessionsUnlocked();
+      const remaining = registry.leases.filter(
+        (candidate) => candidate.ownerId !== lease.ownerId || candidate.sessionId !== lease.sessionId,
+      );
+      if (remaining.length === registry.leases.length) return;
+      await atomicWriteFile(
+        this.#activeSessionsPath,
+        JSON.stringify({ schemaVersion: 1, leases: remaining } satisfies ActiveSessionRegistry),
+      );
+    });
   }
 
   async archive(input: ArchiveObservationInput): Promise<ArchivedArtifact> {
@@ -204,7 +305,25 @@ export class ArtifactStore {
     const referenced = options.referencedArtifactIds ?? new Set<string>();
 
     return withFileLock(this.#lockPath, async () => {
+      // Lease enumeration and metadata enumeration share the artifact lock with
+      // deletion. A concurrent archive/register/release therefore cannot open a
+      // gap between determining active sessions and removing their evidence.
+      const registry = await this.#readActiveSessionsUnlocked();
+      const liveLeases = registry.leases.filter((lease) => this.#isProcessAlive(lease.pid));
+      if (liveLeases.length !== registry.leases.length) {
+        // Persist dead-lease cleanup before deleting evidence. A registry write
+        // failure consequently fails closed with no artifact deletion.
+        await atomicWriteFile(
+          this.#activeSessionsPath,
+          JSON.stringify({ schemaVersion: 1, leases: liveLeases } satisfies ActiveSessionRegistry),
+        );
+      }
+      const activeSessionIds = new Set(liveLeases.map((lease) => lease.sessionId));
       const entries = await this.#readMetadataUnlocked();
+      const protectedArtifactIds = new Set(referenced);
+      for (const entry of entries) {
+        if (activeSessionIds.has(entry.sessionId)) protectedArtifactIds.add(entry.artifactId);
+      }
       const groups = new Map<string, ArtifactMetadata[]>();
       for (const entry of entries) {
         const group = groups.get(entry.artifactId) ?? [];
@@ -221,7 +340,7 @@ export class ArtifactStore {
       const cutoff = this.#now().getTime() - options.retentionDays * 24 * 60 * 60 * 1000;
       const artifactIds = new Set([...groups.keys(), ...artifacts.keys()]);
       const candidates = [...artifactIds]
-        .filter((artifactId) => !referenced.has(artifactId))
+        .filter((artifactId) => !protectedArtifactIds.has(artifactId))
         .map((artifactId) => ({
           artifactId,
           newestTimestamp: Math.max(
@@ -265,6 +384,15 @@ export class ArtifactStore {
         quotaSatisfied: remainingBytes <= options.quotaBytes,
       };
     });
+  }
+
+  async #readActiveSessionsUnlocked(): Promise<ActiveSessionRegistry> {
+    try {
+      return parseActiveSessions(await readFile(this.#activeSessionsPath, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schemaVersion: 1, leases: [] };
+      throw error;
+    }
   }
 
   async #readMetadataUnlocked(): Promise<ArtifactMetadata[]> {

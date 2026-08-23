@@ -114,9 +114,9 @@ the map.
 
 Context Vault is automatic after startup:
 
-1. Text returned by tools such as `read` or `bash` is sanitized and archived.
-2. A result at or below `archiveThresholdBytes` remains unchanged in the conversation, but is still searchable.
-3. A larger result is replaced with a JSON receipt after archival succeeds.
+1. Text returned by tools such as `read` or `bash` is checked against `archivePolicy`, then eligible results are sanitized and archived.
+2. An archived result at or below `replacementThresholdBytes` remains unchanged in the conversation and is searchable.
+3. A larger eligible result is replaced with a JSON receipt only after archival succeeds.
 4. When estimated context usage crosses `softContextRatio`, older archived tool results become receipts in the
    model-visible copy; the newest `hotObservationCount` results remain hot.
 5. Before model calls and explicit map queries, the Repo Map checks pending filesystem changes and Git HEAD.
@@ -230,8 +230,9 @@ Context Vault registers one slash command with four subcommands:
 - `status` is read-only and reports runtime/component state.
 - `rebuild` performs a full repository-map rebuild and atomically activates a new generation. Use it after repairing
   permissions, invalid configuration, or a stale map. It does not modify project source files.
-- `gc` applies `retentionDays` and `projectQuotaBytes` to archived evidence. This can make receipts from older sessions
-  unrecoverable; run it only when that evidence is no longer required.
+- `gc` applies `retentionDays` and `projectQuotaBytes` to archived evidence. Artifacts referenced by the active session
+  tree/current branch, plus metadata for every live project-local session lease, are protected; quota is reported
+  unsatisfied rather than deleting them.
 - `doctor` adds an overall `healthy`/`degraded` result and verifies that generated state is outside the project tree.
 
 Command results are shown as Pi UI notifications. Unknown subcommands display usage and do not mutate state.
@@ -243,7 +244,10 @@ types, and out-of-range values cause explicit degraded initialization instead of
 
 ```json
 {
-  "archiveThresholdBytes": 32768,
+  "archivePolicy": "errors-and-large",
+  "archiveMinBytes": 16384,
+  "replacementThresholdBytes": 32768,
+  "archiveErrorsAlways": true,
   "receiptMaxBytes": 4096,
   "hotObservationCount": 8,
   "softContextRatio": 0.75,
@@ -258,7 +262,11 @@ types, and out-of-range values cause explicit degraded initialization instead of
 
 | Key | Default | Validation and effect |
 |---|---:|---|
-| `archiveThresholdBytes` | `16384` | Positive integer; larger textual results become receipts after archival. |
+| `archivePolicy` | `"all"` | `all`, `errors-and-large`, or `off`; decides eligibility before storage. |
+| `archiveMinBytes` | `16384` | Non-negative safe integer; inclusive large-result boundary for `errors-and-large`. |
+| `replacementThresholdBytes` | `16384` | Positive safe integer; archived results strictly above it become receipts. |
+| `archiveErrorsAlways` | `true` | Archives short errors under `errors-and-large`; never overrides `off`. |
+| `archiveThresholdBytes` | — | Deprecated alias for `replacementThresholdBytes`; configuring both is an error. |
 | `receiptMaxBytes` | `4096` | Integer at least 512; maximum immediate/historical receipt bytes. |
 | `hotObservationCount` | `6` | Positive integer; newest tool results kept during historical reduction. |
 | `softContextRatio` | `0.75` | Number strictly between 0 and 1; estimated reduction trigger. |
@@ -341,8 +349,8 @@ project-specific path.
 
 ### A large output was not replaced
 
-- Replacement occurs only when UTF-8 bytes are greater than `archiveThresholdBytes`.
-- Small textual outputs are archived but remain unchanged.
+- Replacement occurs only for archived results whose UTF-8 bytes are greater than `replacementThresholdBytes`.
+- `archivePolicy` may leave an output unarchived; it then remains visible but is not searchable or reducible by Context Vault.
 - Image-only results and Context Vault's own tool results are not re-archived.
 - If archival fails, the original result is deliberately preserved; check `context_vault_status` for failures.
 

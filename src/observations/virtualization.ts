@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ArchivedArtifact, ArtifactMetadata, ArtifactStore } from "../artifacts/store.js";
+import type { ArchivePolicy } from "../state/config.js";
 import type { Telemetry } from "../telemetry.js";
 
 export const MAX_QUERY_LENGTH = 512;
@@ -30,7 +31,12 @@ export interface VirtualizeResult {
 
 export interface ObservationRuntimeOptions {
   store: ArtifactStore;
-  archiveThresholdBytes: number;
+  archivePolicy?: ArchivePolicy;
+  archiveMinBytes?: number;
+  replacementThresholdBytes?: number;
+  archiveErrorsAlways?: boolean;
+  /** @deprecated Use replacementThresholdBytes. */
+  archiveThresholdBytes?: number;
   receiptMaxBytes: number;
   projectId: string;
   projectRoot: string;
@@ -124,20 +130,45 @@ function validateQuery(query: string | undefined): string | undefined {
 
 export class ObservationRuntime {
   readonly #store: ArtifactStore;
-  readonly #archiveThresholdBytes: number;
+  readonly #archivePolicy: ArchivePolicy;
+  readonly #archiveMinBytes: number;
+  readonly #replacementThresholdBytes: number;
+  readonly #archiveErrorsAlways: boolean;
   readonly #receiptMaxBytes: number;
   readonly #status: ObservationRuntimeStatus;
   readonly #telemetry?: Telemetry;
 
   constructor(options: ObservationRuntimeOptions) {
-    if (!Number.isSafeInteger(options.archiveThresholdBytes) || options.archiveThresholdBytes <= 0) {
-      throw new Error("archiveThresholdBytes must be a positive integer");
+    const archivePolicy = options.archivePolicy ?? "all";
+    const archiveMinBytes = options.archiveMinBytes ?? 16 * 1024;
+    const replacementThresholdBytes = options.replacementThresholdBytes ?? options.archiveThresholdBytes ?? 16 * 1024;
+    const archiveErrorsAlways = options.archiveErrorsAlways ?? true;
+    if (
+      options.archiveThresholdBytes !== undefined &&
+      (!Number.isSafeInteger(options.archiveThresholdBytes) || options.archiveThresholdBytes <= 0)
+    ) {
+      throw new Error("archiveThresholdBytes must be a positive safe integer");
+    }
+    if (!(["all", "errors-and-large", "off"] as const).includes(archivePolicy)) {
+      throw new Error("archivePolicy must be one of all, errors-and-large, off");
+    }
+    if (!Number.isSafeInteger(archiveMinBytes) || archiveMinBytes < 0) {
+      throw new Error("archiveMinBytes must be a non-negative safe integer");
+    }
+    if (!Number.isSafeInteger(replacementThresholdBytes) || replacementThresholdBytes <= 0) {
+      throw new Error("replacementThresholdBytes must be a positive safe integer");
+    }
+    if (typeof archiveErrorsAlways !== "boolean") {
+      throw new Error("archiveErrorsAlways must be a boolean");
     }
     if (!Number.isSafeInteger(options.receiptMaxBytes) || options.receiptMaxBytes < 512) {
       throw new Error("receiptMaxBytes must be an integer of at least 512");
     }
     this.#store = options.store;
-    this.#archiveThresholdBytes = options.archiveThresholdBytes;
+    this.#archivePolicy = archivePolicy;
+    this.#archiveMinBytes = archiveMinBytes;
+    this.#replacementThresholdBytes = replacementThresholdBytes;
+    this.#archiveErrorsAlways = archiveErrorsAlways;
     this.#receiptMaxBytes = options.receiptMaxBytes;
     this.#telemetry = options.telemetry;
     this.#status = {
@@ -157,6 +188,13 @@ export class ObservationRuntime {
 
   async virtualize(input: VirtualizeInput): Promise<VirtualizeResult> {
     const id = observationId(this.#status.sessionId, input.toolCallId);
+    const originalBytes = Buffer.byteLength(input.text, "utf8");
+    const eligible =
+      this.#archivePolicy === "all" ||
+      (this.#archivePolicy === "errors-and-large" &&
+        (originalBytes >= this.#archiveMinBytes || (input.isError && this.#archiveErrorsAlways)));
+    if (!eligible) return { observationId: id };
+
     this.#telemetry?.recordArchiveStarted();
     const startedAt = performance.now();
     let archived: ArchivedArtifact;
@@ -176,7 +214,7 @@ export class ObservationRuntime {
 
     this.#telemetry?.recordArchiveSucceeded(performance.now() - startedAt, archived.deduplicated);
     this.#status.archived += 1;
-    if (Buffer.byteLength(input.text) <= this.#archiveThresholdBytes) return { observationId: id };
+    if (originalBytes <= this.#replacementThresholdBytes) return { observationId: id };
     try {
       const sanitizedContent = await this.#store.read(archived.artifactId);
       const replacement = buildReceipt({

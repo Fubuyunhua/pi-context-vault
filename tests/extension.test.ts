@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -41,11 +42,15 @@ async function harness(
     cwd: project,
     hasUI: true,
     ui: { setStatus, notify },
-    sessionManager: { getSessionId: () => "session-1" },
+    sessionManager: {
+      getSessionId: () => "session-1",
+      getEntries: () => [],
+      getBranch: () => [],
+    },
     model: { contextWindow: 12_000 },
     getSystemPrompt: () => "system contract",
   };
-  return { handlers, tools, commands, pi, ctx, setStatus, notify, project };
+  return { handlers, tools, commands, pi, ctx, setStatus, notify, project, root };
 }
 
 describe("extension observation adapter", () => {
@@ -722,6 +727,28 @@ describe("extension observation adapter", () => {
     expect(runtimes[1]?.close).toHaveBeenCalledOnce();
   });
 
+  it("registers before archiving and releases only its session lease on shutdown", async () => {
+    const { handlers, ctx, project, root } = await harness();
+    const projectId = createHash("sha256").update(project).digest("hex").slice(0, 32);
+    const registryPath = join(root, "pi", "context-vault", "projects", projectId, "metadata", "active-sessions.json");
+
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    expect(JSON.parse(await readFile(registryPath, "utf8")).leases).toMatchObject([
+      { sessionId: "session-1", pid: process.pid },
+    ]);
+
+    await handlers.get("tool_result")?.({
+      type: "tool_result",
+      toolCallId: "registered-first",
+      toolName: "read",
+      input: {},
+      content: [{ type: "text", text: "archived only after registration" }],
+      isError: false,
+    });
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
+    expect(JSON.parse(await readFile(registryPath, "utf8")).leases).toEqual([]);
+  });
+
   it("runs repository-map maintenance together with artifact garbage collection", async () => {
     const maintenance = vi.fn(async () => ({
       activeGeneration: 1,
@@ -766,6 +793,183 @@ describe("extension observation adapter", () => {
       artifacts: { quotaSatisfied: true },
       repoMap: { activeGeneration: 1, deletedGenerations: [2], quotaSatisfied: true },
     });
+  });
+
+  it("protects receipts from the resumed session tree/current branch, shared hashes, and current-session metadata", async () => {
+    const maintenance = vi.fn(async () => ({
+      activeGeneration: 1,
+      deletedGenerations: [],
+      bytesFreed: 0,
+      remainingGenerations: 1,
+      remainingBytes: 1,
+      quotaSatisfied: true,
+    }));
+    const { handlers, tools, commands, ctx, notify } = await harness(
+      {
+        repoMapRuntimeFactory: () => ({
+          start: async () => undefined,
+          close: async () => undefined,
+          ensureFresh: async () => undefined,
+          rebuild: async () => undefined,
+          maintenance,
+          status: () => ({
+            freshness: "fresh" as const,
+            generation: 1,
+            gitHead: "head",
+            workspaceRevision: "revision",
+            pendingFiles: [],
+            dirtyFiles: [],
+          }),
+          query: async () => ({
+            results: [],
+            freshness: "fresh" as const,
+            generation: 1,
+            gitHead: "head",
+            workspaceRevision: "revision",
+            pendingFiles: [],
+            fallbackEvidence: [],
+          }),
+        }),
+      },
+      { replacementThresholdBytes: 1, projectQuotaBytes: 1, retentionDays: 30 },
+    );
+    const toolResult = async (toolCallId: string, text: string) =>
+      (await handlers.get("tool_result")?.({
+        type: "tool_result",
+        toolCallId,
+        toolName: "read",
+        input: {},
+        content: [{ type: "text", text }],
+        isError: false,
+      })) as ToolResult;
+
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    const treeReceipt = await toolResult("tree", "tree evidence");
+    const sharedReceipt = await toolResult("shared", "tree evidence");
+    const branchReceipt = await toolResult("branch", "branch evidence");
+    const unreferencedReceipt = await toolResult("unreferenced", "delete me");
+
+    const resumedCtx = {
+      ...ctx,
+      sessionManager: {
+        getSessionId: () => "session-2",
+        getEntries: () => [
+          {
+            type: "message",
+            id: "tree-entry",
+            parentId: null,
+            timestamp: new Date().toISOString(),
+            message: {
+              role: "toolResult",
+              toolCallId: "tree",
+              toolName: "read",
+              content: [{ type: "text", text: treeReceipt.content[0]?.text }],
+              isError: false,
+              timestamp: 1,
+            },
+          },
+        ],
+        getBranch: () => [
+          {
+            type: "message",
+            id: "branch-entry",
+            parentId: null,
+            timestamp: new Date().toISOString(),
+            message: {
+              role: "toolResult",
+              toolCallId: "branch",
+              toolName: "read",
+              content: [{ type: "text", text: branchReceipt.content[0]?.text }],
+              isError: false,
+              timestamp: 2,
+            },
+          },
+        ],
+      },
+    };
+    await handlers.get("session_start")?.({ type: "session_start", reason: "resume" }, resumedCtx);
+    const current = await toolResult("current", "current metadata evidence");
+
+    await commands.get("context-vault")?.handler("gc", resumedCtx);
+
+    const report = JSON.parse(String(notify.mock.calls.at(-1)?.[0]));
+    expect(report.artifacts.quotaSatisfied).toBe(false);
+    expect(maintenance).toHaveBeenCalledOnce();
+    for (const receipt of [treeReceipt, sharedReceipt, branchReceipt, current]) {
+      const id = JSON.parse(receipt.content[0]?.text ?? "{}").id;
+      const fetched = (await tools.get("context_vault_obs_get")?.execute("get", { id })) as ToolResult;
+      expect(fetched.isError).not.toBe(true);
+    }
+    const unreferencedId = JSON.parse(unreferencedReceipt.content[0]?.text ?? "{}").id;
+    const deleted = (await tools.get("context_vault_obs_get")?.execute("get", { id: unreferencedId })) as ToolResult;
+    expect(deleted.isError).toBe(true);
+  });
+
+  it("fails GC safely before deletion when active session references cannot be enumerated", async () => {
+    const maintenance = vi.fn(async () => ({
+      activeGeneration: 1,
+      deletedGenerations: [],
+      bytesFreed: 0,
+      remainingGenerations: 1,
+      remainingBytes: 0,
+      quotaSatisfied: true,
+    }));
+    const { handlers, tools, commands, ctx, notify } = await harness(
+      {
+        repoMapRuntimeFactory: () => ({
+          start: async () => undefined,
+          close: async () => undefined,
+          ensureFresh: async () => undefined,
+          rebuild: async () => undefined,
+          maintenance,
+          status: () => ({
+            freshness: "fresh" as const,
+            generation: 1,
+            gitHead: "head",
+            workspaceRevision: "revision",
+            pendingFiles: [],
+            dirtyFiles: [],
+          }),
+          query: async () => ({
+            results: [],
+            freshness: "fresh" as const,
+            generation: 1,
+            gitHead: "head",
+            workspaceRevision: "revision",
+            pendingFiles: [],
+            fallbackEvidence: [],
+          }),
+        }),
+      },
+      { replacementThresholdBytes: 1, projectQuotaBytes: 1 },
+    );
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    const receipt = (await handlers.get("tool_result")?.({
+      type: "tool_result",
+      toolCallId: "keep",
+      toolName: "read",
+      input: {},
+      content: [{ type: "text", text: "must survive enumeration failure" }],
+      isError: false,
+    })) as ToolResult;
+    const failingCtx = {
+      ...ctx,
+      sessionManager: {
+        getSessionId: () => "different-session",
+        getEntries: () => {
+          throw new Error("session tree unavailable");
+        },
+        getBranch: () => [],
+      },
+    };
+
+    await commands.get("context-vault")?.handler("gc", failingCtx);
+
+    expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("session tree unavailable"), "error");
+    expect(maintenance).not.toHaveBeenCalled();
+    const id = JSON.parse(receipt.content[0]?.text ?? "{}").id;
+    const fetched = (await tools.get("context_vault_obs_get")?.execute("get", { id })) as ToolResult;
+    expect(fetched.isError).not.toBe(true);
   });
 
   it("supports status, rebuild, gc, and doctor commands and reports degraded initialization safely", async () => {

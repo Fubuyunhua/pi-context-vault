@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -170,6 +170,151 @@ describe("artifact store", () => {
 
     expect(result.quotaSatisfied).toBe(false);
     expect(await store.read(artifact.artifactId)).toContain("important");
+  });
+
+  it("protects metadata for two concurrent stores and active sessions under quota pressure", async () => {
+    const root = await tempRoot();
+    const first = storeAt(root);
+    const second = storeAt(root);
+    const [firstLease, secondLease] = await Promise.all([
+      first.registerActiveSession("session-a"),
+      second.registerActiveSession("session-b"),
+    ]);
+    const [firstArtifact, secondArtifact] = await Promise.all([
+      first.archive({
+        observationId: "active-a",
+        toolName: "read",
+        sessionId: "session-a",
+        content: "a".repeat(80),
+      }),
+      second.archive({
+        observationId: "active-b",
+        toolName: "read",
+        sessionId: "session-b",
+        content: "b".repeat(80),
+      }),
+    ]);
+
+    const protectedResult = await first.garbageCollect({ retentionDays: 0, quotaBytes: 1 });
+    expect(protectedResult.quotaSatisfied).toBe(false);
+    expect(await first.read(firstArtifact.artifactId)).toBe("a".repeat(80));
+    expect(await first.read(secondArtifact.artifactId)).toBe("b".repeat(80));
+
+    await second.releaseActiveSession(secondLease);
+    const afterRelease = await first.garbageCollect({ retentionDays: 0, quotaBytes: 1 });
+    expect(afterRelease.deletedArtifactIds).toContain(secondArtifact.artifactId);
+    expect(afterRelease.deletedArtifactIds).not.toContain(firstArtifact.artifactId);
+    await first.releaseActiveSession(firstLease);
+  });
+
+  it("keeps resumed-session owners independent and releases leases owner-safely", async () => {
+    const root = await tempRoot();
+    const original = storeAt(root);
+    const resumed = storeAt(root);
+    const originalLease = await original.registerActiveSession("resumed-session");
+    const resumedLease = await resumed.registerActiveSession("resumed-session");
+    const artifact = await resumed.archive({
+      observationId: "resumed-observation",
+      toolName: "read",
+      sessionId: "resumed-session",
+      content: "resumed evidence",
+    });
+
+    await original.releaseActiveSession(originalLease);
+    expect((await resumed.garbageCollect({ retentionDays: 0, quotaBytes: 0 })).quotaSatisfied).toBe(false);
+    expect(await resumed.read(artifact.artifactId)).toBe("resumed evidence");
+
+    // Releasing an already-released owner cannot remove the resumed owner.
+    await original.releaseActiveSession(originalLease);
+    expect(JSON.parse(await readFile(join(root, "metadata", "active-sessions.json"), "utf8")).leases).toHaveLength(1);
+    await resumed.releaseActiveSession(resumedLease);
+  });
+
+  it("protects a shared content hash and reports an unsatisfied quota", async () => {
+    const root = await tempRoot();
+    const active = storeAt(root);
+    const inactive = storeAt(root);
+    const lease = await active.registerActiveSession("active-session");
+    const activeArtifact = await active.archive({
+      observationId: "active-shared",
+      toolName: "read",
+      sessionId: "active-session",
+      content: "shared content",
+    });
+    const inactiveArtifact = await inactive.archive({
+      observationId: "inactive-shared",
+      toolName: "read",
+      sessionId: "inactive-session",
+      content: "shared content",
+    });
+    expect(inactiveArtifact.artifactId).toBe(activeArtifact.artifactId);
+
+    const result = await inactive.garbageCollect({ retentionDays: 0, quotaBytes: 0 });
+    expect(result.quotaSatisfied).toBe(false);
+    expect(result.deletedArtifactIds).not.toContain(activeArtifact.artifactId);
+    expect((await inactive.listMetadata()).map((entry) => entry.observationId).sort()).toEqual([
+      "active-shared",
+      "inactive-shared",
+    ]);
+    await active.releaseActiveSession(lease);
+  });
+
+  it("serializes registration/archive with GC so no active-session evidence can fall through", async () => {
+    const root = await tempRoot();
+    const archiver = storeAt(root);
+    const collector = storeAt(root);
+    const lease = await archiver.registerActiveSession("ordered-session");
+
+    const [artifact] = await Promise.all([
+      archiver.archive({
+        observationId: "ordered-observation",
+        toolName: "read",
+        sessionId: "ordered-session",
+        content: "ordering evidence",
+      }),
+      collector.garbageCollect({ retentionDays: 0, quotaBytes: 0 }),
+    ]);
+
+    expect(await collector.read(artifact.artifactId)).toBe("ordering evidence");
+    expect((await collector.listMetadata()).map((entry) => entry.observationId)).toContain("ordered-observation");
+    await archiver.releaseActiveSession(lease);
+  });
+
+  it("cleans demonstrably dead leases but fails closed on malformed lease state", async () => {
+    const root = await tempRoot();
+    const store = new ArtifactStore({
+      artifactsRoot: join(root, "artifacts"),
+      metadataRoot: join(root, "metadata"),
+      isProcessAlive: () => false,
+    });
+    await store.registerActiveSession("dead-session");
+    const artifact = await store.archive({
+      observationId: "dead-observation",
+      toolName: "read",
+      sessionId: "dead-session",
+      content: "collect after owner death",
+    });
+    const collected = await store.garbageCollect({ retentionDays: 0, quotaBytes: 0 });
+    expect(collected.deletedArtifactIds).toContain(artifact.artifactId);
+    expect(JSON.parse(await readFile(join(root, "metadata", "active-sessions.json"), "utf8")).leases).toEqual([]);
+
+    const survivor = await store.archive({
+      observationId: "malformed-survivor",
+      toolName: "read",
+      sessionId: "inactive-session",
+      content: "must survive malformed registry",
+    });
+    await writeFile(join(root, "metadata", "active-sessions.json"), "{malformed");
+    await expect(store.garbageCollect({ retentionDays: 0, quotaBytes: 0 })).rejects.toThrow(
+      "Invalid active session registry",
+    );
+    expect(await store.read(survivor.artifactId)).toBe("must survive malformed registry");
+
+    const registryPath = join(root, "metadata", "active-sessions.json");
+    await rm(registryPath);
+    await mkdir(registryPath);
+    await expect(store.garbageCollect({ retentionDays: 0, quotaBytes: 0 })).rejects.toThrow();
+    expect(await store.read(survivor.artifactId)).toBe("must survive malformed registry");
   });
 
   it("throws persistence failures so callers can keep the original tool result", async () => {

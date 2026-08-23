@@ -109,9 +109,9 @@ pi
 
 启动后 Context Vault 会自动工作：
 
-1. `read`、`bash` 等工具返回的文本先经过脱敏并归档。
-2. 大小不超过 `archiveThresholdBytes` 的结果保持原样进入对话，但仍可搜索。
-3. 更大的结果在归档成功后替换为 JSON receipt。
+1. `read`、`bash` 等工具返回的文本先按 `archivePolicy` 判断；符合条件的结果再脱敏并归档。
+2. 已归档且大小不超过 `replacementThresholdBytes` 的结果保持原样进入对话，并且可搜索。
+3. 更大且符合归档条件的结果仅在归档成功后替换为 JSON receipt。
 4. 估算上下文超过 `softContextRatio` 时，较旧的已归档工具结果在模型可见副本中变成 receipt；最新
    `hotObservationCount` 个结果继续保留完整内容。
 5. 在模型调用和显式 Map 查询前，Repo Map 会检查 pending 文件变更与 Git HEAD。
@@ -223,8 +223,8 @@ Context Vault 注册一个 slash command 和四个子命令：
 - `status` 只读，报告 runtime 和各组件状态。
 - `rebuild` 执行完整 Repo Map 重建并原子激活新 generation。可在修复权限、非法配置或 stale Map 后使用；它
   不会修改项目源码。
-- `gc` 根据 `retentionDays` 和 `projectQuotaBytes` 清理归档证据。这可能让旧 session 中的 receipt 无法继续
-  恢复；只有在确认不再需要这些证据时才运行。
+- `gc` 根据 `retentionDays` 和 `projectQuotaBytes` 清理归档证据。活动 session tree/current branch 的 receipt
+  与所有存活项目本地 session lease 的 metadata 所引用 artifact 会受保护；若仅受保护证据就超过配额，则报告配额未满足而不删除。
 - `doctor` 增加整体 `healthy`/`degraded` 结论，并检查生成状态是否位于项目树之外。
 
 命令结果显示为 Pi UI notification。未知子命令只显示 usage，不修改状态。
@@ -236,7 +236,10 @@ Context Vault 注册一个 slash command 和四个子命令：
 
 ```json
 {
-  "archiveThresholdBytes": 32768,
+  "archivePolicy": "errors-and-large",
+  "archiveMinBytes": 16384,
+  "replacementThresholdBytes": 32768,
+  "archiveErrorsAlways": true,
   "receiptMaxBytes": 4096,
   "hotObservationCount": 8,
   "softContextRatio": 0.75,
@@ -251,7 +254,11 @@ Context Vault 注册一个 slash command 和四个子命令：
 
 | 字段 | 默认值 | 校验与作用 |
 |---|---:|---|
-| `archiveThresholdBytes` | `16384` | 正整数；更大的文本结果在归档后替换为 receipt。 |
+| `archivePolicy` | `"all"` | `all`、`errors-and-large` 或 `off`；在存储前决定归档资格。 |
+| `archiveMinBytes` | `16384` | 非负安全整数；`errors-and-large` 的包含式大型结果边界。 |
+| `replacementThresholdBytes` | `16384` | 正安全整数；严格大于它的已归档结果替换为 receipt。 |
+| `archiveErrorsAlways` | `true` | 在 `errors-and-large` 下归档短错误；不会覆盖 `off`。 |
+| `archiveThresholdBytes` | — | `replacementThresholdBytes` 的废弃别名；两者同时配置会报错。 |
 | `receiptMaxBytes` | `4096` | 至少 512 的整数；即时/历史 receipt 最大字节数。 |
 | `hotObservationCount` | `6` | 正整数；历史缩减时保留的最新工具结果数量。 |
 | `softContextRatio` | `0.75` | 严格位于 0 和 1 之间；估算上下文缩减触发比例。 |
@@ -331,8 +338,8 @@ pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
 
 ### 大型结果没有替换成 receipt
 
-- 只有 UTF-8 bytes 严格大于 `archiveThresholdBytes` 才会替换。
-- 小型文本仍会归档，但在对话中保持原样。
+- 只有已归档结果的 UTF-8 bytes 严格大于 `replacementThresholdBytes` 才会替换。
+- `archivePolicy` 可能使结果不归档；此时原文仍可见，但 Context Vault 无法搜索或缩减它。
 - 纯图片结果与 Context Vault 自身 tools 的结果不会再次归档。
 - 归档失败时会刻意保留原结果；请通过 `context_vault_status` 检查失败记录。
 

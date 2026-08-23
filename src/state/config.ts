@@ -1,9 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+export type ArchivePolicy = "all" | "errors-and-large" | "off";
 export type MapInjectionMode = "off" | "once-per-user-turn" | "every-llm-call";
 
 export interface ContextVaultConfig {
+  archivePolicy: ArchivePolicy;
+  archiveMinBytes: number;
+  replacementThresholdBytes: number;
+  archiveErrorsAlways: boolean;
+  /** @deprecated Use replacementThresholdBytes. Kept normalized to the effective replacement threshold. */
   archiveThresholdBytes: number;
   receiptMaxBytes: number;
   hotObservationCount: number;
@@ -22,6 +28,10 @@ export interface ContextVaultConfig {
 }
 
 export const DEFAULT_CONFIG: Readonly<ContextVaultConfig> = Object.freeze({
+  archivePolicy: "all",
+  archiveMinBytes: 16 * 1024,
+  replacementThresholdBytes: 16 * 1024,
+  archiveErrorsAlways: true,
   archiveThresholdBytes: 16 * 1024,
   receiptMaxBytes: 4 * 1024,
   hotObservationCount: 6,
@@ -38,10 +48,10 @@ export const DEFAULT_CONFIG: Readonly<ContextVaultConfig> = Object.freeze({
   debugRequestFingerprints: false,
 });
 
+const ARCHIVE_POLICIES = new Set<ArchivePolicy>(["all", "errors-and-large", "off"]);
 const MAP_INJECTION_MODES = new Set<MapInjectionMode>(["off", "once-per-user-turn", "every-llm-call"]);
 
 const POSITIVE_INTEGERS = new Set<keyof ContextVaultConfig>([
-  "archiveThresholdBytes",
   "receiptMaxBytes",
   "hotObservationCount",
   "projectQuotaBytes",
@@ -52,11 +62,16 @@ const POSITIVE_INTEGERS = new Set<keyof ContextVaultConfig>([
   "mapQuotaBytes",
 ]);
 
-const POSITIVE_SAFE_INTEGERS = new Set<keyof ContextVaultConfig>(["mapGenerationRetention", "mapQuotaBytes"]);
+const POSITIVE_SAFE_INTEGERS = new Set<keyof ContextVaultConfig>([
+  "archiveThresholdBytes",
+  "replacementThresholdBytes",
+  "mapGenerationRetention",
+  "mapQuotaBytes",
+]);
 
 const STRING_ARRAYS = new Set<keyof ContextVaultConfig>(["mapExcludePatterns"]);
 
-const BOOLEAN_OPTIONS = new Set<keyof ContextVaultConfig>(["debugRequestFingerprints"]);
+const BOOLEAN_OPTIONS = new Set<keyof ContextVaultConfig>(["archiveErrorsAlways", "debugRequestFingerprints"]);
 
 export async function loadConfig(projectRoot: string): Promise<ContextVaultConfig> {
   const configPath = join(projectRoot, ".pi", "context-vault.json");
@@ -73,6 +88,10 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
     }
   }
 
+  if ("archiveThresholdBytes" in override && "replacementThresholdBytes" in override) {
+    throw new Error("archiveThresholdBytes and replacementThresholdBytes cannot both be configured");
+  }
+
   const config = {
     ...DEFAULT_CONFIG,
     mapExcludePatterns: [...DEFAULT_CONFIG.mapExcludePatterns],
@@ -85,6 +104,13 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
         throw new Error(`${key} must be an array of non-empty strings`);
       }
       config.mapExcludePatterns = [...value];
+      continue;
+    }
+    if (typedKey === "archivePolicy") {
+      if (typeof value !== "string" || !ARCHIVE_POLICIES.has(value as ArchivePolicy)) {
+        throw new Error("archivePolicy must be one of all, errors-and-large, off");
+      }
+      config.archivePolicy = value as ArchivePolicy;
       continue;
     }
     if (typedKey === "mapInjectionMode") {
@@ -102,6 +128,9 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
       continue;
     }
     if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${key} must be a finite number`);
+    if (typedKey === "archiveMinBytes" && (!Number.isSafeInteger(value) || value < 0)) {
+      throw new Error("archiveMinBytes must be a non-negative safe integer");
+    }
     if (POSITIVE_SAFE_INTEGERS.has(typedKey) && (!Number.isSafeInteger(value) || value <= 0)) {
       throw new Error(`${key} must be a positive safe integer`);
     }
@@ -112,6 +141,12 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
       throw new Error(`${key} must be between 0 and 1`);
     }
     (config[typedKey] as number) = value;
+  }
+
+  if ("archiveThresholdBytes" in override) {
+    config.replacementThresholdBytes = config.archiveThresholdBytes;
+  } else if ("replacementThresholdBytes" in override) {
+    config.archiveThresholdBytes = config.replacementThresholdBytes;
   }
   if (config.targetContextRatio >= config.softContextRatio) {
     throw new Error("targetContextRatio must be lower than softContextRatio");

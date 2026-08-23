@@ -7,7 +7,7 @@ import type {
   ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { ArtifactStore } from "./artifacts/store.js";
+import { type ActiveSessionLease, ArtifactStore } from "./artifacts/store.js";
 import { reduceContext } from "./context/reduction.js";
 import {
   MAX_QUERY_LENGTH,
@@ -46,6 +46,7 @@ interface RuntimeState {
   state?: ProjectStatePaths;
   config?: ContextVaultConfig;
   store?: ArtifactStore;
+  activeSessionLease?: ActiveSessionLease;
   observations?: ObservationRuntime;
   repoMap?: RepoMapController;
   repoMapAvailable: boolean;
@@ -87,6 +88,51 @@ function textContent(event: ToolResultEvent): string | undefined {
   );
   if (blocks.length === 0) return undefined;
   return blocks.map((block) => block.text).join("\n");
+}
+
+const ARTIFACT_ID_PATTERN = /^[a-f0-9]{64}$/;
+
+function receiptArtifactIds(value: unknown, target: Set<string>, seen = new Set<object>()): void {
+  if (typeof value === "string") {
+    try {
+      receiptArtifactIds(JSON.parse(value) as unknown, target, seen);
+    } catch {
+      // Canonical receipts are complete JSON text blocks. Other strings cannot
+      // carry a structured receipt reference.
+    }
+    return;
+  }
+  if (value === null || typeof value !== "object" || seen.has(value)) return;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) receiptArtifactIds(item, target, seen);
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.type === "context_vault_observation_receipt") {
+    const evidence = record.evidence;
+    if (evidence !== null && typeof evidence === "object") {
+      const artifactId = (evidence as Record<string, unknown>).artifactId;
+      if (typeof artifactId === "string" && ARTIFACT_ID_PATTERN.test(artifactId)) target.add(artifactId);
+    }
+    if (typeof record.hash === "string" && ARTIFACT_ID_PATTERN.test(record.hash)) target.add(record.hash);
+  }
+  for (const child of Object.values(record)) receiptArtifactIds(child, target, seen);
+}
+
+function explicitArtifactReferences(sessionManager: ExtensionCommandContext["sessionManager"]): Set<string> {
+  // getEntries covers every branch in the canonical session file; getBranch
+  // explicitly covers the current leaf path. If either cannot be enumerated,
+  // propagate the error so GC performs no deletion. Active-session metadata is
+  // added by ArtifactStore while holding the same lock used for deletion.
+  const entries = sessionManager.getEntries();
+  const branch = sessionManager.getBranch();
+  if (!Array.isArray(entries) || !Array.isArray(branch)) throw new Error("active session references are unavailable");
+
+  const referenced = new Set<string>();
+  receiptArtifactIds(entries, referenced);
+  receiptArtifactIds(branch, referenced);
+  return referenced;
 }
 
 function activeObservation(state: RuntimeState): ObservationRuntime {
@@ -255,6 +301,8 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
 
   const dispose = async (): Promise<void> => {
     const map = runtime.repoMap;
+    const store = runtime.store;
+    const activeSessionLease = runtime.activeSessionLease;
     runtime = {
       initialized: false,
       repoMapAvailable: false,
@@ -267,6 +315,14 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         await map.close();
       } catch {
         // Lifecycle cleanup is best effort and must not prevent Pi shutdown/reload.
+      }
+    }
+    if (store && activeSessionLease) {
+      try {
+        await store.releaseActiveSession(activeSessionLease);
+      } catch {
+        // A failed release retains protection. Later GC fails closed if the
+        // registry itself is unreadable, and demonstrably dead owners are cleaned.
       }
     }
   };
@@ -288,13 +344,20 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         metadataRoot: next.state.metadataRoot,
         telemetry: next.telemetry,
       });
+      const sessionId = ctx.sessionManager.getSessionId();
+      // Register under the artifact metadata lock before ObservationRuntime can
+      // archive anything for this current or resumed Pi session.
+      next.activeSessionLease = await next.store.registerActiveSession(sessionId);
       next.observations = new ObservationRuntime({
         store: next.store,
-        archiveThresholdBytes: next.config.archiveThresholdBytes,
+        archivePolicy: next.config.archivePolicy,
+        archiveMinBytes: next.config.archiveMinBytes,
+        replacementThresholdBytes: next.config.replacementThresholdBytes,
+        archiveErrorsAlways: next.config.archiveErrorsAlways,
         receiptMaxBytes: next.config.receiptMaxBytes,
         projectId: next.state.projectId,
         projectRoot: next.state.projectRoot,
-        sessionId: ctx.sessionManager.getSessionId(),
+        sessionId,
         telemetry: next.telemetry,
       });
       next.initialized = true;
@@ -574,9 +637,11 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         try {
           if (!runtime.store || !runtime.config) throw new Error("artifact store is not initialized");
           if (!runtime.repoMap?.maintenance) throw new Error("repository map maintenance is not initialized");
+          const referencedArtifactIds = explicitArtifactReferences(ctx.sessionManager);
           const artifacts = await runtime.store.garbageCollect({
             retentionDays: runtime.config.retentionDays,
             quotaBytes: runtime.config.projectQuotaBytes,
+            referencedArtifactIds,
           });
           const repoMap = await runtime.repoMap.maintenance();
           notify(ctx, { artifacts, repoMap });

@@ -74,11 +74,59 @@ describe("project state", () => {
 
     const config = await loadConfig(root);
     expect(config.archiveThresholdBytes).toBe(2048);
+    expect(config.replacementThresholdBytes).toBe(2048);
+    expect(config.archivePolicy).toBe("all");
+    expect(config.archiveMinBytes).toBe(16 * 1024);
+    expect(config.archiveErrorsAlways).toBe(true);
     expect(config.hotObservationCount).toBe(2);
     expect(config.mapExcludePatterns).toEqual(["generated/**"]);
     expect(config.mapGenerationRetention).toBe(3);
     expect(config.mapQuotaBytes).toBe(128 * 1024 * 1024);
     expect(config.receiptMaxBytes).toBeGreaterThan(0);
+  });
+
+  it("migrates the legacy threshold and rejects an ambiguous legacy/new threshold conflict", async () => {
+    const root = await tempRoot();
+    await mkdir(join(root, ".pi"));
+    const path = join(root, ".pi", "context-vault.json");
+
+    await writeFile(path, JSON.stringify({ archiveThresholdBytes: 2048 }));
+    await expect(loadConfig(root)).resolves.toMatchObject({
+      archiveThresholdBytes: 2048,
+      replacementThresholdBytes: 2048,
+    });
+
+    await writeFile(path, JSON.stringify({ replacementThresholdBytes: 4096 }));
+    await expect(loadConfig(root)).resolves.toMatchObject({
+      archiveThresholdBytes: 4096,
+      replacementThresholdBytes: 4096,
+    });
+
+    await writeFile(path, JSON.stringify({ archiveThresholdBytes: 2048, replacementThresholdBytes: 4096 }));
+    await expect(loadConfig(root)).rejects.toThrow("cannot both be configured");
+  });
+
+  it("accepts the archive policy matrix and validates its options", async () => {
+    const root = await tempRoot();
+    await mkdir(join(root, ".pi"));
+    const path = join(root, ".pi", "context-vault.json");
+
+    for (const archivePolicy of ["all", "errors-and-large", "off"]) {
+      await writeFile(
+        path,
+        JSON.stringify({ archivePolicy, archiveMinBytes: 0, replacementThresholdBytes: 1, archiveErrorsAlways: false }),
+      );
+      await expect(loadConfig(root)).resolves.toMatchObject({
+        archivePolicy,
+        archiveMinBytes: 0,
+        replacementThresholdBytes: 1,
+        archiveErrorsAlways: false,
+      });
+    }
+    await writeFile(path, JSON.stringify({ archivePolicy: "sometimes" }));
+    await expect(loadConfig(root)).rejects.toThrow("archivePolicy must be one of");
+    await writeFile(path, JSON.stringify({ archiveMinBytes: -1 }));
+    await expect(loadConfig(root)).rejects.toThrow("archiveMinBytes must be a non-negative safe integer");
   });
 
   it("rejects invalid configuration values", async () => {
