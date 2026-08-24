@@ -17,6 +17,7 @@ const UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 const OWNER_FILE_PATTERN = new RegExp(`^owner-(${UUID_PATTERN})\\.json$`);
 const PREPARATION_SUFFIX_PATTERN = new RegExp(`^\\.prepare-(${UUID_PATTERN})$`);
 const REPLACEMENT_DIRECTORY_ERRORS = new Set(["EEXIST", "ENOTEMPTY"]);
+const TRANSIENT_LOCK_INSPECTION_ERRORS = new Set(["EACCES", "EBUSY", "EPERM"]);
 const MAX_OWNER_METADATA_BYTES = 4 * 1024;
 const ABANDONED_PREPARATION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
@@ -44,6 +45,10 @@ function errorCode(error: unknown): string {
 
 function isUnsupportedDirectorySyncError(error: unknown): boolean {
   return UNSUPPORTED_DIRECTORY_SYNC_ERRORS.has(errorCode(error));
+}
+
+function isTransientLockInspectionError(error: unknown): boolean {
+  return TRANSIENT_LOCK_INSPECTION_ERRORS.has(errorCode(error));
 }
 
 async function syncDirectory(path: string): Promise<void> {
@@ -189,6 +194,7 @@ async function readBoundedOwnerRecord(ownerPath: string, ownerFilename: string):
     before = await lstat(ownerPath, { bigint: true });
   } catch (error) {
     if (errorCode(error) === "ENOENT") return { kind: "missing" };
+    if (isTransientLockInspectionError(error)) return { kind: "invalid" };
     throw error;
   }
   if (before.isSymbolicLink() || !before.isFile() || before.size > BigInt(MAX_OWNER_METADATA_BYTES)) {
@@ -206,7 +212,7 @@ async function readBoundedOwnerRecord(ownerPath: string, ownerFilename: string):
     handle = await open(ownerPath, flags);
   } catch (error) {
     if (errorCode(error) === "ENOENT") return { kind: "missing" };
-    if (["EACCES", "ELOOP", "EISDIR", "EINVAL", "ENXIO", "EPERM"].includes(errorCode(error))) {
+    if (isTransientLockInspectionError(error) || ["ELOOP", "EISDIR", "EINVAL", "ENXIO"].includes(errorCode(error))) {
       return { kind: "invalid" };
     }
     throw error;
@@ -329,6 +335,7 @@ async function recoverStaleLock(path: string, staleMs: number): Promise<boolean>
     lockInfo = await lstat(path);
   } catch (error) {
     if (errorCode(error) === "ENOENT") return true;
+    if (isTransientLockInspectionError(error)) return false;
     throw error;
   }
   // Legacy lock files, symlinks, and other unexpected objects fail safe. Moving
@@ -341,6 +348,7 @@ async function recoverStaleLock(path: string, staleMs: number): Promise<boolean>
     entries = await readdir(path);
   } catch (error) {
     if (errorCode(error) === "ENOENT") return true;
+    if (isTransientLockInspectionError(error)) return false;
     throw error;
   }
   if (entries.length === 0) return removeEmptyLockDirectory(path);
@@ -367,7 +375,7 @@ async function recoverStaleLock(path: string, staleMs: number): Promise<boolean>
   return removeEmptyLockDirectory(path);
 }
 
-type FixedLockTarget = "missing" | "directory" | "unsafe";
+type FixedLockTarget = "missing" | "directory" | "unsafe" | "contended";
 
 async function inspectFixedLockTarget(path: string): Promise<FixedLockTarget> {
   try {
@@ -376,6 +384,7 @@ async function inspectFixedLockTarget(path: string): Promise<FixedLockTarget> {
     return "directory";
   } catch (error) {
     if (errorCode(error) === "ENOENT") return "missing";
+    if (isTransientLockInspectionError(error)) return "contended";
     throw error;
   }
 }

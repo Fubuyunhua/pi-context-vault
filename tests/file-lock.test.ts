@@ -23,6 +23,9 @@ const fsControls = vi.hoisted(() => ({
   renameGate: undefined as undefined | { reached: () => void; wait: Promise<void> },
   rmdirGate: undefined as undefined | { reached: () => void; wait: Promise<void> },
   ownerLstatSwap: undefined as undefined | ((path: string) => Promise<void>),
+  lstatErrors: undefined as undefined | { path: string; codes: string[] },
+  openErrors: undefined as undefined | { path: string; codes: string[] },
+  lockReaddirErrors: undefined as undefined | { path: string; codes: string[] },
   disappearTargetOnRenameError: false,
   replaceLegacyFileOnRename: false,
   publicationRenameAttempts: 0,
@@ -35,9 +38,27 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     ...actual,
     open: async (path: string, flags: string | number, mode?: number) => {
       if (flags === "r") fsControls.directorySyncAttempts.push(path);
+      const injected = fsControls.openErrors;
+      if (injected?.path === path) {
+        const code = injected.codes.shift();
+        if (code !== undefined) {
+          const error = new Error(`mocked open ${code}`) as NodeJS.ErrnoException;
+          error.code = code;
+          throw error;
+        }
+      }
       return actual.open(path, flags as "r", mode);
     },
     lstat: async (path: string, options?: { bigint?: boolean }) => {
+      const injected = fsControls.lstatErrors;
+      if (injected?.path === path) {
+        const code = injected.codes.shift();
+        if (code !== undefined) {
+          const error = new Error(`mocked lstat ${code}`) as NodeJS.ErrnoException;
+          error.code = code;
+          throw error;
+        }
+      }
       const result = options?.bigint ? await actual.lstat(path, { bigint: true }) : await actual.lstat(path);
       const swap = fsControls.ownerLstatSwap;
       if (swap !== undefined && /owner-[0-9a-f-]{36}\.json$/.test(path)) {
@@ -45,6 +66,18 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         await swap(path);
       }
       return result;
+    },
+    readdir: async (path: string) => {
+      const injected = fsControls.lockReaddirErrors;
+      if (injected?.path === path) {
+        const code = injected.codes.shift();
+        if (code !== undefined) {
+          const error = new Error(`mocked readdir ${code}`) as NodeJS.ErrnoException;
+          error.code = code;
+          throw error;
+        }
+      }
+      return actual.readdir(path);
     },
     rename: async (oldPath: string, newPath: string) => {
       if (oldPath.includes(".prepare-")) {
@@ -143,12 +176,42 @@ async function missingPid(): Promise<number> {
   throw new Error("Could not find a demonstrably absent PID");
 }
 
+type InspectionFaultPoint = "fixed-target lstat" | "lock-directory readdir" | "owner-file lstat" | "owner-file open";
+
+const INSPECTION_FAULT_POINTS: InspectionFaultPoint[] = [
+  "fixed-target lstat",
+  "lock-directory readdir",
+  "owner-file lstat",
+  "owner-file open",
+];
+const WINDOWS_TRANSIENT_INSPECTION_ERRORS = ["EPERM", "EBUSY", "EACCES"];
+
+function injectInspectionErrors(
+  point: InspectionFaultPoint,
+  lockPath: string,
+  ownerPath: string,
+  codes: string[],
+): void {
+  if (point === "owner-file open") {
+    fsControls.openErrors = { path: ownerPath, codes };
+    return;
+  }
+  if (point === "lock-directory readdir") {
+    fsControls.lockReaddirErrors = { path: lockPath, codes };
+    return;
+  }
+  fsControls.lstatErrors = { path: point === "fixed-target lstat" ? lockPath : ownerPath, codes };
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   fsControls.renameErrors.splice(0);
   fsControls.renameGate = undefined;
   fsControls.rmdirGate = undefined;
   fsControls.ownerLstatSwap = undefined;
+  fsControls.lstatErrors = undefined;
+  fsControls.openErrors = undefined;
+  fsControls.lockReaddirErrors = undefined;
   fsControls.disappearTargetOnRenameError = false;
   fsControls.replaceLegacyFileOnRename = false;
   fsControls.publicationRenameAttempts = 0;
@@ -203,6 +266,72 @@ describe("race-safe file locks", () => {
 
     await Promise.all([enter(), enter()]);
     expect(maximumHolders).toBe(1);
+  });
+
+  it.each(
+    INSPECTION_FAULT_POINTS.flatMap((point) =>
+      WINDOWS_TRANSIENT_INSPECTION_ERRORS.map((code) => [point, code] as const),
+    ),
+  )("retries transient Windows %s %s errors", async (point, code) => {
+    const root = await tempRoot();
+    const lockPath = join(root, "writer.lock");
+    const ownerPath = await writeOwner(lockPath, "00000000-0000-4000-8000-000000000021", await missingPid());
+    injectInspectionErrors(point, lockPath, ownerPath, [code]);
+
+    await expect(
+      withFileLock(lockPath, async () => "recovered", { retryMs: 2, staleMs: 10, timeoutMs: 200 }),
+    ).resolves.toBe("recovered");
+  });
+
+  it.each(
+    INSPECTION_FAULT_POINTS.flatMap((point) =>
+      WINDOWS_TRANSIENT_INSPECTION_ERRORS.map((code) => [point, code] as const),
+    ),
+  )("times out safely on persistent Windows %s %s errors", async (point, code) => {
+    const root = await tempRoot();
+    const lockPath = join(root, "writer.lock");
+    const owner = "00000000-0000-4000-8000-000000000022";
+    const ownerPath = await writeOwner(lockPath, owner, await missingPid());
+    injectInspectionErrors(
+      point,
+      lockPath,
+      ownerPath,
+      Array.from({ length: 100 }, () => code),
+    );
+    let entered = false;
+
+    await expect(
+      withFileLock(
+        lockPath,
+        async () => {
+          entered = true;
+        },
+        { retryMs: 2, staleMs: 10, timeoutMs: 20 },
+      ),
+    ).rejects.toThrow("Timed out waiting for state lock");
+    expect(entered).toBe(false);
+    await expect(readFile(ownerPath, "utf8")).resolves.toContain(owner);
+  });
+
+  it.each(INSPECTION_FAULT_POINTS)("propagates an unknown %s error without removing the owner", async (point) => {
+    const root = await tempRoot();
+    const lockPath = join(root, "writer.lock");
+    const owner = "00000000-0000-4000-8000-000000000023";
+    const ownerPath = await writeOwner(lockPath, owner, await missingPid());
+    injectInspectionErrors(point, lockPath, ownerPath, ["EIO"]);
+    let entered = false;
+
+    await expect(
+      withFileLock(
+        lockPath,
+        async () => {
+          entered = true;
+        },
+        { retryMs: 2, staleMs: 10, timeoutMs: 20 },
+      ),
+    ).rejects.toMatchObject({ code: "EIO" });
+    expect(entered).toBe(false);
+    await expect(readFile(ownerPath, "utf8")).resolves.toContain(owner);
   });
 
   it("cannot remove a replacement owner during stale recovery", async () => {
