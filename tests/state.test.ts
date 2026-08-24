@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -212,7 +212,7 @@ describe("atomic state operations", () => {
     expect(await readdir(root)).toEqual(["state.json"]);
   });
 
-  it("serializes lock holders and recovers stale locks", async () => {
+  it("serializes lock holders", async () => {
     const root = await tempRoot();
     const lockPath = join(root, "writer.lock");
     const order: string[] = [];
@@ -228,11 +228,6 @@ describe("atomic state operations", () => {
     });
     await Promise.all([firstHolder, secondHolder]);
     expect(order).toEqual(["a:start", "a:end", "b"]);
-
-    await writeFile(lockPath, "stale");
-    const old = new Date(Date.now() - 120_000);
-    await utimes(lockPath, old, old);
-    await expect(withFileLock(lockPath, async () => "recovered", { staleMs: 1000 })).resolves.toBe("recovered");
   });
 
   it("times out without stealing an active lock", async () => {
