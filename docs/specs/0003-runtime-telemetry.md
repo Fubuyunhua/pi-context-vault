@@ -67,8 +67,8 @@ Fields (names fixed by this Spec):
 | Group | Fields |
 |---|---|
 | Capsule | `capsuleBuildCount`, `capsuleBytes`, `capsuleHashChangeCount`, `capsuleInsertionIndex`, `repoMapAutomaticQueryCount` |
-| Repo Map | `repoMapQueryCount`, `repoMapQueryDurationMsTotal`, `ensureFreshCount`, `ensureFreshDurationMsTotal`, `filesReindexed`, `searchIndexBuildCount` |
-| Generation | `generationCreatedCount`, `generationBytesWritten`, `repoMapTotalBytes`, `maintenanceFailureCount` |
+| Repo Map | `repoMapQueryCount`, `repoMapQueryDurationMsTotal`, `ensureFreshCount`, `ensureFreshDurationMsTotal`, `filesReindexed`, `gitHeadCount`, `gitHeadDurationMsTotal`, `gitDirtyCount`, `gitDirtyDurationMsTotal`, `gitDiffCount`, `gitDiffDurationMsTotal`, `searchIndexBuildCount`, `searchIndexBuildDurationMsTotal` |
+| Generation | `generationWriteCount`, `generationWriteDurationMsTotal`, `generationCreatedCount`, `generationBytesWritten`, `repoMapTotalBytes`, `generationPruneCount`, `generationPruneDurationMsTotal`, `generationPrunedFiles`, `generationPrunedBytes`, `maintenanceFailureCount` |
 | Observation | `archiveAttemptCount`, `archiveSuccessCount`, `archiveFailureCount`, `archiveDeduplicatedCount`, `archiveDurationMsTotal`, `metadataReadDurationMsTotal`, `metadataWriteDurationMsTotal` |
 | Reduction | `reductionInvocationCount`, `reductionTriggeredCount`, `reducedObservationCount`, `estimatedTokensBeforeTotal`, `estimatedTokensAfterTotal`, `targetReachedCount`, `reductionDurationMsTotal` |
 
@@ -89,11 +89,27 @@ Definitions:
   invocations (explicit and query-internal) and total wall time.
 - `filesReindexed` — total number of single-file indexing operations
   (`indexRepoMapFile` calls in the fast-update and dirty-reconciliation paths).
-- `searchIndexBuildCount` — number of `RepoMapSearch` (MiniSearch) builds.
-- `generationCreatedCount` — number of successfully activated generations.
-- `generationBytesWritten` — cumulative bytes of generation files written.
-- `repoMapTotalBytes` — running estimate of generation bytes on disk (incremented
-  on writes; never scanned recursively).
+- `gitHeadCount` / `gitHeadDurationMsTotal`, `gitDirtyCount` /
+  `gitDirtyDurationMsTotal`, and `gitDiffCount` / `gitDiffDurationMsTotal` — Git
+  subprocess attempts, including failures, and their cumulative durations.
+- `searchIndexBuildCount` / `searchIndexBuildDurationMsTotal` — attempted
+  `RepoMapSearch` (MiniSearch) builds, including failed construction, and their
+  cumulative duration.
+- `generationWriteCount` / `generationWriteDurationMsTotal` — attempted
+  generation-file plus active-pointer write operations, including failures, and
+  their cumulative duration.
+- `generationCreatedCount` — number of generation files successfully activated
+  by persisting their active pointers.
+- `generationBytesWritten` — cumulative bytes of successfully persisted
+  generation files, including files left orphaned by a later active-pointer
+  failure.
+- `repoMapTotalBytes` — current generation-file bytes on disk: incremented as
+  soon as a generation file is persisted, seeded/reconciled by listing and
+  statting only the flat generation directory, and decremented on pruning.
+- `generationPruneCount` / `generationPruneDurationMsTotal` — pruning attempts,
+  including failures, and their cumulative duration.
+- `generationPrunedFiles` / `generationPrunedBytes` — cumulative generation
+  files and bytes successfully removed by pruning.
 - `maintenanceFailureCount` — number of `#degrade` transitions (flush/rebuild
   failures).
 - `archiveAttemptCount` — archiving attempts (one per `virtualize` call).

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -15,6 +15,11 @@ import {
 } from "../src/repo-map/runtime.js";
 import { atomicWriteFile } from "../src/state/atomic.js";
 import { Telemetry } from "../src/telemetry.js";
+
+function tickingClock(): () => number {
+  let tick = 0;
+  return () => tick++;
+}
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -800,7 +805,7 @@ describe("incremental repository map runtime", () => {
     await runtime.close();
   });
 
-  it("keeps the previously activated generation intact when activation crashes", async () => {
+  it("accounts for orphan bytes after activation failure and reconciles them on later cleanup", async () => {
     const { root, stateRoot } = await fixture({ "src/value.ts": "export const stableValue = 1;" });
     const telemetry = new Telemetry();
     let failActive = false;
@@ -808,6 +813,7 @@ describe("incremental repository map runtime", () => {
       projectRoot: root,
       stateRoot,
       watch: false,
+      mapGenerationRetention: 1,
       atomicWriter: async (path, content) => {
         if (failActive && path.endsWith("active.json")) throw new Error("simulated activation crash");
         await atomicWriteFile(path, content);
@@ -815,6 +821,7 @@ describe("incremental repository map runtime", () => {
       telemetry,
     });
     await runtime.start();
+    const generationsRoot = join(stateRoot, "generations");
     const before = await readFile(join(stateRoot, "active.json"), "utf8");
     const telemetryBefore = telemetry.snapshot();
     failActive = true;
@@ -825,24 +832,53 @@ describe("incremental repository map runtime", () => {
     expect(runtime.status()).toMatchObject({ freshness: "stale", error: "simulated activation crash" });
     expect(await readFile(join(stateRoot, "active.json"), "utf8")).toBe(before);
     expect((await loadActiveRepoMapGeneration(stateRoot)).snapshot.files[0]?.symbols[0]?.name).toBe("stableValue");
+    const firstOrphanBytes = (await stat(join(generationsRoot, "2.json"))).size;
+    const bytesAfterFirstFailure = (
+      await Promise.all(
+        (
+          await readdir(generationsRoot)
+        )
+          .filter((path) => path.endsWith(".json"))
+          .map(async (path) => (await stat(join(generationsRoot, path))).size),
+      )
+    ).reduce((total, bytes) => total + bytes, 0);
     expect(telemetry.snapshot()).toMatchObject({
       generationCreatedCount: telemetryBefore.generationCreatedCount,
-      generationBytesWritten: telemetryBefore.generationBytesWritten,
-      repoMapTotalBytes: telemetryBefore.repoMapTotalBytes,
+      generationBytesWritten: telemetryBefore.generationBytesWritten + firstOrphanBytes,
+      repoMapTotalBytes: bytesAfterFirstFailure,
     });
+
     const degraded = await runtime.query("changedValue");
     expect(degraded.freshness).toBe("stale");
     expect(degraded.fallbackEvidence.some((evidence) => evidence.kind === "source")).toBe(true);
+    const secondOrphanBytes = (await stat(join(generationsRoot, "3.json"))).size;
+    const bytesAfterSecondFailure = (
+      await Promise.all(
+        (
+          await readdir(generationsRoot)
+        )
+          .filter((path) => path.endsWith(".json"))
+          .map(async (path) => (await stat(join(generationsRoot, path))).size),
+      )
+    ).reduce((total, bytes) => total + bytes, 0);
+    expect(telemetry.snapshot()).toMatchObject({
+      generationCreatedCount: telemetryBefore.generationCreatedCount,
+      generationBytesWritten: telemetryBefore.generationBytesWritten + firstOrphanBytes + secondOrphanBytes,
+      repoMapTotalBytes: bytesAfterSecondFailure,
+    });
 
     failActive = false;
-    const maintenance = await runtime.maintenance();
-    expect(maintenance.deletedGenerations).toEqual([]);
-    expect((await readdir(join(stateRoot, "generations"))).filter((path) => path.endsWith(".json")).sort()).toEqual([
-      "1.json",
-      "2.json",
-      "3.json",
-    ]);
-    expect((await loadActiveRepoMapGeneration(stateRoot)).generation).toBe(1);
+    await runtime.flush();
+    const active = await loadActiveRepoMapGeneration(stateRoot);
+    const remaining = (await readdir(generationsRoot)).filter((path) => path.endsWith(".json"));
+    const activeBytes = (await stat(join(generationsRoot, `${active.generation}.json`))).size;
+    expect(remaining).toEqual([`${active.generation}.json`]);
+    expect(telemetry.snapshot()).toMatchObject({
+      generationCreatedCount: telemetryBefore.generationCreatedCount + 1,
+      generationBytesWritten:
+        telemetryBefore.generationBytesWritten + firstOrphanBytes + secondOrphanBytes + activeBytes,
+      repoMapTotalBytes: activeBytes,
+    });
     await runtime.close();
   });
 
@@ -983,7 +1019,7 @@ describe("incremental repository map runtime", () => {
     await runtime.close();
   });
 
-  it("reports no-op maintenance failures without degrading the active map", async () => {
+  it("keeps telemetry recording failures out of maintenance and model-visible state", async () => {
     const { root, stateRoot } = await fixture({ "src/value.ts": "export const stableValue = 1;" });
     let failMaintenance = false;
     const telemetry = new (class extends Telemetry {
@@ -1002,10 +1038,10 @@ describe("incremental repository map runtime", () => {
     expect(runtime.status()).toMatchObject({
       freshness: "fresh",
       generation: 1,
-      maintenance: { error: "simulated maintenance failure" },
+      maintenance: { activeGeneration: 1, deletedGenerations: [] },
     });
     expect(runtime.status()).not.toHaveProperty("error");
-    expect(telemetry.snapshot().maintenanceFailureCount).toBe(failuresBefore + 1);
+    expect(telemetry.snapshot().maintenanceFailureCount).toBe(failuresBefore);
     expect((await runtime.query("stableValue")).results[0]?.path).toBe("src/value.ts");
     await runtime.close();
   });
@@ -1135,17 +1171,23 @@ describe("incremental repository map runtime", () => {
     await runtime.close();
   });
 
-  it("serializes concurrent runtimes sharing a state root and suppresses the equivalent activation", async () => {
+  it("serializes concurrent runtimes sharing state and reports one activation with its persisted bytes", async () => {
     const { root, stateRoot } = await fixture({ "src/value.ts": "export const sharedValue = 1;" });
-    const first = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
-    const second = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false });
+    const telemetry = new Telemetry();
+    const first = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false, telemetry });
+    const second = new RepoMapRuntime({ projectRoot: root, stateRoot, watch: false, telemetry });
 
     await Promise.all([first.start(), second.start()]);
 
     expect((await loadActiveRepoMapGeneration(stateRoot)).generation).toBe(1);
-    expect((await readdir(join(stateRoot, "generations"))).filter((path) => path.endsWith(".json"))).toEqual([
-      "1.json",
-    ]);
+    const generationsRoot = join(stateRoot, "generations");
+    expect((await readdir(generationsRoot)).filter((path) => path.endsWith(".json"))).toEqual(["1.json"]);
+    const bytes = (await stat(join(generationsRoot, "1.json"))).size;
+    expect(telemetry.snapshot()).toMatchObject({
+      generationCreatedCount: 1,
+      generationBytesWritten: bytes,
+      repoMapTotalBytes: bytes,
+    });
     await Promise.all([first.close(), second.close()]);
   });
 
@@ -1451,5 +1493,316 @@ describe("incremental repository map runtime", () => {
     expect(snapshot.repoMapTotalBytes).toBeGreaterThanOrEqual(snapshot.generationBytesWritten);
     expect(Number.isFinite(snapshot.ensureFreshDurationMsTotal)).toBe(true);
     await runtime.close();
+  });
+
+  it("telemetry: hot-path attempts use deterministic count and duration totals", async () => {
+    const { root, stateRoot } = await fixture({ "src/service.ts": "export const timedService = true;" });
+    const telemetry = new Telemetry();
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      telemetry,
+      monotonicNow: tickingClock(),
+    });
+
+    await runtime.start();
+    await runtime.query("timedService");
+
+    const snapshot = telemetry.snapshot();
+    expect(snapshot.gitHeadCount).toBeGreaterThan(0);
+    expect(snapshot.gitHeadDurationMsTotal).toBe(snapshot.gitHeadCount);
+    expect(snapshot.gitDirtyCount).toBeGreaterThan(0);
+    expect(snapshot.gitDirtyDurationMsTotal).toBe(snapshot.gitDirtyCount);
+    expect(snapshot.searchIndexBuildCount).toBe(1);
+    expect(snapshot.searchIndexBuildDurationMsTotal).toBe(1);
+    expect(snapshot.generationWriteCount).toBe(1);
+    expect(snapshot.generationWriteDurationMsTotal).toBe(1);
+    expect(snapshot.generationPruneCount).toBeGreaterThan(0);
+    expect(snapshot.generationPruneDurationMsTotal).toBe(snapshot.generationPruneCount);
+    await runtime.close();
+  });
+
+  it("telemetry: successful Git diff fallback records one deterministic attempt", async () => {
+    const { root, stateRoot } = await fixture({ "src/diff.ts": "export const beforeDiff = true;" });
+    const telemetry = new Telemetry();
+    let failActivation = false;
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      telemetry,
+      monotonicNow: tickingClock(),
+      atomicWriter: async (path, content) => {
+        if (failActivation && path.endsWith("active.json")) throw new Error("simulated activation failure");
+        await atomicWriteFile(path, content);
+      },
+    });
+    await runtime.start();
+    failActivation = true;
+    await writeFile(join(root, "src/diff.ts"), "export const afterDiff = true;");
+    runtime.notify("change", "src/diff.ts");
+    await runtime.flush();
+
+    const result = await runtime.query("afterDiff");
+    expect(result.fallbackEvidence.some((evidence) => evidence.kind === "git-diff")).toBe(true);
+    expect(telemetry.snapshot()).toMatchObject({ gitDiffCount: 1, gitDiffDurationMsTotal: 1 });
+    failActivation = false;
+    await runtime.close();
+  });
+
+  it("telemetry: failed Git, search, generation-write, and prune attempts count once", async () => {
+    const gitFailure = await fixture({ "src/service.ts": "export const failedGitService = true;" }, false);
+    const gitTelemetry = new Telemetry();
+    const gitRuntime = new RepoMapRuntime({
+      projectRoot: gitFailure.root,
+      stateRoot: gitFailure.stateRoot,
+      watch: false,
+      telemetry: gitTelemetry,
+      monotonicNow: tickingClock(),
+      async gitRunner() {
+        throw new Error("simulated git failure");
+      },
+      indexFileSystem: {
+        lstat,
+        async readFile(path) {
+          if (path === join(gitFailure.root, "src/service.ts")) throw new Error("simulated source failure");
+          return readFile(path);
+        },
+      },
+    });
+    await gitRuntime.start();
+    await writeFile(join(gitFailure.root, "src/service.ts"), "export const failedGitService = false;");
+    gitRuntime.notify("change", "src/service.ts");
+    await gitRuntime.flush();
+    await gitRuntime.query("failedGitService");
+    const failedGit = gitTelemetry.snapshot();
+    expect(failedGit.gitHeadCount).toBeGreaterThan(0);
+    expect(failedGit.gitHeadDurationMsTotal).toBe(failedGit.gitHeadCount);
+    expect(failedGit.gitDirtyCount).toBeGreaterThan(0);
+    expect(failedGit.gitDirtyDurationMsTotal).toBe(failedGit.gitDirtyCount);
+    expect(failedGit.gitDiffCount).toBe(1);
+    expect(failedGit.gitDiffDurationMsTotal).toBe(1);
+    await gitRuntime.close();
+
+    const searchFailure = await fixture({ "src/search.ts": "export const failedSearch = true;" });
+    const searchTelemetry = new Telemetry();
+    const searchRuntime = new RepoMapRuntime({
+      projectRoot: searchFailure.root,
+      stateRoot: searchFailure.stateRoot,
+      watch: false,
+      telemetry: searchTelemetry,
+      monotonicNow: tickingClock(),
+      searchFactory() {
+        throw new Error("simulated search construction failure");
+      },
+    });
+    await searchRuntime.start();
+    await expect(searchRuntime.queryCurrent("failedSearch")).rejects.toThrow("simulated search construction failure");
+    expect(searchTelemetry.snapshot()).toMatchObject({
+      searchIndexBuildCount: 1,
+      searchIndexBuildDurationMsTotal: 1,
+    });
+    await searchRuntime.close();
+
+    const writeFailure = await fixture({ "src/write.ts": "export const beforeWriteFailure = true;" });
+    const writeTelemetry = new Telemetry();
+    let failGenerationWrite = false;
+    const writeRuntime = new RepoMapRuntime({
+      projectRoot: writeFailure.root,
+      stateRoot: writeFailure.stateRoot,
+      watch: false,
+      telemetry: writeTelemetry,
+      monotonicNow: tickingClock(),
+      atomicWriter: async (path, content) => {
+        if (failGenerationWrite && path.endsWith("active.json")) throw new Error("simulated pointer failure");
+        await atomicWriteFile(path, content);
+      },
+    });
+    await writeRuntime.start();
+    const beforeWrite = writeTelemetry.snapshot();
+    failGenerationWrite = true;
+    await writeFile(join(writeFailure.root, "src/write.ts"), "export const afterWriteFailure = true;");
+    writeRuntime.notify("change", "src/write.ts");
+    await writeRuntime.flush();
+    const afterWrite = writeTelemetry.snapshot();
+    expect(afterWrite.generationWriteCount).toBe(beforeWrite.generationWriteCount + 1);
+    expect(afterWrite.generationWriteDurationMsTotal).toBe(beforeWrite.generationWriteDurationMsTotal + 1);
+    expect(afterWrite.generationCreatedCount).toBe(beforeWrite.generationCreatedCount);
+    failGenerationWrite = false;
+    await writeRuntime.close();
+
+    const pruneFailure = await fixture({ "src/prune.ts": "export const pruneFailure = true;" });
+    const pruneTelemetry = new Telemetry();
+    const pruneRuntime = new RepoMapRuntime({
+      projectRoot: pruneFailure.root,
+      stateRoot: pruneFailure.stateRoot,
+      watch: false,
+      telemetry: pruneTelemetry,
+      monotonicNow: tickingClock(),
+    });
+    await pruneRuntime.start();
+    await symlink("missing-generation.json", join(pruneFailure.stateRoot, "generations", "2.json"));
+    const beforePrune = pruneTelemetry.snapshot();
+    await expect(pruneRuntime.maintenance()).rejects.toThrow();
+    const afterPrune = pruneTelemetry.snapshot();
+    expect(afterPrune.generationPruneCount).toBe(beforePrune.generationPruneCount + 1);
+    expect(afterPrune.generationPruneDurationMsTotal).toBe(beforePrune.generationPruneDurationMsTotal + 1);
+    expect(afterPrune.generationPrunedFiles).toBe(beforePrune.generationPrunedFiles);
+    expect(afterPrune.generationPrunedBytes).toBe(beforePrune.generationPrunedBytes);
+    await rm(join(pruneFailure.stateRoot, "generations", "2.json"));
+    await pruneRuntime.close();
+  });
+
+  it("telemetry: startup seeds existing bytes and pruning decrements the reconciled total", async () => {
+    const { root, stateRoot } = await fixture({ "src/value.ts": "export const seededValue = 0;" });
+    const producer = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      mapGenerationRetention: 10,
+    });
+    await producer.start();
+    for (let value = 1; value <= 2; value += 1) {
+      await writeFile(join(root, "src/value.ts"), `export const seededValue = ${value};`);
+      producer.notify("change", "src/value.ts");
+      await producer.flush();
+    }
+    await producer.close();
+
+    const generationsRoot = join(stateRoot, "generations");
+    const existingNames = (await readdir(generationsRoot)).filter((name) => /^\d+\.json$/u.test(name));
+    const existingBytes = (
+      await Promise.all(existingNames.map(async (name) => (await stat(join(generationsRoot, name))).size))
+    ).reduce((total, bytes) => total + bytes, 0);
+    expect(existingNames.length).toBe(3);
+
+    const telemetry = new Telemetry();
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      mapGenerationRetention: 1,
+      telemetry,
+      monotonicNow: tickingClock(),
+    });
+    await runtime.start();
+
+    const remainingNames = (await readdir(generationsRoot)).filter((name) => /^\d+\.json$/u.test(name));
+    const remainingBytes = (
+      await Promise.all(remainingNames.map(async (name) => (await stat(join(generationsRoot, name))).size))
+    ).reduce((total, bytes) => total + bytes, 0);
+    const snapshot = telemetry.snapshot();
+    expect(snapshot.generationCreatedCount).toBe(0);
+    expect(snapshot.generationPrunedFiles).toBe(existingNames.length - remainingNames.length);
+    expect(snapshot.generationPrunedBytes).toBe(existingBytes - remainingBytes);
+    expect(snapshot.repoMapTotalBytes).toBe(remainingBytes);
+    await runtime.close();
+  });
+
+  it("telemetry: throwing monotonic clocks are non-fatal across Git, query, search, generation, and maintenance", async () => {
+    const { root, stateRoot } = await fixture({ "src/clock.ts": "export const clockSafe = true;" });
+    const telemetry = new Telemetry();
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      telemetry,
+      monotonicNow() {
+        throw new Error("simulated clock failure");
+      },
+    });
+
+    await runtime.start();
+    expect((await runtime.query("clockSafe")).results[0]?.path).toBe("src/clock.ts");
+    await runtime.maintenance();
+
+    const snapshot = telemetry.snapshot();
+    expect(snapshot).toMatchObject({
+      repoMapQueryCount: 1,
+      repoMapQueryDurationMsTotal: 0,
+      ensureFreshCount: 1,
+      ensureFreshDurationMsTotal: 0,
+      searchIndexBuildCount: 1,
+      searchIndexBuildDurationMsTotal: 0,
+      generationWriteCount: 1,
+      generationWriteDurationMsTotal: 0,
+      generationCreatedCount: 1,
+      generationPruneDurationMsTotal: 0,
+    });
+    expect(snapshot.gitHeadCount).toBeGreaterThan(0);
+    expect(snapshot.gitHeadDurationMsTotal).toBe(0);
+    expect(snapshot.gitDirtyCount).toBeGreaterThan(0);
+    expect(snapshot.gitDirtyDurationMsTotal).toBe(0);
+    expect(snapshot.generationPruneCount).toBeGreaterThan(1);
+    await runtime.close();
+  });
+
+  it("telemetry: a throwing monotonic clock is non-fatal for Git diff fallback", async () => {
+    const { root, stateRoot } = await fixture({ "src/diff.ts": "export const beforeClockDiff = true;" });
+    const telemetry = new Telemetry();
+    let failActivation = false;
+    const runtime = new RepoMapRuntime({
+      projectRoot: root,
+      stateRoot,
+      watch: false,
+      telemetry,
+      monotonicNow() {
+        throw new Error("simulated clock failure");
+      },
+      atomicWriter: async (path, content) => {
+        if (failActivation && path.endsWith("active.json")) throw new Error("simulated activation failure");
+        await atomicWriteFile(path, content);
+      },
+    });
+    await runtime.start();
+    failActivation = true;
+    await writeFile(join(root, "src/diff.ts"), "export const afterClockDiff = true;");
+    runtime.notify("change", "src/diff.ts");
+    await runtime.flush();
+
+    const result = await runtime.query("afterClockDiff");
+    expect(result.freshness).toBe("stale");
+    expect(result.fallbackEvidence.some((evidence) => evidence.kind === "git-diff")).toBe(true);
+    expect(telemetry.snapshot()).toMatchObject({ gitDiffCount: 1, gitDiffDurationMsTotal: 0 });
+    await runtime.close();
+  });
+
+  it("telemetry: disabled and throwing recorders leave model-visible query output identical", async () => {
+    const without = await fixture({ "src/model.ts": "export const modelVisibleValue = true;" }, false);
+    const withThrowing = await fixture({ "src/model.ts": "export const modelVisibleValue = true;" }, false);
+    const alwaysNoGit = async () => {
+      throw new Error("not a git workspace");
+    };
+    const throwingTelemetry = new Proxy(new Telemetry(), {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (property !== "snapshot" && typeof value === "function") {
+          return () => {
+            throw new Error("simulated telemetry failure");
+          };
+        }
+        return value;
+      },
+    });
+    const plainRuntime = new RepoMapRuntime({
+      projectRoot: without.root,
+      stateRoot: without.stateRoot,
+      watch: false,
+      gitRunner: alwaysNoGit,
+    });
+    const telemetryRuntime = new RepoMapRuntime({
+      projectRoot: withThrowing.root,
+      stateRoot: withThrowing.stateRoot,
+      watch: false,
+      gitRunner: alwaysNoGit,
+      telemetry: throwingTelemetry,
+    });
+    await plainRuntime.start();
+    await telemetryRuntime.start();
+
+    expect(await telemetryRuntime.query("modelVisibleValue")).toEqual(await plainRuntime.query("modelVisibleValue"));
+    await plainRuntime.close();
+    await telemetryRuntime.close();
   });
 });

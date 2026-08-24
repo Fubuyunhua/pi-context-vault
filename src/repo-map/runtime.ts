@@ -84,6 +84,13 @@ export interface RepoMapRuntimeQuery {
   error?: string;
 }
 
+export type RepoMapGitRunner = (
+  projectRoot: string,
+  args: readonly string[],
+  encoding: "utf8" | "buffer",
+  maxBuffer?: number,
+) => Promise<{ stdout: string | Buffer }>;
+
 export interface RepoMapRuntimeOptions {
   projectRoot: string;
   stateRoot: string;
@@ -97,7 +104,13 @@ export interface RepoMapRuntimeOptions {
   atomicWriter?: typeof atomicWriteFile;
   /** Injectable file operations used by incremental indexing. */
   indexFileSystem?: RepoMapFileSystem;
+  /** Injectable Git subprocess dependency used by deterministic telemetry tests. */
+  gitRunner?: RepoMapGitRunner;
+  /** Injectable MiniSearch construction dependency used by deterministic telemetry tests. */
+  searchFactory?: (snapshot: RepoMapSnapshot) => RepoMapSearch;
   now?: () => Date;
+  /** Injectable monotonic clock used for deterministic telemetry tests. */
+  monotonicNow?: () => number;
   telemetry?: Telemetry;
 }
 
@@ -157,25 +170,69 @@ function watcher(root: string): RepoMapWatcher {
   };
 }
 
-async function gitHead(projectRoot: string): Promise<string> {
+const defaultGitRunner: RepoMapGitRunner = async (projectRoot, args, encoding, maxBuffer) => {
+  const result = await execFileAsync("git", [...args], {
+    cwd: projectRoot,
+    encoding,
+    ...(maxBuffer === undefined ? {} : { maxBuffer }),
+  });
+  return { stdout: result.stdout };
+};
+
+function recordTelemetry(telemetry: Telemetry | undefined, record: (telemetry: Telemetry) => void): void {
+  if (!telemetry) return;
   try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: projectRoot, encoding: "utf8" });
-    return stdout.trim();
+    record(telemetry);
   } catch {
-    return "no-head";
+    // Telemetry is best-effort and must never affect runtime behavior.
   }
 }
 
-async function gitDiff(projectRoot: string): Promise<string> {
+function monotonicReading(now: () => number): number | undefined {
   try {
-    const { stdout } = await execFileAsync("git", ["diff", "--no-ext-diff", "--unified=1", "--"], {
-      cwd: projectRoot,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
-    return stdout.slice(0, 16 * 1024);
+    const value = now();
+    return Number.isFinite(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function monotonicDuration(now: () => number, startedAt: number | undefined): number {
+  const finishedAt = monotonicReading(now);
+  return startedAt === undefined || finishedAt === undefined ? 0 : Math.max(0, finishedAt - startedAt);
+}
+
+async function gitHead(
+  projectRoot: string,
+  runner: RepoMapGitRunner,
+  telemetry?: Telemetry,
+  now = performance.now.bind(performance),
+): Promise<string> {
+  const startedAt = monotonicReading(now);
+  try {
+    const { stdout } = await runner(projectRoot, ["rev-parse", "HEAD"], "utf8");
+    return stdout.toString().trim();
+  } catch {
+    return "no-head";
+  } finally {
+    recordTelemetry(telemetry, (target) => target.recordGitHead(monotonicDuration(now, startedAt)));
+  }
+}
+
+async function gitDiff(
+  projectRoot: string,
+  runner: RepoMapGitRunner,
+  telemetry?: Telemetry,
+  now = performance.now.bind(performance),
+): Promise<string> {
+  const startedAt = monotonicReading(now);
+  try {
+    const { stdout } = await runner(projectRoot, ["diff", "--no-ext-diff", "--unified=1", "--"], "utf8", 1024 * 1024);
+    return stdout.toString().slice(0, 16 * 1024);
   } catch {
     return "";
+  } finally {
+    recordTelemetry(telemetry, (target) => target.recordGitDiff(monotonicDuration(now, startedAt)));
   }
 }
 
@@ -184,13 +241,20 @@ interface GitDirtyPath {
   tracked: boolean;
 }
 
-async function gitDirtyPaths(projectRoot: string): Promise<GitDirtyPath[] | undefined> {
+async function gitDirtyPaths(
+  projectRoot: string,
+  runner: RepoMapGitRunner,
+  telemetry?: Telemetry,
+  now = performance.now.bind(performance),
+): Promise<GitDirtyPath[] | undefined> {
+  const startedAt = monotonicReading(now);
   try {
-    const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], {
-      cwd: projectRoot,
-      encoding: "buffer",
-      maxBuffer: 16 * 1024 * 1024,
-    });
+    const { stdout } = await runner(
+      projectRoot,
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      "buffer",
+      16 * 1024 * 1024,
+    );
     const records = stdout.toString("utf8").split("\0").filter(Boolean);
     const paths = new Map<string, boolean>();
     for (let index = 0; index < records.length; index += 1) {
@@ -210,6 +274,8 @@ async function gitDirtyPaths(projectRoot: string): Promise<GitDirtyPath[] | unde
       .map(([path, tracked]) => ({ path, tracked }));
   } catch {
     return undefined;
+  } finally {
+    recordTelemetry(telemetry, (target) => target.recordGitDirty(monotonicDuration(now, startedAt)));
   }
 }
 
@@ -442,6 +508,9 @@ export class RepoMapRuntime {
   readonly #scheduler: RepoMapScheduler;
   readonly #atomicWriter: typeof atomicWriteFile;
   readonly #telemetry?: Telemetry;
+  readonly #monotonicNow: () => number;
+  readonly #gitRunner: RepoMapGitRunner;
+  readonly #searchFactory: (snapshot: RepoMapSnapshot) => RepoMapSearch;
   #projectRoot = "";
   #base?: RepoMapSnapshot;
   #effective?: RepoMapSnapshot;
@@ -490,11 +559,15 @@ export class RepoMapRuntime {
     this.#scheduler = options.scheduler ?? defaultScheduler;
     this.#atomicWriter = options.atomicWriter ?? atomicWriteFile;
     this.#telemetry = options.telemetry;
+    this.#monotonicNow = options.monotonicNow ?? performance.now.bind(performance);
+    this.#gitRunner = options.gitRunner ?? defaultGitRunner;
+    this.#searchFactory = options.searchFactory ?? ((snapshot) => new RepoMapSearch(snapshot));
   }
 
   async start(): Promise<void> {
     this.#projectRoot = await realpath(resolve(this.#options.projectRoot));
     await mkdir(this.#options.stateRoot, { recursive: true, mode: 0o700 });
+    await this.#reconcileGenerationBytes();
     await this.#hydratePriorGeneration();
     if (this.#options.watch) {
       this.#watcher = (this.#options.watcherFactory ?? watcher)(this.#projectRoot);
@@ -564,7 +637,7 @@ export class RepoMapRuntime {
     for (let pass = 1; ; pass += 1) {
       const epoch = this.#mutationEpoch;
       await this.#drainWatcherUpdates();
-      const currentHead = await gitHead(this.#projectRoot);
+      const currentHead = await gitHead(this.#projectRoot, this.#gitRunner, this.#telemetry, this.#monotonicNow);
       if (currentHead !== this.#head) {
         await this.#rebuildBase();
       } else {
@@ -592,11 +665,13 @@ export class RepoMapRuntime {
   }
 
   async ensureFresh(): Promise<void> {
-    const startedAt = performance.now();
+    const startedAt = monotonicReading(this.#monotonicNow);
     try {
       await this.flush();
     } finally {
-      this.#telemetry?.recordEnsureFresh(performance.now() - startedAt);
+      recordTelemetry(this.#telemetry, (telemetry) =>
+        telemetry.recordEnsureFresh(monotonicDuration(this.#monotonicNow, startedAt)),
+      );
     }
   }
 
@@ -612,22 +687,26 @@ export class RepoMapRuntime {
 
   /** Live query path used by the explicit tool: reconcile Git and watcher work first. */
   async query(query: string, options: RepoMapQueryOptions = {}): Promise<RepoMapRuntimeQuery> {
-    const startedAt = performance.now();
+    const startedAt = monotonicReading(this.#monotonicNow);
     try {
       await this.ensureFresh();
       return await this.#queryCurrentUninstrumented(query, options, true);
     } finally {
-      this.#telemetry?.recordRepoMapQuery(performance.now() - startedAt);
+      recordTelemetry(this.#telemetry, (telemetry) =>
+        telemetry.recordRepoMapQuery(monotonicDuration(this.#monotonicNow, startedAt)),
+      );
     }
   }
 
   /** Query the current coherent snapshot without another freshness reconciliation. */
   async queryCurrent(query: string, options: RepoMapQueryOptions = {}): Promise<RepoMapRuntimeQuery> {
-    const startedAt = performance.now();
+    const startedAt = monotonicReading(this.#monotonicNow);
     try {
       return await this.#queryCurrentUninstrumented(query, options, false);
     } finally {
-      this.#telemetry?.recordRepoMapQuery(performance.now() - startedAt);
+      recordTelemetry(this.#telemetry, (telemetry) =>
+        telemetry.recordRepoMapQuery(monotonicDuration(this.#monotonicNow, startedAt)),
+      );
     }
   }
 
@@ -650,9 +729,15 @@ export class RepoMapRuntime {
     let results: RepoMapQueryResult[] = [];
     if (this.#effective) {
       if (!this.#search || this.#searchVersion !== this.#effectiveContentVersion) {
-        this.#search = new RepoMapSearch(this.#effective);
-        this.#searchVersion = this.#effectiveContentVersion;
-        this.#telemetry?.recordSearchIndexBuild();
+        const startedAt = monotonicReading(this.#monotonicNow);
+        try {
+          this.#search = this.#searchFactory(this.#effective);
+          this.#searchVersion = this.#effectiveContentVersion;
+        } finally {
+          recordTelemetry(this.#telemetry, (telemetry) =>
+            telemetry.recordSearchIndexBuild(monotonicDuration(this.#monotonicNow, startedAt)),
+          );
+        }
       }
       results = this.#search.query(query, options);
     }
@@ -676,7 +761,7 @@ export class RepoMapRuntime {
         }
       }
       if (liveFallback) {
-        const diff = await gitDiff(this.#projectRoot);
+        const diff = await gitDiff(this.#projectRoot, this.#gitRunner, this.#telemetry, this.#monotonicNow);
         if (diff) fallbackEvidence.push({ kind: "git-diff", excerpt: diff });
       }
       if (fallbackEvidence.length === 0) {
@@ -740,7 +825,7 @@ export class RepoMapRuntime {
       return result;
     } catch (error) {
       this.#maintenance = { error: error instanceof Error ? error.message : String(error) };
-      this.#telemetry?.recordMaintenanceFailure();
+      recordTelemetry(this.#telemetry, (telemetry) => telemetry.recordMaintenanceFailure());
       throw error;
     }
   }
@@ -882,7 +967,7 @@ export class RepoMapRuntime {
     }
 
     const outcome = await indexRepoMapFile(this.#projectRoot, path, options);
-    this.#telemetry?.recordFileReindexed();
+    recordTelemetry(this.#telemetry, (telemetry) => telemetry.recordFileReindexed());
     const after = await this.#fileFingerprint(path);
     // A stable high-precision metadata fingerprint makes the outcome reusable.
     // Read failures are retried so recovery is never hidden; ignored admission
@@ -941,7 +1026,7 @@ export class RepoMapRuntime {
 
   async #reconcileDirtyOverlay(): Promise<boolean> {
     if (!this.#effective) return false;
-    const discovered = await gitDirtyPaths(this.#projectRoot);
+    const discovered = await gitDirtyPaths(this.#projectRoot, this.#gitRunner, this.#telemetry, this.#monotonicNow);
     this.#gitWorkspace = discovered !== undefined;
     if (!discovered) {
       await this.#refreshNonGitIgnorePatterns();
@@ -996,7 +1081,7 @@ export class RepoMapRuntime {
       const previousBase = this.#base;
       const previousEffective = this.#effective;
       const previousDirty = new Map(this.#dirty);
-      const head = await gitHead(this.#projectRoot);
+      const head = await gitHead(this.#projectRoot, this.#gitRunner, this.#telemetry, this.#monotonicNow);
       const snapshot = await buildRepoMap({ projectRoot: this.#projectRoot, exclude: this.#options.exclude });
       const nextBase = cloneSnapshot(snapshot);
       const nextEffective = cloneSnapshot(snapshot);
@@ -1061,16 +1146,25 @@ export class RepoMapRuntime {
 
       const generationPath = join(this.#options.stateRoot, "generations", `${candidateGeneration}.json`);
       const serialized = `${JSON.stringify(candidate)}\n`;
-      await this.#atomicWriter(generationPath, serialized);
-      await this.#atomicWriter(
-        join(this.#options.stateRoot, "active.json"),
-        `${JSON.stringify({
-          generation: candidateGeneration,
-          path: slash(relative(this.#options.stateRoot, generationPath)),
-        })}\n`,
-      );
+      const generationBytes = Buffer.byteLength(serialized, "utf8");
+      const writeStartedAt = monotonicReading(this.#monotonicNow);
+      try {
+        await this.#atomicWriter(generationPath, serialized);
+        recordTelemetry(this.#telemetry, (telemetry) => telemetry.recordGenerationFileWritten(generationBytes));
+        await this.#atomicWriter(
+          join(this.#options.stateRoot, "active.json"),
+          `${JSON.stringify({
+            generation: candidateGeneration,
+            path: slash(relative(this.#options.stateRoot, generationPath)),
+          })}\n`,
+        );
+        recordTelemetry(this.#telemetry, (telemetry) => telemetry.recordGenerationActivated());
+      } finally {
+        recordTelemetry(this.#telemetry, (telemetry) =>
+          telemetry.recordGenerationWrite(monotonicDuration(this.#monotonicNow, writeStartedAt)),
+        );
+      }
       this.#generation = candidateGeneration;
-      this.#telemetry?.recordGenerationCreated(Buffer.byteLength(serialized, "utf8"));
       await this.#maintainUnlockedNonFatal();
     });
   }
@@ -1081,7 +1175,18 @@ export class RepoMapRuntime {
       this.#maintenance = await this.#pruneUnlocked(active.generation);
     } catch (error) {
       this.#maintenance = { error: error instanceof Error ? error.message : String(error) };
-      this.#telemetry?.recordMaintenanceFailure();
+      recordTelemetry(this.#telemetry, (telemetry) => telemetry.recordMaintenanceFailure());
+    }
+  }
+
+  async #reconcileGenerationBytes(): Promise<void> {
+    if (!this.#telemetry) return;
+    try {
+      const files = await this.#listGenerationFiles();
+      const totalBytes = files.reduce((total, file) => total + file.bytes, 0);
+      recordTelemetry(this.#telemetry, (telemetry) => telemetry.recordRepoMapTotalBytes(totalBytes));
+    } catch {
+      // Seeding telemetry must not make startup fail or alter runtime state.
     }
   }
 
@@ -1108,7 +1213,24 @@ export class RepoMapRuntime {
   }
 
   async #pruneUnlocked(activeGeneration: number): Promise<RepoMapMaintenanceResult> {
+    const startedAt = monotonicReading(this.#monotonicNow);
+    const pruned = { files: 0, bytes: 0 };
+    try {
+      return await this.#pruneUnlockedInstrumented(activeGeneration, pruned);
+    } finally {
+      recordTelemetry(this.#telemetry, (telemetry) =>
+        telemetry.recordGenerationPrune(monotonicDuration(this.#monotonicNow, startedAt), pruned.files, pruned.bytes),
+      );
+    }
+  }
+
+  async #pruneUnlockedInstrumented(
+    activeGeneration: number,
+    pruned: { files: number; bytes: number },
+  ): Promise<RepoMapMaintenanceResult> {
     let files = await this.#listGenerationFiles();
+    const initialBytes = files.reduce((total, file) => total + file.bytes, 0);
+    recordTelemetry(this.#telemetry, (telemetry) => telemetry.recordRepoMapTotalBytes(initialBytes));
     const active = files.find((file) => file.generation === activeGeneration);
     if (!active) throw new Error(`active repository map generation ${activeGeneration} is missing`);
     const deletedGenerations: number[] = [];
@@ -1122,6 +1244,8 @@ export class RepoMapRuntime {
       }
       deletedGenerations.push(file.generation);
       bytesFreed += file.bytes;
+      pruned.files += 1;
+      pruned.bytes += file.bytes;
       files = files.filter((candidate) => candidate.generation !== file.generation);
     };
 
@@ -1138,7 +1262,6 @@ export class RepoMapRuntime {
       remainingBytes -= file.bytes;
     }
     remainingBytes = files.reduce((total, file) => total + file.bytes, 0);
-    this.#telemetry?.recordRepoMapTotalBytes(remainingBytes);
     deletedGenerations.sort((left, right) => left - right);
     return {
       activeGeneration,
@@ -1151,7 +1274,7 @@ export class RepoMapRuntime {
   }
 
   #degrade(error: unknown): void {
-    this.#telemetry?.recordMaintenanceFailure();
+    recordTelemetry(this.#telemetry, (telemetry) => telemetry.recordMaintenanceFailure());
     this.#freshness = "stale";
     this.#error = error instanceof Error ? error.message : String(error);
   }

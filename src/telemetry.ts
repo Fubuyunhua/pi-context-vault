@@ -8,6 +8,10 @@
  * extension.
  */
 
+function finiteNonnegative(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 export interface TelemetrySnapshot {
   // Capsule (automatic context-hook injection)
   capsuleBuildCount: number;
@@ -26,13 +30,33 @@ export interface TelemetrySnapshot {
   ensureFreshDurationMsTotal: number;
   /** Single-file indexing operations (fast-update and dirty reconciliation). */
   filesReindexed: number;
-  /** MiniSearch index builds. */
+  /** Git HEAD subprocess attempts, including failures. */
+  gitHeadCount: number;
+  gitHeadDurationMsTotal: number;
+  /** Git dirty/status subprocess attempts, including failures. */
+  gitDirtyCount: number;
+  gitDirtyDurationMsTotal: number;
+  /** Git diff subprocess attempts, including failures. */
+  gitDiffCount: number;
+  gitDiffDurationMsTotal: number;
+  /** MiniSearch index builds, including failed construction attempts. */
   searchIndexBuildCount: number;
+  searchIndexBuildDurationMsTotal: number;
   // Generation
+  /** Generation file plus active-pointer write attempts, including failures. */
+  generationWriteCount: number;
+  generationWriteDurationMsTotal: number;
+  /** Generations whose active pointer was successfully persisted. */
   generationCreatedCount: number;
+  /** Cumulative bytes of successfully persisted generation files, including later orphans. */
   generationBytesWritten: number;
-  /** Running estimate of generation bytes on disk; never scanned recursively. */
+  /** Running estimate of generation bytes on disk; reconciled using the flat generation directory. */
   repoMapTotalBytes: number;
+  /** Generation-pruning attempts, including failures. */
+  generationPruneCount: number;
+  generationPruneDurationMsTotal: number;
+  generationPrunedFiles: number;
+  generationPrunedBytes: number;
   maintenanceFailureCount: number;
   // Observation archiving
   archiveAttemptCount: number;
@@ -63,10 +87,23 @@ export class Telemetry {
   #ensureFreshCount = 0;
   #ensureFreshDurationMsTotal = 0;
   #filesReindexed = 0;
+  #gitHeadCount = 0;
+  #gitHeadDurationMsTotal = 0;
+  #gitDirtyCount = 0;
+  #gitDirtyDurationMsTotal = 0;
+  #gitDiffCount = 0;
+  #gitDiffDurationMsTotal = 0;
   #searchIndexBuildCount = 0;
+  #searchIndexBuildDurationMsTotal = 0;
+  #generationWriteCount = 0;
+  #generationWriteDurationMsTotal = 0;
   #generationCreatedCount = 0;
   #generationBytesWritten = 0;
   #repoMapTotalBytes = 0;
+  #generationPruneCount = 0;
+  #generationPruneDurationMsTotal = 0;
+  #generationPrunedFiles = 0;
+  #generationPrunedBytes = 0;
   #maintenanceFailureCount = 0;
   #archiveAttemptCount = 0;
   #archiveSuccessCount = 0;
@@ -97,10 +134,23 @@ export class Telemetry {
       ensureFreshCount: this.#ensureFreshCount,
       ensureFreshDurationMsTotal: this.#ensureFreshDurationMsTotal,
       filesReindexed: this.#filesReindexed,
+      gitHeadCount: this.#gitHeadCount,
+      gitHeadDurationMsTotal: this.#gitHeadDurationMsTotal,
+      gitDirtyCount: this.#gitDirtyCount,
+      gitDirtyDurationMsTotal: this.#gitDirtyDurationMsTotal,
+      gitDiffCount: this.#gitDiffCount,
+      gitDiffDurationMsTotal: this.#gitDiffDurationMsTotal,
       searchIndexBuildCount: this.#searchIndexBuildCount,
+      searchIndexBuildDurationMsTotal: this.#searchIndexBuildDurationMsTotal,
+      generationWriteCount: this.#generationWriteCount,
+      generationWriteDurationMsTotal: this.#generationWriteDurationMsTotal,
       generationCreatedCount: this.#generationCreatedCount,
       generationBytesWritten: this.#generationBytesWritten,
       repoMapTotalBytes: this.#repoMapTotalBytes,
+      generationPruneCount: this.#generationPruneCount,
+      generationPruneDurationMsTotal: this.#generationPruneDurationMsTotal,
+      generationPrunedFiles: this.#generationPrunedFiles,
+      generationPrunedBytes: this.#generationPrunedBytes,
       maintenanceFailureCount: this.#maintenanceFailureCount,
       archiveAttemptCount: this.#archiveAttemptCount,
       archiveSuccessCount: this.#archiveSuccessCount,
@@ -147,18 +197,59 @@ export class Telemetry {
     this.#filesReindexed += 1;
   }
 
-  recordSearchIndexBuild(): void {
-    this.#searchIndexBuildCount += 1;
+  recordGitHead(durationMs: number): void {
+    this.#gitHeadCount += 1;
+    this.#gitHeadDurationMsTotal += finiteNonnegative(durationMs);
   }
 
-  recordGenerationCreated(bytesWritten: number): void {
+  recordGitDirty(durationMs: number): void {
+    this.#gitDirtyCount += 1;
+    this.#gitDirtyDurationMsTotal += finiteNonnegative(durationMs);
+  }
+
+  recordGitDiff(durationMs: number): void {
+    this.#gitDiffCount += 1;
+    this.#gitDiffDurationMsTotal += finiteNonnegative(durationMs);
+  }
+
+  recordSearchIndexBuild(durationMs = 0): void {
+    this.#searchIndexBuildCount += 1;
+    this.#searchIndexBuildDurationMsTotal += finiteNonnegative(durationMs);
+  }
+
+  recordGenerationWrite(durationMs: number): void {
+    this.#generationWriteCount += 1;
+    this.#generationWriteDurationMsTotal += finiteNonnegative(durationMs);
+  }
+
+  recordGenerationFileWritten(bytesWritten: number): void {
+    const bytes = finiteNonnegative(bytesWritten);
+    this.#generationBytesWritten += bytes;
+    this.#repoMapTotalBytes += bytes;
+  }
+
+  recordGenerationActivated(): void {
     this.#generationCreatedCount += 1;
-    this.#generationBytesWritten += bytesWritten;
-    this.#repoMapTotalBytes += bytesWritten;
+  }
+
+  /** Backward-compatible combined success recorder for callers that activate immediately after writing. */
+  recordGenerationCreated(bytesWritten: number): void {
+    this.recordGenerationFileWritten(bytesWritten);
+    this.recordGenerationActivated();
   }
 
   recordRepoMapTotalBytes(totalBytes: number): void {
-    this.#repoMapTotalBytes = totalBytes;
+    this.#repoMapTotalBytes = finiteNonnegative(totalBytes);
+  }
+
+  recordGenerationPrune(durationMs: number, filesPruned: number, bytesPruned: number): void {
+    const files = finiteNonnegative(filesPruned);
+    const bytes = finiteNonnegative(bytesPruned);
+    this.#generationPruneCount += 1;
+    this.#generationPruneDurationMsTotal += finiteNonnegative(durationMs);
+    this.#generationPrunedFiles += files;
+    this.#generationPrunedBytes += bytes;
+    this.#repoMapTotalBytes = Math.max(0, this.#repoMapTotalBytes - bytes);
   }
 
   recordMaintenanceFailure(): void {
