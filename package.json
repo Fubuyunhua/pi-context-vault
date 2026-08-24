@@ -26,6 +26,7 @@
   "files": [
     "extensions",
     "src",
+    "scripts/bench.mjs",
     "docs",
     "deepResearch.md",
     "README.md",
@@ -41,6 +42,11 @@
     "test:coverage": "vitest run --coverage",
     "test:watcher": "vitest run tests/watcher-smoke.test.ts",
     "test:package": "node scripts/package-smoke.mjs",
+    "bench": "node scripts/bench.mjs",
+    "bench:plan": "npm run bench -- plan",
+    "bench:run": "npm run bench -- run",
+    "bench:analyze": "npm run bench -- analyze",
+    "bench:verify": "npm run bench -- verify",
     "ci": "npm run check && npm run test:coverage && npm run test:package"
   },
   "dependencies": {

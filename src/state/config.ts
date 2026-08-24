@@ -5,6 +5,10 @@ export type ArchivePolicy = "all" | "errors-and-large" | "off";
 export type MapInjectionMode = "off" | "once-per-user-turn" | "every-llm-call";
 
 export interface ContextVaultConfig {
+  /** Fully disables repository-map construction, watching, tools, and automatic injection. */
+  repoMapEnabled: boolean;
+  /** Fully disables context reduction while leaving archival policy independent. */
+  reductionEnabled: boolean;
   archivePolicy: ArchivePolicy;
   archiveMinBytes: number;
   replacementThresholdBytes: number;
@@ -28,6 +32,8 @@ export interface ContextVaultConfig {
 }
 
 export const DEFAULT_CONFIG: Readonly<ContextVaultConfig> = Object.freeze({
+  repoMapEnabled: true,
+  reductionEnabled: true,
   archivePolicy: "all",
   archiveMinBytes: 16 * 1024,
   replacementThresholdBytes: 16 * 1024,
@@ -71,7 +77,12 @@ const POSITIVE_SAFE_INTEGERS = new Set<keyof ContextVaultConfig>([
 
 const STRING_ARRAYS = new Set<keyof ContextVaultConfig>(["mapExcludePatterns"]);
 
-const BOOLEAN_OPTIONS = new Set<keyof ContextVaultConfig>(["archiveErrorsAlways", "debugRequestFingerprints"]);
+const BOOLEAN_OPTIONS = new Set<keyof ContextVaultConfig>([
+  "repoMapEnabled",
+  "reductionEnabled",
+  "archiveErrorsAlways",
+  "debugRequestFingerprints",
+]);
 
 export async function loadConfig(projectRoot: string): Promise<ContextVaultConfig> {
   const configPath = join(projectRoot, ".pi", "context-vault.json");

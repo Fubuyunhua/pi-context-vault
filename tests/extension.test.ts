@@ -57,15 +57,11 @@ describe("extension observation adapter", () => {
   it("registers lifecycle hooks and bounded retrieval tools", async () => {
     const { handlers, tools, pi, ctx, setStatus } = await harness();
     expect(pi.on).toHaveBeenCalledTimes(5);
-    expect([...tools.keys()]).toEqual([
-      "context_vault_obs_get",
-      "context_vault_obs_search",
-      "context_vault_repo_map",
-      "context_vault_status",
-    ]);
+    expect([...tools.keys()]).toEqual(["context_vault_obs_get", "context_vault_obs_search", "context_vault_status"]);
     expect(pi.registerCommand).toHaveBeenCalledWith("context-vault", expect.any(Object));
 
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    expect([...tools.keys()]).toContain("context_vault_repo_map");
     expect(setStatus).toHaveBeenCalledWith(EXTENSION_ID, `vault v${EXTENSION_VERSION}`);
 
     const original = "needle\n".repeat(4_000);

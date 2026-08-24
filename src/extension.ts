@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type ActiveSessionLease, ArtifactStore } from "./artifacts/store.js";
+import { frameTelemetry } from "./bench/telemetry-frame.js";
 import { reduceContext } from "./context/reduction.js";
 import {
   MAX_QUERY_LENGTH,
@@ -39,6 +40,7 @@ interface RepoMapController {
 export interface RegisterContextVaultOptions {
   env?: NodeJS.ProcessEnv;
   repoMapRuntimeFactory?: (options: RepoMapRuntimeOptions) => RepoMapController;
+  reductionFactory?: typeof reduceContext;
 }
 
 interface RuntimeState {
@@ -371,6 +373,27 @@ function runtimeStatus(runtime: RuntimeState) {
 }
 
 export function registerContextVault(pi: ExtensionAPI, options: RegisterContextVaultOptions = {}): void {
+  let repoMapToolRegistered = false;
+  let telemetryFrameEmitted = false;
+  const registerRepoMapTool = (): void => {
+    if (repoMapToolRegistered) return;
+    pi.registerTool({
+      name: "context_vault_repo_map",
+      label: "Repository Map",
+      description: "Query the revision-aware repository map with explicit freshness and fallback evidence.",
+      parameters: Type.Object(
+        {
+          query: Type.String({ minLength: 1, maxLength: MAX_QUERY_LENGTH }),
+          limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_RESULTS })),
+        },
+        { additionalProperties: false },
+      ),
+      async execute(_toolCallId, params) {
+        return toolResponse(() => activeMap(runtime).query(params.query, { limit: params.limit }));
+      },
+    });
+    repoMapToolRegistered = true;
+  };
   let runtime: RuntimeState = {
     initialized: false,
     repoMapAvailable: false,
@@ -409,6 +432,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
 
   pi.on("session_start", async (_event, ctx) => {
     await dispose();
+    telemetryFrameEmitted = false;
     const next: RuntimeState = {
       initialized: false,
       repoMapAvailable: false,
@@ -417,8 +441,11 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
       turnSequence: 0,
     };
     try {
-      next.state = await resolveProjectState(ctx.cwd, options.env ?? process.env);
-      next.config = await loadConfig(next.state.projectRoot);
+      next.config = await loadConfig(ctx.cwd);
+      if (repoMapToolRegistered && !next.config.repoMapEnabled) throw new Error("repo-map-tool-session-config-drift");
+      next.state = await resolveProjectState(ctx.cwd, options.env ?? process.env, {
+        repoMapEnabled: next.config.repoMapEnabled,
+      });
       next.store = new ArtifactStore({
         artifactsRoot: next.state.artifactsRoot,
         metadataRoot: next.state.metadataRoot,
@@ -441,25 +468,30 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         telemetry: next.telemetry,
       });
       next.initialized = true;
-      next.repoMap = (options.repoMapRuntimeFactory ?? ((mapOptions) => new RepoMapRuntime(mapOptions)))({
-        projectRoot: next.state.projectRoot,
-        stateRoot: next.state.mapRoot,
-        exclude: next.config.mapExcludePatterns,
-        mapDebounceMs: next.config.mapDebounceMs,
-        mapGenerationRetention: next.config.mapGenerationRetention,
-        mapQuotaBytes: next.config.mapQuotaBytes,
-        telemetry: next.telemetry,
-      });
-      try {
-        await next.repoMap.start();
-        next.repoMapAvailable = true;
-      } catch (error) {
-        next.failures.push({ component: "repo-map", error: errorMessage(error) });
+      if (next.config.repoMapEnabled) {
+        next.repoMap = (options.repoMapRuntimeFactory ?? ((mapOptions) => new RepoMapRuntime(mapOptions)))({
+          projectRoot: next.state.projectRoot,
+          stateRoot: next.state.mapRoot,
+          exclude: next.config.mapExcludePatterns,
+          mapDebounceMs: next.config.mapDebounceMs,
+          mapGenerationRetention: next.config.mapGenerationRetention,
+          mapQuotaBytes: next.config.mapQuotaBytes,
+          telemetry: next.telemetry,
+        });
+        try {
+          await next.repoMap.start();
+          next.repoMapAvailable = true;
+          registerRepoMapTool();
+        } catch (error) {
+          next.failures.push({ component: "repo-map", error: errorMessage(error) });
+        }
       }
     } catch (error) {
       next.failures.push({ component: "initialization", error: errorMessage(error) });
     }
     runtime = next;
+    if (runtime.failures.some((failure) => failure.error === "repo-map-tool-session-config-drift"))
+      throw new Error("repo-map-tool-session-config-drift");
     if (ctx.hasUI) {
       ctx.ui.setStatus(
         EXTENSION_ID,
@@ -582,11 +614,11 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         recordRuntimeFailure(runtime, "repo-map", error);
       }
     }
-    if (!runtime.store || !runtime.config || !runtime.observations || ctx.model === undefined) {
+    if (!runtime.store || !runtime.config?.reductionEnabled || !runtime.observations || ctx.model === undefined) {
       return messages === event.messages ? undefined : { messages };
     }
     const reductionStartedAt = performance.now();
-    const reduced = await reduceContext({
+    const reduced = await (options.reductionFactory ?? reduceContext)({
       store: runtime.store,
       messages,
       sessionId: runtime.observations.status().sessionId,
@@ -609,6 +641,10 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    if (!ctx.hasUI && !telemetryFrameEmitted) {
+      console.log(frameTelemetry(runtimeStatus(runtime)));
+      telemetryFrameEmitted = true;
+    }
     await dispose();
     if (ctx.hasUI) ctx.ui.setStatus(EXTENSION_ID, undefined);
   });
@@ -649,22 +685,6 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   });
 
   pi.registerTool({
-    name: "context_vault_repo_map",
-    label: "Repository Map",
-    description: "Query the revision-aware repository map with explicit freshness and fallback evidence.",
-    parameters: Type.Object(
-      {
-        query: Type.String({ minLength: 1, maxLength: MAX_QUERY_LENGTH }),
-        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_RESULTS })),
-      },
-      { additionalProperties: false },
-    ),
-    async execute(_toolCallId, params) {
-      return toolResponse(() => activeMap(runtime).query(params.query, { limit: params.limit }));
-    },
-  });
-
-  pi.registerTool({
     name: "context_vault_status",
     label: "Context Vault Status",
     description: "Report Context Vault lifecycle, observation, repository-map, and degraded component status.",
@@ -686,9 +706,9 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   };
 
   pi.registerCommand("context-vault", {
-    description: "Context Vault status|rebuild|gc|doctor",
+    description: "Context Vault status|status-json|rebuild|gc|doctor",
     getArgumentCompletions: (prefix) =>
-      ["status", "rebuild", "gc", "doctor"]
+      ["status", "status-json", "rebuild", "gc", "doctor"]
         .filter((command) => command.startsWith(prefix.trim()))
         .map((command) => ({ value: command, label: command })),
     async handler(args, ctx) {
@@ -696,6 +716,13 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
       if (subcommand === "status") {
         const status = runtimeStatus(runtime);
         notify(ctx, status, status.degraded ? "warning" : "info");
+        return;
+      }
+      if (subcommand === "status-json") {
+        if (!telemetryFrameEmitted) {
+          notify(ctx, frameTelemetry(runtimeStatus(runtime)));
+          telemetryFrameEmitted = true;
+        }
         return;
       }
       if (subcommand === "rebuild") {
@@ -749,7 +776,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         notify(ctx, report, report.status === "degraded" ? "warning" : "info");
         return;
       }
-      notify(ctx, "usage: /context-vault status|rebuild|gc|doctor", "error");
+      notify(ctx, "usage: /context-vault status|status-json|rebuild|gc|doctor", "error");
     },
   });
 }

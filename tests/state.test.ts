@@ -75,6 +75,8 @@ describe("project state", () => {
     const config = await loadConfig(root);
     expect(config.archiveThresholdBytes).toBe(2048);
     expect(config.replacementThresholdBytes).toBe(2048);
+    expect(config.repoMapEnabled).toBe(true);
+    expect(config.reductionEnabled).toBe(true);
     expect(config.archivePolicy).toBe("all");
     expect(config.archiveMinBytes).toBe(16 * 1024);
     expect(config.archiveErrorsAlways).toBe(true);
@@ -143,6 +145,11 @@ describe("project state", () => {
 
     await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ debugRequestFingerprints: "yes" }));
     await expect(loadConfig(root)).rejects.toThrow("debugRequestFingerprints must be a boolean");
+
+    for (const key of ["repoMapEnabled", "reductionEnabled"]) {
+      await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ [key]: "yes" }));
+      await expect(loadConfig(root)).rejects.toThrow(`${key} must be a boolean`);
+    }
 
     for (const [key, value] of [
       ["mapGenerationRetention", 0],

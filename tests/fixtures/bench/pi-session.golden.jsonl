@@ -1,0 +1,5 @@
+{"type":"session","id":"synthetic-golden","label":"NOT BENCHMARK EVIDENCE"}
+{"type":"message","message":{"role":"assistant","model":"fake-model","content":[{"type":"toolCall","name":"read"}],"usage":{"input":10,"output":2,"cacheRead":5,"cacheWrite":3,"totalTokens":20,"cost":{"total":0.1}}}}
+{"type":"message","message":{"role":"toolResult","usage":{"input":1,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":1,"cost":{"total":0.01}}}}
+{"type":"compaction","usage":{"input":2,"output":1,"cacheRead":1,"cacheWrite":0,"totalTokens":4,"cost":0.02}}
+{"type":"message","message":{"role":"assistant","responseModel":"fake-model","content":[],"usage":{"input":4,"output":2,"cacheRead":6,"cacheWrite":0,"totalTokens":12,"cost":{"total":0.03}}}}

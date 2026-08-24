@@ -18,6 +18,7 @@ export interface ProjectStatePaths {
 export async function resolveProjectState(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
+  options: { repoMapEnabled?: boolean } = {},
 ): Promise<ProjectStatePaths> {
   const projectRoot = await realpath(resolve(cwd));
   const projectId = createHash("sha256").update(projectRoot).digest("hex").slice(0, 32);
@@ -27,6 +28,10 @@ export async function resolveProjectState(
   const mapRoot = join(stateRoot, "repo-map");
   const metadataRoot = join(stateRoot, "metadata");
   await durableMkdir(stateRoot);
-  await Promise.all([durableMkdir(artifactsRoot), durableMkdir(mapRoot), durableMkdir(metadataRoot)]);
+  await Promise.all([
+    durableMkdir(artifactsRoot),
+    durableMkdir(metadataRoot),
+    ...(options.repoMapEnabled === false ? [] : [durableMkdir(mapRoot)]),
+  ]);
   return { projectId, projectRoot, stateRoot, artifactsRoot, mapRoot, metadataRoot };
 }
