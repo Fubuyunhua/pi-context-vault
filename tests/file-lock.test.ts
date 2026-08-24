@@ -23,6 +23,9 @@ const fsControls = vi.hoisted(() => ({
   renameGate: undefined as undefined | { reached: () => void; wait: Promise<void> },
   rmdirGate: undefined as undefined | { reached: () => void; wait: Promise<void> },
   ownerLstatSwap: undefined as undefined | ((path: string) => Promise<void>),
+  disappearTargetOnRenameError: false,
+  replaceLegacyFileOnRename: false,
+  publicationRenameAttempts: 0,
   directorySyncAttempts: [] as string[],
 }));
 
@@ -45,11 +48,20 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     },
     rename: async (oldPath: string, newPath: string) => {
       if (oldPath.includes(".prepare-")) {
+        fsControls.publicationRenameAttempts += 1;
         const code = fsControls.renameErrors.shift();
         if (code !== undefined) {
+          if (fsControls.disappearTargetOnRenameError) {
+            fsControls.disappearTargetOnRenameError = false;
+            await actual.mkdir(newPath);
+            await actual.rmdir(newPath);
+          }
           const error = new Error(`mocked rename ${code}`) as NodeJS.ErrnoException;
           error.code = code;
           throw error;
+        }
+        if (fsControls.replaceLegacyFileOnRename) {
+          await actual.rm(newPath, { force: true });
         }
         const gate = fsControls.renameGate;
         if (gate !== undefined) {
@@ -137,6 +149,9 @@ afterEach(async () => {
   fsControls.renameGate = undefined;
   fsControls.rmdirGate = undefined;
   fsControls.ownerLstatSwap = undefined;
+  fsControls.disappearTargetOnRenameError = false;
+  fsControls.replaceLegacyFileOnRename = false;
+  fsControls.publicationRenameAttempts = 0;
   fsControls.directorySyncAttempts.splice(0);
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -315,15 +330,32 @@ describe("race-safe file locks", () => {
     expect(parentSyncsAtAcquisition).toBeGreaterThanOrEqual(2);
   });
 
-  it("fails safe on a legacy fixed lock file", async () => {
+  it("preflights a legacy fixed lock file instead of allowing Windows-style rename replacement", async () => {
     const root = await tempRoot();
     const lockPath = join(root, "writer.lock");
     await writeFile(lockPath, "legacy");
+    fsControls.replaceLegacyFileOnRename = true;
 
     await expect(
       withFileLock(lockPath, async () => undefined, { retryMs: 2, staleMs: 10, timeoutMs: 20 }),
     ).rejects.toThrow("Timed out waiting for state lock");
+    expect(fsControls.publicationRenameAttempts).toBe(0);
     await expect(readFile(lockPath, "utf8")).resolves.toBe("legacy");
+  });
+
+  it("preflights a fixed-target symlink without publishing over it", async () => {
+    const root = await tempRoot();
+    const lockPath = join(root, "writer.lock");
+    const targetPath = join(root, "symlink-target");
+    await writeFile(targetPath, "target");
+    await symlink(targetPath, lockPath, "file");
+    fsControls.replaceLegacyFileOnRename = true;
+
+    await expect(
+      withFileLock(lockPath, async () => undefined, { retryMs: 2, staleMs: 10, timeoutMs: 20 }),
+    ).rejects.toThrow("Timed out waiting for state lock");
+    expect(fsControls.publicationRenameAttempts).toBe(0);
+    await expect(readFile(lockPath, "utf8")).resolves.toBe("target");
   });
 
   it("fails safe on malformed owner metadata", async () => {
@@ -468,10 +500,25 @@ describe("race-safe file locks", () => {
     expect(fsControls.directorySyncAttempts).toContain(root);
   });
 
-  it("does not hide EPERM when no competing target exists", async () => {
+  it("retries EPERM when a contending target disappears before inspection", async () => {
+    const root = await tempRoot();
+    const lockPath = join(root, "transient-contention.lock");
+    fsControls.renameErrors.push("EPERM");
+    fsControls.disappearTargetOnRenameError = true;
+
+    await expect(withFileLock(lockPath, async () => "acquired", { retryMs: 2, timeoutMs: 100 })).resolves.toBe(
+      "acquired",
+    );
+    expect(fsControls.publicationRenameAttempts).toBe(2);
+  });
+
+  it("times out on persistent EPERM publication failures", async () => {
     const root = await tempRoot();
     const lockPath = join(root, "permission.lock");
-    fsControls.renameErrors.push("EPERM");
-    await expect(withFileLock(lockPath, async () => undefined)).rejects.toMatchObject({ code: "EPERM" });
+    fsControls.renameErrors.push(...Array.from({ length: 100 }, () => "EPERM"));
+
+    await expect(withFileLock(lockPath, async () => undefined, { retryMs: 2, timeoutMs: 20 })).rejects.toThrow(
+      "Timed out waiting for state lock",
+    );
   });
 });

@@ -340,22 +340,26 @@ async function recoverStaleLock(path: string, staleMs: number): Promise<boolean>
   return removeEmptyLockDirectory(path);
 }
 
-async function targetExists(path: string): Promise<boolean> {
+type FixedLockTarget = "missing" | "directory" | "unsafe";
+
+async function inspectFixedLockTarget(path: string): Promise<FixedLockTarget> {
   try {
-    await lstat(path);
-    return true;
+    const target = await lstat(path);
+    if (target.isSymbolicLink() || !target.isDirectory()) return "unsafe";
+    return "directory";
   } catch (error) {
-    if (errorCode(error) === "ENOENT") return false;
+    if (errorCode(error) === "ENOENT") return "missing";
     throw error;
   }
 }
 
-async function isRenameContention(error: unknown, path: string): Promise<boolean> {
+function isRenameContention(error: unknown): boolean {
   if (REPLACEMENT_DIRECTORY_ERRORS.has(errorCode(error))) return true;
-  // Windows commonly reports EPERM for an existing directory, while POSIX
-  // reports ENOTDIR when the legacy target is a file. Confirm the target so a
-  // genuine source/permission failure is not mistaken for contention.
-  return (errorCode(error) === "EPERM" || errorCode(error) === "ENOTDIR") && (await targetExists(path));
+  // Windows commonly reports EPERM when directory publication loses a race.
+  // The winner may release before we can inspect the target, so all publication
+  // EPERMs are retried subject to the normal timeout. POSIX reports ENOTDIR
+  // when a legacy or otherwise unsafe target races with publication.
+  return errorCode(error) === "EPERM" || errorCode(error) === "ENOTDIR";
 }
 
 async function releaseOwnedLock(path: string, ownerFilename: string): Promise<void> {
@@ -400,17 +404,31 @@ export async function withFileLock<T>(
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await cleanAbandonedPreparations(path).catch(() => undefined);
   const prepared = await prepareLock(path, owner);
+  const waitForRetry = async (): Promise<void> => {
+    if (Date.now() - startedAt >= timeoutMs) throw new Error(`Timed out waiting for state lock: ${path}`);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, retryMs));
+  };
 
   try {
     while (true) {
+      const target = await inspectFixedLockTarget(path);
+      if (target !== "missing") {
+        // Never pass an existing fixed target to rename: on Windows, rename can
+        // replace a legacy file. Directories are ordinary contention; every
+        // other object (including symlinks) remains untouched and fails safe.
+        if (target === "directory" && (await recoverStaleLock(path, staleMs))) continue;
+        await waitForRetry();
+        continue;
+      }
+
       try {
         await rename(prepared.directory, path);
         break;
       } catch (error) {
-        if (!(await isRenameContention(error, path))) throw error;
-        if (await recoverStaleLock(path, staleMs)) continue;
-        if (Date.now() - startedAt >= timeoutMs) throw new Error(`Timed out waiting for state lock: ${path}`);
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, retryMs));
+        if (!isRenameContention(error)) throw error;
+        const racedTarget = await inspectFixedLockTarget(path);
+        if (racedTarget === "directory" && (await recoverStaleLock(path, staleMs))) continue;
+        await waitForRetry();
       }
     }
   } catch (error) {
