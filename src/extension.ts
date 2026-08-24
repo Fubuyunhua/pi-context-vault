@@ -22,7 +22,7 @@ import { type ProjectStatePaths, resolveProjectState } from "./state/project-sta
 import { Telemetry } from "./telemetry.js";
 
 export const EXTENSION_ID = "context-vault";
-export const EXTENSION_VERSION = "0.1.0";
+export const EXTENSION_VERSION = "0.2.0";
 const MAP_CAPSULE_TYPE = "context-vault-repo-map";
 
 interface RepoMapController {

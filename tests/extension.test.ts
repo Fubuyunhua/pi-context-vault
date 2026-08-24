@@ -54,6 +54,25 @@ async function harness(
 }
 
 describe("extension observation adapter", () => {
+  it("keeps package, exported, and displayed extension versions aligned", async () => {
+    const packageMetadata = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as {
+      version: string;
+    };
+    const packageLock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8")) as {
+      version: string;
+      packages: { "": { version: string } };
+    };
+    const { handlers, ctx, setStatus } = await harness();
+
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    expect.soft(EXTENSION_VERSION).toBe(packageMetadata.version);
+    expect.soft(setStatus).toHaveBeenCalledWith(EXTENSION_ID, `vault v${packageMetadata.version}`);
+    expect.soft(packageMetadata.version).toBe("0.2.0");
+    expect.soft(packageLock.version).toBe(packageMetadata.version);
+    expect.soft(packageLock.packages[""].version).toBe(packageMetadata.version);
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx);
+  });
+
   it("registers lifecycle hooks and bounded retrieval tools", async () => {
     const { handlers, tools, pi, ctx, setStatus } = await harness();
     expect(pi.on).toHaveBeenCalledTimes(5);

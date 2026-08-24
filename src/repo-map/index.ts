@@ -104,6 +104,7 @@ export interface RepoMapSnapshot {
   schemaVersion: 1;
   provenance: {
     generator: "pi-context-vault";
+    /** Persisted-format compatibility version; intentionally independent of the package release version. */
     generatorVersion: "0.1.0";
     parser: "typescript-compiler-api";
     typescriptVersion: string;
@@ -706,6 +707,7 @@ export async function buildRepoMap(options: BuildRepoMapOptions): Promise<RepoMa
     schemaVersion: REPO_MAP_SCHEMA_VERSION,
     provenance: {
       generator: "pi-context-vault",
+      // Bump only for an incompatible persisted-map format, not for an ordinary package release.
       generatorVersion: "0.1.0",
       parser: "typescript-compiler-api",
       typescriptVersion: ts.version,

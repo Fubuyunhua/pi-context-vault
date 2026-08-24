@@ -434,6 +434,7 @@ function isRepoMapSnapshot(value: unknown): value is RepoMapSnapshot {
   const provenance = value.provenance;
   return (
     provenance.generator === "pi-context-vault" &&
+    // This is a persisted-format compatibility version, not the package version. Keep compatible generations valid.
     provenance.generatorVersion === "0.1.0" &&
     provenance.parser === "typescript-compiler-api" &&
     typeof provenance.typescriptVersion === "string" &&

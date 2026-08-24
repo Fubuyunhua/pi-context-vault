@@ -35,6 +35,7 @@ try {
     "deepResearch.md",
     "docs/specs/0001-v0.1.md",
     "docs/releases/v0.1.0.md",
+    "docs/releases/v0.2.0.md",
     "LICENSE",
   ]) {
     if (!files.has(required)) throw new Error(`Release package is missing ${required}`);

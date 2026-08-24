@@ -2,14 +2,12 @@
 
 面向 Pi 的可恢复 Observation 存储与工作区版本感知 Repo Map。
 
-> v0.1.0 面向 Node.js 22.19 及以上、`@earendil-works/pi-coding-agent` 0.84.x，以及
-> TypeScript/JavaScript 仓库。
->
-> **下一版本 / 当前 `main`：** Java 语义索引是在 v0.1.0 之后实现的；不可变的 v0.1.0 tag 不包含 Java AST
-> 支持。在发布更新的 tag 前，请使用开发 checkout 验证 Java 能力。
+> **当前 `main`：v0.2.0 release-candidate metadata（尚未打 tag）。** 最新不可变 release tag 是
+> [`v0.1.2`](https://github.com/Fubuyunhua/pi-context-vault/releases/tag/v0.1.2)。稳定安装请使用该 tag；验收 RC
+> 时请使用经过检查的开发 checkout。当前并不存在 `v0.2.0` tag。
 
 [English README](./README.md) · [研究文档](./deepResearch.md) · [v0.1 规范](./docs/specs/0001-v0.1.md) ·
-[v0.1.0 发布说明](./docs/releases/v0.1.0.md)
+[v0.2.0 RC 说明](./docs/releases/v0.2.0.md) · [历史 v0.1.0 发布说明](./docs/releases/v0.1.0.md)
 
 ## 它解决什么问题
 
@@ -17,8 +15,8 @@
   receipt；持久化失败时保留原结果。
 - 当上下文压力超过配置阈值时，在 Pi 的非持久化模型视图中把较旧的已归档 Observation 替换为 receipt，同时
   保持 canonical session 时序和 tool-call/tool-result 配对结构。
-- 维护 TS/JS Repo Map，索引路径、词法词项、import、export、顶层 symbol 和 signature。当前 `main` 还会对
-  `.java` 文件进行确定性 AST 索引，提取 package、import、声明、成员、注解、泛型和语法级类型关系。
+- 维护 TS/JS Repo Map，索引路径、词法词项、import、export、顶层 symbol 和 signature；还会对 `.java` 文件
+  进行确定性 AST 索引，提取 package、import、声明、成员、注解、泛型和语法级类型关系。
 - 监听 Agent 与外部文件系统变更，核对 Git HEAD 和 dirty files，并原子激活带 revision 的 Map generation。
 - 只向模型注入与当前任务相关的小型 Map capsule。每个 capsule 都包含 workspace revision 和 freshness；stale
   Map 会给出 fallback evidence，而不会伪装成最新状态。
@@ -38,10 +36,10 @@ Pi extension 以当前操作系统用户权限执行；安装前请检查源码�
 
 ### 用户级安装（推荐）
 
-为当前 Pi 用户安装不可变的 v0.1.0 tag：
+为当前 Pi 用户安装最新不可变 tag v0.1.2。v0.2.0 RC 还不是 tag，请勿虚构 `@v0.2.0` 来源进行安装。
 
 ```bash
-pi install git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
+pi install git:github.com/Fubuyunhua/pi-context-vault@v0.1.2
 ```
 
 确认 Pi 已记录精确来源：
@@ -53,7 +51,7 @@ pi list
 输出应包含：
 
 ```text
-git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
+git:github.com/Fubuyunhua/pi-context-vault@v0.1.2
 ```
 
 安装后重启 Pi。此后所有项目都可以使用该 extension。
@@ -63,7 +61,7 @@ git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
 如果只想通过当前项目的 `.pi/settings.json` 启用插件，请在项目目录执行：
 
 ```bash
-pi install git:github.com/Fubuyunhua/pi-context-vault@v0.1.0 -l
+pi install git:github.com/Fubuyunhua/pi-context-vault@v0.1.2 -l
 ```
 
 项目级资源受 Pi project-trust 策略约束；请先检查内容，再在 Pi 提示时批准项目。`-l` 只表示启用设置位于
@@ -80,8 +78,8 @@ pi -e /absolute/path/to/pi-context-vault/extensions/index.ts
 
 `-e` 建议明确传入上面的 extension 入口文件，而不是仓库目录。
 
-在首个包含 Java AST 的 tag 发布前，如需验收 Java 语义索引，请 checkout `main`、执行 `npm ci`，再使用上述
-开发 checkout 命令。需要 Java AST 时不要安装 `v0.1.0`。
+当前 `main` 使用 v0.2.0 release-candidate metadata，但尚未打 tag。如需验收，请先检查并 checkout `main`、
+执行 `npm ci`，再使用上述开发 checkout 命令。在不可变 v0.2.0 tag 真正创建前，tag 用户应继续使用 v0.1.2。
 
 ## 首次启动与健康检查
 
@@ -99,7 +97,8 @@ pi
 /context-vault status
 ```
 
-健康启动时，Pi 状态区会显示 `vault v0.1.0`。`doctor` 应报告 `healthy`、已经初始化的 Observation 组件、
+健康启动时，Pi 状态区会显示：不可变 v0.1.2 tag 因历史 metadata 不一致而显示 `vault v0.1.0`，当前未打 tag 的
+release-candidate checkout 显示 `vault v0.2.0`。`doctor` 应报告 `healthy`、已经初始化的 Observation 组件、
 可用的 Repo Map，以及 `stateOutsideProjectTree: true`。大型仓库的首次 Map 构建可能需要更长时间。
 
 `degraded` 不会导致 Pi 崩溃，它表示某个组件无法持久化、监听、解析或激活部分状态。请检查 `failures` 和各组件
@@ -186,7 +185,7 @@ paths 和 freshness：
 { "query": "authentication token refresh", "limit": 8 }
 ```
 
-当前 `main` 会让 Java 结构化声明排在 comment 或偶然引用之前，例如：
+Java 查询会让结构化声明排在 comment 或偶然引用之前，例如：
 
 ```json
 { "query": "UserController createUser UserRepository", "limit": 8 }
@@ -302,17 +301,17 @@ Observation metadata 和 active Map metadata 会被拒绝，不会被部分信�
 不可变 tag 不会移动。出现新 tag 后，请删除精确旧来源、安装精确新来源，然后重启 Pi：
 
 ```bash
-pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
+pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.2
 pi install git:github.com/Fubuyunhua/pi-context-vault@<new-tag>
 ```
 
 项目级安装需要在两条命令后都加 `-l`。对于有意使用的未固定来源，Pi 还支持 `pi update <source>`；不要期待它
 自动改变一个固定 tag。
 
-可以用 `pi config` 启用或禁用已安装 package resources。卸载 v0.1.0：
+可以用 `pi config` 启用或禁用已安装 package resources。卸载 v0.1.2：
 
 ```bash
-pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
+pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.2
 ```
 
 `pi uninstall` 是 `pi remove` 的别名。卸载不会删除已归档 Observation 或 Repo Map 状态，这是为了保留恢复能力。
@@ -362,8 +361,8 @@ pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
   最终 hard invariant 由 Pi core 负责。
 - v0.1.0 不包含 embedding、完整跨语言 call graph、typed long-term memory、自动 Git commit 或 tool-episode
   subagent。
-- v0.1.0 tag 对 TS、TSX、JS、JSX、MTS、CTS、MJS、CJS 使用语义索引。当前 `main` 还会在不执行 Maven、
-  Gradle、`javac`、annotation processor 或仓库代码的前提下语义索引 Java；它不做类型求解、方法体 call graph、
+- v0.1.0 tag 对 TS、TSX、JS、JSX、MTS、CTS、MJS、CJS 使用语义索引。v0.1.2 与当前 `main` 还会在不执行
+  Maven、Gradle、`javac`、annotation processor 或仓库代码的前提下语义索引 Java；它们不做类型求解、方法体 call graph、
   依赖解析或 Lombok 成员推导。其他文本文件使用词法索引；不支持或语法损坏的源文件会显式降级。
 - `.git`、`.pi`、`.gradle`、`node_modules`、`dist`、`build` 和 `target` path segment 始终排除，Java source
   symlink 不会被跟随。

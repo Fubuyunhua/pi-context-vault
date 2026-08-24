@@ -1,6 +1,6 @@
 {
   "name": "pi-context-vault",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Recoverable observation storage and a revision-aware repository map for Pi",
   "type": "module",
   "license": "MIT",

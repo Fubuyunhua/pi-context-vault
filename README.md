@@ -2,14 +2,13 @@
 
 Recoverable observation storage and a revision-aware repository map for Pi.
 
-> v0.1.0 targets Node.js 22.19 or newer, `@earendil-works/pi-coding-agent` 0.84.x, and
-> TypeScript/JavaScript repositories.
->
-> **Next release / current `main`:** Java semantic indexing is implemented after v0.1.0. The immutable v0.1.0 tag
-> does not contain Java AST support; use a development checkout until a newer tag is published.
+> **Current `main`: v0.2.0 release-candidate metadata (untagged).** The latest immutable release tag is
+> [`v0.1.2`](https://github.com/Fubuyunhua/pi-context-vault/releases/tag/v0.1.2). Use that tag for a stable install;
+> use a reviewed development checkout to evaluate the release candidate. No `v0.2.0` tag exists yet.
 
 [中文说明](./README.zh-CN.md) · [Research and rationale](./deepResearch.md) ·
-[v0.1 specification](./docs/specs/0001-v0.1.md) · [v0.1.0 release notes](./docs/releases/v0.1.0.md)
+[v0.1 specification](./docs/specs/0001-v0.1.md) · [v0.2.0 RC notes](./docs/releases/v0.2.0.md) ·
+[historical v0.1.0 release notes](./docs/releases/v0.1.0.md)
 
 ## What it does
 
@@ -17,9 +16,9 @@ Recoverable observation storage and a revision-aware repository map for Pi.
   with a bounded receipt that the agent can retrieve later. If persistence fails, the original result stays visible.
 - Replaces older archived observations in Pi's non-persistent model view when context pressure crosses the configured
   threshold. Canonical session chronology and tool-call/tool-result pairs are preserved.
-- Maintains a TS/JS repository map of paths, lexical terms, imports, exports, top-level symbols, and signatures. On
-  current `main`, `.java` files additionally receive deterministic AST indexing for packages, imports, declarations,
-  members, annotations, generics, and syntactic type relationships.
+- Maintains a TS/JS repository map of paths, lexical terms, imports, exports, top-level symbols, and signatures.
+  `.java` files additionally receive deterministic AST indexing for packages, imports, declarations, members,
+  annotations, generics, and syntactic type relationships.
 - Watches agent and external filesystem changes, reconciles Git HEAD plus dirty files, and atomically activates
   revisioned map generations.
 - Injects only a small task-relevant map capsule. Every capsule identifies its workspace revision and freshness; a
@@ -40,10 +39,11 @@ Pi extensions execute with your operating-system permissions. Review extension s
 
 ### User installation (recommended)
 
-Install the immutable v0.1.0 tag once for your Pi user profile:
+Install the latest immutable tag, v0.1.2, once for your Pi user profile. The v0.2.0 release candidate is not a tag
+and must not be installed by inventing an `@v0.2.0` source.
 
 ```bash
-pi install git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
+pi install git:github.com/Fubuyunhua/pi-context-vault@v0.1.2
 ```
 
 Verify that Pi recorded the exact source:
@@ -55,7 +55,7 @@ pi list
 The output should include:
 
 ```text
-git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
+git:github.com/Fubuyunhua/pi-context-vault@v0.1.2
 ```
 
 Restart Pi after installation. The extension is then available in every project.
@@ -65,7 +65,7 @@ Restart Pi after installation. The extension is then available in every project.
 To enable the package only through a project's `.pi/settings.json`, run this from that project:
 
 ```bash
-pi install git:github.com/Fubuyunhua/pi-context-vault@v0.1.0 -l
+pi install git:github.com/Fubuyunhua/pi-context-vault@v0.1.2 -l
 ```
 
 Project-local resources are subject to Pi's project-trust policy. Review them and approve the project when Pi asks.
@@ -83,8 +83,9 @@ pi -e /absolute/path/to/pi-context-vault/extensions/index.ts
 
 Use the extension entry file shown above; passing only the repository directory is not required for `-e`.
 
-To evaluate Java semantic indexing before its first tagged release, check out `main`, run `npm ci`, and use this
-development-checkout command. Do not install `v0.1.0` when Java AST support is part of the acceptance target.
+Current `main` carries v0.2.0 release-candidate metadata but remains untagged. To evaluate it, review and check out
+`main`, run `npm ci`, and use this development-checkout command. Tagged users should remain on v0.1.2 until an
+immutable v0.2.0 tag is actually created.
 
 ## First run and health check
 
@@ -102,7 +103,8 @@ In the Pi TUI, run:
 /context-vault status
 ```
 
-A healthy startup shows `vault v0.1.0` in Pi's status area. `doctor` should report `healthy`, an initialized
+A healthy startup shows `vault v0.1.0` for the immutable v0.1.2 tag (a historical metadata mismatch) or
+`vault v0.2.0` for the current untagged release-candidate checkout. `doctor` should report `healthy`, an initialized
 Observation component, a usable Repo Map, and `stateOutsideProjectTree: true`. The first map build can take longer in
 large repositories.
 
@@ -194,7 +196,7 @@ paths, and freshness.
 { "query": "authentication token refresh", "limit": 8 }
 ```
 
-On current `main`, Java queries rank structured declarations above comments and incidental references. For example:
+Java queries rank structured declarations above comments and incidental references. For example:
 
 ```json
 { "query": "UserController createUser UserRepository", "limit": 8 }
@@ -314,17 +316,17 @@ An immutable tag does not move. To upgrade when a newer tag exists, remove the e
 new source, then restart Pi:
 
 ```bash
-pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
+pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.2
 pi install git:github.com/Fubuyunhua/pi-context-vault@<new-tag>
 ```
 
 For a project-local installation, add `-l` to both commands. For an intentionally unpinned source, Pi also supports
 `pi update <source>`; do not expect it to change a pinned tag.
 
-Use `pi config` to enable or disable installed package resources. To uninstall v0.1.0:
+Use `pi config` to enable or disable installed package resources. To uninstall v0.1.2:
 
 ```bash
-pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.0
+pi remove git:github.com/Fubuyunhua/pi-context-vault@v0.1.2
 ```
 
 `pi uninstall` is an alias for `pi remove`. Removal does not delete archived observations or Repo Map state. This is
@@ -375,9 +377,9 @@ and verify with direct `read`, search, `git diff`, and tests.
   the model input limit. Pi core owns that final hard-invariant boundary.
 - v0.1.0 does not provide embeddings, a complete cross-language call graph, typed long-term memory, automatic Git
   commits, or tool-episode subagents.
-- The v0.1.0 tag semantically indexes TS, TSX, JS, JSX, MTS, CTS, MJS, and CJS. Current `main` also semantically
-  indexes Java without invoking Maven, Gradle, `javac`, annotation processors, or repository code. It does not perform
-  type solving, method-body call graphs, dependency resolution, or Lombok member inference. Other text files receive
+- The v0.1.0 tag semantically indexes TS, TSX, JS, JSX, MTS, CTS, MJS, and CJS. v0.1.2 and current `main` also
+  semantically index Java without invoking Maven, Gradle, `javac`, annotation processors, or repository code. They do
+  not perform type solving, method-body call graphs, dependency resolution, or Lombok member inference. Other text files receive
   lexical indexing; unsupported or malformed source is explicitly degraded.
 - `.git`, `.pi`, `.gradle`, `node_modules`, `dist`, `build`, and `target` path segments are always excluded from the
   map. Java source symlinks are not followed.
