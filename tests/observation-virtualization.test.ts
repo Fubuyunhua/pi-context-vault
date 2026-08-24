@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "../src/artifacts/store.js";
-import { buildReceipt, ObservationRuntime, observationId } from "../src/observations/virtualization.js";
+import {
+  buildReceipt,
+  MAX_RETRIEVAL_BYTES,
+  ObservationRuntime,
+  observationId,
+} from "../src/observations/virtualization.js";
 import { Telemetry } from "../src/telemetry.js";
 
 const roots: string[] = [];
@@ -82,12 +87,137 @@ describe("observation virtualization", () => {
     const searched = await runtime.search({ query: "needle", toolName: "read", limit: 3 });
     expect(searched.results).toHaveLength(3);
     expect(searched.results.every((result) => result.observation.toolName === "read")).toBe(true);
+    expect(searched.truncated).toBe(true);
 
     const byHash = await runtime.get({ id: searched.results[0]?.observation.artifactId ?? "" });
     expect(byHash.observation.artifactId).toBe(searched.results[0]?.observation.artifactId);
     const matching = await runtime.get({ id: results[0]?.observationId ?? "", query: "needle", limit: 1 });
     expect(matching.matches).toHaveLength(1);
     expect(matching.truncated).toBe(false);
+  });
+
+  it("aligns byte retrieval to UTF-8 boundaries and reports requested and actual ranges", async () => {
+    const { runtime } = await setup({ threshold: 1 });
+    const archived = await runtime.virtualize({
+      toolCallId: "utf8",
+      toolName: "read",
+      text: "Aé中🙂Z",
+      isError: false,
+    });
+
+    const alignedStart = await runtime.get({ id: archived.observationId, offset: 2, limit: 8 });
+    expect(alignedStart.evidence).toMatchObject({
+      byteOffset: 2,
+      requestedByteOffset: 2,
+      byteStart: 3,
+      byteEnd: 10,
+      text: "中🙂",
+      truncated: true,
+    });
+    expect(alignedStart.evidence?.text).not.toContain("�");
+
+    const alignedEnd = await runtime.get({ id: archived.observationId, offset: 1, limit: 4 });
+    expect(alignedEnd.evidence).toMatchObject({
+      requestedByteOffset: 1,
+      byteStart: 1,
+      byteEnd: 3,
+      text: "é",
+      truncated: true,
+    });
+    const nextPage = await runtime.get({ id: archived.observationId, offset: alignedEnd.evidence?.byteEnd, limit: 3 });
+    expect(nextPage.evidence).toMatchObject({ byteStart: 3, byteEnd: 6, text: "中", truncated: true });
+
+    const tooSmall = await runtime.get({ id: archived.observationId, offset: 1, limit: 1 });
+    expect(tooSmall.evidence).toMatchObject({ byteStart: 1, byteEnd: 1, text: "", truncated: true });
+    expect(tooSmall.evidence?.text).not.toContain("�");
+  });
+
+  it("rejects byte offsets beyond content and keeps retrieval under the maximum byte limit", async () => {
+    const { runtime } = await setup({ threshold: 1 });
+    const archived = await runtime.virtualize({
+      toolCallId: "maximum",
+      toolName: "read",
+      text: `${"x ".repeat((MAX_RETRIEVAL_BYTES + 100) / 2)}🙂`,
+      isError: false,
+    });
+
+    const fetched = await runtime.get({ id: archived.observationId, limit: MAX_RETRIEVAL_BYTES + 1_000 });
+    expect(Buffer.byteLength(fetched.evidence?.text ?? "", "utf8")).toBe(MAX_RETRIEVAL_BYTES);
+    expect(fetched.evidence).toMatchObject({ byteStart: 0, byteEnd: MAX_RETRIEVAL_BYTES, truncated: true });
+
+    const contentBytes = MAX_RETRIEVAL_BYTES + 104;
+    const atEnd = await runtime.get({ id: archived.observationId, offset: contentBytes });
+    expect(atEnd.evidence).toMatchObject({
+      byteStart: contentBytes,
+      byteEnd: contentBytes,
+      text: "",
+      truncated: false,
+    });
+    await expect(runtime.get({ id: archived.observationId, offset: contentBytes + 1 })).rejects.toThrow(
+      "must not exceed content length",
+    );
+  });
+
+  it("matches complete long lines before returning bounded match-centered excerpts", async () => {
+    const { runtime } = await setup({ threshold: 10 * 1024 * 1024 });
+    const lateLine = `${"a ".repeat(256 * 1024)}late-needle-${"界".repeat(2_000)}`;
+    const archived = await runtime.virtualize({
+      toolCallId: "long-line",
+      toolName: "bash",
+      text: `first line\n${lateLine}\nlast line`,
+      isError: false,
+    });
+
+    const fetched = await runtime.get({ id: archived.observationId, query: "late-needle" });
+    expect(fetched.matches).toHaveLength(1);
+    expect(fetched.matches?.[0]).toMatchObject({ line: 2 });
+    expect(fetched.matches?.[0]?.text).toContain("late-needle");
+    expect(Buffer.byteLength(fetched.matches?.[0]?.text ?? "", "utf8")).toBeLessThanOrEqual(2 * 1024);
+    expect(fetched.matches?.[0]?.text).not.toContain("�");
+
+    const searched = await runtime.search({ query: "late-needle" });
+    expect(searched.results).toHaveLength(1);
+    expect(searched.results[0]?.matches[0]?.text).toContain("late-needle");
+    expect(Buffer.byteLength(searched.results[0]?.matches[0]?.text ?? "", "utf8")).toBeLessThanOrEqual(1024);
+    expect(searched.results[0]?.matches[0]?.text).not.toContain("�");
+  });
+
+  it("paginates query matches after full-line matching and reports truncation accurately", async () => {
+    const { runtime } = await setup({ threshold: 1 });
+    const archived = await runtime.virtualize({
+      toolCallId: "pagination",
+      toolName: "read",
+      text: "needle one\nno match\nneedle two\nneedle three",
+      isError: false,
+    });
+
+    const middle = await runtime.get({ id: archived.observationId, query: "needle", offset: 1, limit: 1 });
+    expect(middle.matches).toEqual([{ line: 3, text: "needle two" }]);
+    expect(middle.truncated).toBe(true);
+    const last = await runtime.get({ id: archived.observationId, query: "needle", offset: 2, limit: 1 });
+    expect(last.matches).toEqual([{ line: 4, text: "needle three" }]);
+    expect(last.truncated).toBe(false);
+    const pastEnd = await runtime.get({ id: archived.observationId, query: "needle", offset: 10, limit: 1 });
+    expect(pastEnd.matches).toEqual([]);
+    expect(pastEnd.truncated).toBe(false);
+  });
+
+  it("returns only sanitized bounded search evidence", async () => {
+    const { runtime } = await setup({ threshold: 1 });
+    const archived = await runtime.virtualize({
+      toolCallId: "sanitized-search",
+      toolName: "bash",
+      text: `${"x ".repeat(2_000)}TOKEN=long-secret-value searchable-marker`,
+      isError: false,
+    });
+
+    const fetched = await runtime.get({ id: archived.observationId, query: "searchable-marker" });
+    expect(fetched.matches?.[0]?.text).toContain("searchable-marker");
+    expect(fetched.matches?.[0]?.text).not.toContain("long-secret-value");
+    expect(Buffer.byteLength(fetched.matches?.[0]?.text ?? "", "utf8")).toBeLessThanOrEqual(2 * 1024);
+    const searched = await runtime.search({ query: "searchable-marker", toolName: "bash" });
+    expect(searched.results[0]?.matches[0]?.text).not.toContain("long-secret-value");
+    expect(Buffer.byteLength(searched.results[0]?.matches[0]?.text ?? "", "utf8")).toBeLessThanOrEqual(1024);
   });
 
   it("archives below-threshold evidence without replacement and returns defensive status", async () => {

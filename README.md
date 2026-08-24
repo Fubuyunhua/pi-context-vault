@@ -168,8 +168,10 @@ Retrieve one archived observation by its `obs_...` ID or 64-character artifact h
 { "id": "obs_<24-hex-characters>", "offset": 0, "limit": 8192 }
 ```
 
-Without `query`, `offset` and `limit` select a byte range; `limit` is capped at 32768 bytes. With `query`, the tool
-returns matching lines, `offset` is the match offset, and at most 20 bounded matches are returned.
+Without `query`, `offset` and `limit` select a UTF-8 byte range; `limit` is capped at 32768 bytes. The response keeps
+`byteOffset`/`requestedByteOffset` as the requested position and reports the UTF-8-aligned half-open range as
+`byteStart` and `byteEnd`; use `byteEnd` to request the next page. With `query`, the tool searches complete sanitized
+lines before returning match-centered bounded excerpts, `offset` is the match offset, and at most 20 matches are returned.
 
 ```json
 { "id": "obs_<24-hex-characters>", "query": "TypeError", "offset": 0, "limit": 10 }

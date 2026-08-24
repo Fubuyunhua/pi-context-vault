@@ -47,7 +47,15 @@ export interface ObservationRuntimeOptions {
 export interface ObservationGetResult {
   observation: ArtifactMetadata;
   query?: string;
-  evidence?: { byteOffset: number; text: string; truncated: boolean };
+  evidence?: {
+    /** Compatibility alias for requestedByteOffset. */
+    byteOffset: number;
+    requestedByteOffset: number;
+    byteStart: number;
+    byteEnd: number;
+    text: string;
+    truncated: boolean;
+  };
   matches?: Array<{ line: number; text: string }>;
   truncated?: boolean;
 }
@@ -58,20 +66,77 @@ export interface ObservationSearchResult {
   truncated: boolean;
 }
 
-function byteSlice(value: string, offset: number, limit: number): string {
+interface Utf8Slice {
+  byteStart: number;
+  byteEnd: number;
+  text: string;
+}
+
+function isContinuationByte(byte: number | undefined): boolean {
+  return byte !== undefined && (byte & 0xc0) === 0x80;
+}
+
+function byteSlice(value: string, offset: number, limit: number): Utf8Slice {
   const source = Buffer.from(value, "utf8");
-  let end = Math.min(source.length, offset + limit);
-  let result = source.subarray(offset, end).toString("utf8");
-  while (end > offset && Buffer.byteLength(result) > limit) {
-    end -= 1;
-    result = source.subarray(offset, end).toString("utf8");
-  }
-  return result;
+  let byteStart = Math.min(offset, source.length);
+  while (byteStart < source.length && isContinuationByte(source[byteStart])) byteStart += 1;
+
+  const requestedEnd = Math.min(source.length, offset + limit);
+  let byteEnd = Math.max(byteStart, requestedEnd);
+  while (byteEnd > byteStart && isContinuationByte(source[byteEnd])) byteEnd -= 1;
+  return { byteStart, byteEnd, text: source.subarray(byteStart, byteEnd).toString("utf8") };
 }
 
 function clipped(value: string, maxBytes: number): string {
   if (Buffer.byteLength(value) <= maxBytes) return value;
-  return byteSlice(value, 0, maxBytes);
+  return byteSlice(value, 0, maxBytes).text;
+}
+
+function literalCaseInsensitivePattern(query: string): RegExp {
+  return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "iu");
+}
+
+function matchingExcerpt(line: string, pattern: RegExp, maxBytes: number): string | undefined {
+  const match = pattern.exec(line);
+  if (match === null) return undefined;
+  const sourceBytes = Buffer.byteLength(line, "utf8");
+  if (sourceBytes <= maxBytes) return line;
+
+  const matchStart = Buffer.byteLength(line.slice(0, match.index), "utf8");
+  const matchBytes = Buffer.byteLength(match[0], "utf8");
+  const contextBefore = Math.max(0, Math.floor((maxBytes - Math.min(matchBytes, maxBytes)) / 2));
+  const desiredStart = Math.min(Math.max(0, matchStart - contextBefore), sourceBytes - maxBytes);
+  return byteSlice(line, desiredStart, maxBytes).text;
+}
+
+function matchingLines(
+  content: string,
+  pattern: RegExp,
+  offset: number,
+  limit: number,
+  excerptBytes: number,
+): { matches: Array<{ line: number; text: string }>; truncated: boolean } {
+  const matches: Array<{ line: number; text: string }> = [];
+  let matchingIndex = 0;
+  let lineStart = 0;
+  let lineNumber = 1;
+  while (lineStart <= content.length) {
+    const newline = content.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? content.length : newline;
+    const line = content.slice(lineStart, lineEnd);
+    const text = matchingExcerpt(line, pattern, excerptBytes);
+    if (text !== undefined) {
+      if (matchingIndex >= offset) {
+        if (matches.length >= limit) return { matches, truncated: true };
+        matches.push({ line: lineNumber, text });
+      }
+      matchingIndex += 1;
+    }
+    if (newline === -1) break;
+    lineStart = newline + 1;
+    lineNumber += 1;
+  }
+  return { matches, truncated: false };
 }
 
 export function observationId(sessionId: string, toolCallId: string): string {
@@ -108,7 +173,7 @@ export function buildReceipt(input: {
   let best = empty;
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
-    fixed.evidence.preview = byteSlice(input.sanitizedContent, 0, middle);
+    fixed.evidence.preview = byteSlice(input.sanitizedContent, 0, middle).text;
     const candidate = JSON.stringify(fixed);
     if (Buffer.byteLength(candidate) <= input.maxBytes) {
       best = candidate;
@@ -263,22 +328,29 @@ export class ObservationRuntime {
     const limit = Math.min(params.limit ?? 8 * 1024, MAX_RETRIEVAL_BYTES);
     const offset = params.offset ?? 0;
     if (query === undefined) {
+      const contentBytes = Buffer.byteLength(content, "utf8");
+      if (offset > contentBytes) throw new Error(`offset must not exceed content length (${contentBytes} bytes)`);
+      const slice = byteSlice(content, offset, limit);
       return {
         observation: metadata,
         evidence: {
           byteOffset: offset,
-          text: byteSlice(content, offset, limit),
-          truncated: offset + limit < Buffer.byteLength(content),
+          requestedByteOffset: offset,
+          byteStart: slice.byteStart,
+          byteEnd: slice.byteEnd,
+          text: slice.text,
+          truncated: slice.byteEnd < contentBytes,
         },
       };
     }
-    const lines = content.split("\n");
-    const needle = query.toLocaleLowerCase();
-    const allMatches = lines
-      .map((line, index) => ({ line: index + 1, text: clipped(line, 2 * 1024) }))
-      .filter((entry) => entry.text.toLocaleLowerCase().includes(needle));
-    const matches = allMatches.slice(offset, offset + Math.min(limit, MAX_SEARCH_RESULTS));
-    return { observation: metadata, query, matches, truncated: offset + matches.length < allMatches.length };
+    const page = matchingLines(
+      content,
+      literalCaseInsensitivePattern(query),
+      offset,
+      Math.min(limit, MAX_SEARCH_RESULTS),
+      2 * 1024,
+    );
+    return { observation: metadata, query, matches: page.matches, truncated: page.truncated };
   }
 
   async search(params: { query: string; toolName?: string; limit?: number }): Promise<ObservationSearchResult> {
@@ -291,20 +363,17 @@ export class ObservationRuntime {
       throw new Error("limit must be a positive integer");
     }
     const limit = Math.min(params.limit ?? 10, MAX_SEARCH_RESULTS);
-    const needle = query.toLocaleLowerCase();
+    const pattern = literalCaseInsensitivePattern(query);
     const results: Array<{ observation: ArtifactMetadata; matches: Array<{ line: number; text: string }> }> = [];
     const entries = (await this.#store.listMetadata()).reverse();
     for (const metadata of entries) {
       if (params.toolName !== undefined && metadata.toolName !== params.toolName) continue;
       const content = await this.#store.read(metadata.artifactId);
-      const matches = content
-        .split("\n")
-        .map((line, index) => ({ line: index + 1, text: clipped(line, 1024) }))
-        .filter((entry) => entry.text.toLocaleLowerCase().includes(needle))
-        .slice(0, 5);
-      if (matches.length > 0) results.push({ observation: metadata, matches });
-      if (results.length >= limit) break;
+      const matches = matchingLines(content, pattern, 0, 5, 1024).matches;
+      if (matches.length === 0) continue;
+      if (results.length >= limit) return { query, results, truncated: true };
+      results.push({ observation: metadata, matches });
     }
-    return { query, results, truncated: results.length >= limit };
+    return { query, results, truncated: false };
   }
 }
