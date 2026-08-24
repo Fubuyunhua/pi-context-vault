@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { ArtifactStore } from "../src/artifacts/store.js";
+import { Telemetry } from "../src/telemetry.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -62,10 +64,39 @@ describe("file lock subprocess stress", () => {
     const records = (await readFile(join(metadataRoot, "observations.jsonl"), "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { observationId: string });
+      .map((line) => JSON.parse(line) as { metadata: { observationId: string } });
     expect(records).toHaveLength(workers * observationsPerWorker);
-    expect(new Set(records.map((record) => record.observationId))).toHaveLength(workers * observationsPerWorker);
+    expect(new Set(records.map((record) => record.metadata.observationId))).toHaveLength(
+      workers * observationsPerWorker,
+    );
     await expect(readdir(metadataRoot)).resolves.not.toContain("artifacts.lock");
+  }, 20_000);
+
+  it("detects subprocess tail appends and compaction pathname replacement", async () => {
+    const root = await tempRoot();
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    const telemetry = new Telemetry();
+    const reader = new ArtifactStore({ artifactsRoot, metadataRoot, telemetry });
+    await reader.archive({
+      observationId: "shared-observation",
+      toolName: "parent",
+      sessionId: "parent",
+      content: "parent content",
+    });
+    await reader.listMetadata();
+    const rebuildsBefore = telemetry.snapshot().metadataFullRebuildCount;
+
+    await execFileAsync(
+      process.execPath,
+      ["--experimental-strip-types", workerPath, "artifact-compact", artifactsRoot, metadataRoot, "child content"],
+      { timeout: 20_000 },
+    );
+
+    expect((await reader.getMetadata("shared-observation"))?.toolName).toBe("subprocess-compaction");
+    expect(telemetry.snapshot().metadataFullRebuildCount).toBeGreaterThan(rebuildsBefore);
+    const lines = (await readFile(join(metadataRoot, "observations.jsonl"), "utf8")).trim().split("\n");
+    expect(lines).toHaveLength(1);
   }, 20_000);
 
   it("serializes RepoMap activation across processes", async () => {

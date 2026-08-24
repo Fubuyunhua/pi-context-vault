@@ -17,6 +17,21 @@ try {
         content: `artifact from ${worker}:${index}`,
       });
     }
+  } else if (mode === "artifact-compact") {
+    const { ArtifactStore } = await vite.ssrLoadModule("/src/artifacts/store.ts");
+    const store = new ArtifactStore({
+      artifactsRoot: first,
+      metadataRoot: second,
+      metadataCompactionThresholdBytes: 0,
+      metadataCompactionThresholdObsoleteRecords: 1,
+      metadataCompactionThresholdObsoleteRatio: 0,
+    });
+    await store.archive({
+      observationId: "shared-observation",
+      toolName: "subprocess-compaction",
+      sessionId: "subprocess",
+      content: workerText,
+    });
   } else if (mode === "repo-map") {
     const { RepoMapRuntime } = await vite.ssrLoadModule("/src/repo-map/runtime.ts");
     const runtime = new RepoMapRuntime({ projectRoot: first, stateRoot: second, watch: false });

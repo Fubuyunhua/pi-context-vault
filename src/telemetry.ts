@@ -66,6 +66,20 @@ export interface TelemetrySnapshot {
   archiveDurationMsTotal: number;
   metadataReadDurationMsTotal: number;
   metadataWriteDurationMsTotal: number;
+  metadataTailSyncCount: number;
+  metadataTailBytesRead: number;
+  metadataFullRebuildCount: number;
+  metadataFullRebuildDurationMsTotal: number;
+  metadataAppendCount: number;
+  metadataBytesAppended: number;
+  metadataTombstoneCount: number;
+  metadataTornTailRecoveryCount: number;
+  metadataTornBytesDiscarded: number;
+  metadataCompactionCount: number;
+  metadataCompactionFailureCount: number;
+  metadataCompactionDurationMsTotal: number;
+  metadataCompactionBytesBefore: number;
+  metadataCompactionBytesAfter: number;
   // Context reduction
   reductionInvocationCount: number;
   reductionTriggeredCount: number;
@@ -112,6 +126,20 @@ export class Telemetry {
   #archiveDurationMsTotal = 0;
   #metadataReadDurationMsTotal = 0;
   #metadataWriteDurationMsTotal = 0;
+  #metadataTailSyncCount = 0;
+  #metadataTailBytesRead = 0;
+  #metadataFullRebuildCount = 0;
+  #metadataFullRebuildDurationMsTotal = 0;
+  #metadataAppendCount = 0;
+  #metadataBytesAppended = 0;
+  #metadataTombstoneCount = 0;
+  #metadataTornTailRecoveryCount = 0;
+  #metadataTornBytesDiscarded = 0;
+  #metadataCompactionCount = 0;
+  #metadataCompactionFailureCount = 0;
+  #metadataCompactionDurationMsTotal = 0;
+  #metadataCompactionBytesBefore = 0;
+  #metadataCompactionBytesAfter = 0;
   #reductionInvocationCount = 0;
   #reductionTriggeredCount = 0;
   #reducedObservationCount = 0;
@@ -159,6 +187,20 @@ export class Telemetry {
       archiveDurationMsTotal: this.#archiveDurationMsTotal,
       metadataReadDurationMsTotal: this.#metadataReadDurationMsTotal,
       metadataWriteDurationMsTotal: this.#metadataWriteDurationMsTotal,
+      metadataTailSyncCount: this.#metadataTailSyncCount,
+      metadataTailBytesRead: this.#metadataTailBytesRead,
+      metadataFullRebuildCount: this.#metadataFullRebuildCount,
+      metadataFullRebuildDurationMsTotal: this.#metadataFullRebuildDurationMsTotal,
+      metadataAppendCount: this.#metadataAppendCount,
+      metadataBytesAppended: this.#metadataBytesAppended,
+      metadataTombstoneCount: this.#metadataTombstoneCount,
+      metadataTornTailRecoveryCount: this.#metadataTornTailRecoveryCount,
+      metadataTornBytesDiscarded: this.#metadataTornBytesDiscarded,
+      metadataCompactionCount: this.#metadataCompactionCount,
+      metadataCompactionFailureCount: this.#metadataCompactionFailureCount,
+      metadataCompactionDurationMsTotal: this.#metadataCompactionDurationMsTotal,
+      metadataCompactionBytesBefore: this.#metadataCompactionBytesBefore,
+      metadataCompactionBytesAfter: this.#metadataCompactionBytesAfter,
       reductionInvocationCount: this.#reductionInvocationCount,
       reductionTriggeredCount: this.#reductionTriggeredCount,
       reducedObservationCount: this.#reducedObservationCount,
@@ -276,7 +318,39 @@ export class Telemetry {
   }
 
   recordMetadataWrite(durationMs: number): void {
-    this.#metadataWriteDurationMsTotal += durationMs;
+    this.#metadataWriteDurationMsTotal += finiteNonnegative(durationMs);
+  }
+
+  recordMetadataTailSync(bytesRead: number): void {
+    this.#metadataTailSyncCount += 1;
+    this.#metadataTailBytesRead += finiteNonnegative(bytesRead);
+  }
+
+  recordMetadataFullRebuild(durationMs: number): void {
+    this.#metadataFullRebuildCount += 1;
+    this.#metadataFullRebuildDurationMsTotal += finiteNonnegative(durationMs);
+  }
+
+  recordMetadataAppend(bytesAppended: number, tombstones: number): void {
+    this.#metadataAppendCount += 1;
+    this.#metadataBytesAppended += finiteNonnegative(bytesAppended);
+    this.#metadataTombstoneCount += finiteNonnegative(tombstones);
+  }
+
+  recordMetadataTornTailRecovery(bytesDiscarded: number): void {
+    this.#metadataTornTailRecoveryCount += 1;
+    this.#metadataTornBytesDiscarded += finiteNonnegative(bytesDiscarded);
+  }
+
+  recordMetadataCompaction(durationMs: number, bytesBefore: number, bytesAfter: number): void {
+    this.#metadataCompactionCount += 1;
+    this.#metadataCompactionDurationMsTotal += finiteNonnegative(durationMs);
+    this.#metadataCompactionBytesBefore = finiteNonnegative(bytesBefore);
+    this.#metadataCompactionBytesAfter = finiteNonnegative(bytesAfter);
+  }
+
+  recordMetadataCompactionFailure(): void {
+    this.#metadataCompactionFailureCount += 1;
   }
 
   recordReduction(input: {

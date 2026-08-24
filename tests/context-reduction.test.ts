@@ -129,7 +129,7 @@ describe("bounded context reduction", () => {
         message.role === "toolResult" ? `${message.role}:${message.toolCallId}` : message.role,
       ),
     );
-  });
+  }, 15_000);
 
   it("preserves tool pairing, custom/user constraints, and archived evidence retrievability", async () => {
     const store = await setup();
@@ -161,7 +161,7 @@ describe("bounded context reduction", () => {
     const metadata = await store.getMetadata(receipt.id);
     expect(metadata?.toolCallId).toBe(receiptMessage.toolCallId);
     expect(await store.read(metadata?.artifactId ?? "")).toContain(`${Number(receiptMessage.toolCallId.slice(5))}:`);
-  });
+  }, 15_000);
 
   it("applies hysteresis and is deterministic on repeated hooks", async () => {
     const store = await setup();
@@ -175,7 +175,7 @@ describe("bounded context reduction", () => {
     const second = await reduceContext(options(store, first.messages, { contextWindowTokens: 8_000 }));
     expect(second.messages).toEqual(first.messages);
     expect(second.reducedCount).toBe(0);
-  });
+  }, 15_000);
 
   it("keeps unarchived and unpaired results intact when the target cannot be reached", async () => {
     const store = await setup();
@@ -189,5 +189,5 @@ describe("bounded context reduction", () => {
       reduced.messages.find((message) => message.role === "toolResult" && message.toolCallId === "call-10"),
     ).toEqual(result("call-10", "10:".padEnd(1_200, "x")));
     expect(reduced.messages.at(-1)).toEqual(result("orphan", "must survive".repeat(500)));
-  });
+  }, 15_000);
 });

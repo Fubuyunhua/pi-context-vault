@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { durableMkdir } from "./atomic.js";
 
 export const STATE_SCHEMA_VERSION = 1;
 
@@ -25,10 +26,7 @@ export async function resolveProjectState(
   const artifactsRoot = join(stateRoot, "artifacts");
   const mapRoot = join(stateRoot, "repo-map");
   const metadataRoot = join(stateRoot, "metadata");
-  await Promise.all([
-    mkdir(artifactsRoot, { recursive: true, mode: 0o700 }),
-    mkdir(mapRoot, { recursive: true, mode: 0o700 }),
-    mkdir(metadataRoot, { recursive: true, mode: 0o700 }),
-  ]);
+  await durableMkdir(stateRoot);
+  await Promise.all([durableMkdir(artifactsRoot), durableMkdir(mapRoot), durableMkdir(metadataRoot)]);
   return { projectId, projectRoot, stateRoot, artifactsRoot, mapRoot, metadataRoot };
 }

@@ -58,12 +58,39 @@ async function syncDirectory(path: string): Promise<void> {
   }
 }
 
-async function syncParentDirectory(path: string): Promise<void> {
+export async function syncParentDirectory(path: string): Promise<void> {
   await syncDirectory(dirname(path));
 }
 
+/** Creates every missing directory and durably publishes each new parent entry. */
+export async function durableMkdir(path: string): Promise<void> {
+  try {
+    await mkdir(path, { mode: 0o700 });
+    await syncParentDirectory(path);
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "EEXIST") {
+      // A concurrent creator may have published the entry but not synced it yet.
+      // Sync it ourselves rather than treating existence as proof of durability.
+      await syncParentDirectory(path);
+      return;
+    }
+    if (code !== "ENOENT") throw error;
+    const parent = dirname(path);
+    if (parent === path) throw error;
+    await durableMkdir(parent);
+    try {
+      await mkdir(path, { mode: 0o700 });
+      await syncParentDirectory(path);
+    } catch (retryError) {
+      if (errorCode(retryError) !== "EEXIST") throw retryError;
+      await syncParentDirectory(path);
+    }
+  }
+}
+
 export async function atomicWriteFile(path: string, content: string | Uint8Array): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await durableMkdir(dirname(path));
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   const handle = await open(temporary, "wx", 0o600);
   let handleClosed = false;
