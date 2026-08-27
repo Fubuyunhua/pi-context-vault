@@ -9,10 +9,17 @@ Context Vault 会归档符合条件的文本 Tool Result，把较大或较旧结
 仓库索引、Git freshness、Java/TypeScript 分析、搜索、Graph v1 和 Resolver v1 现在属于
 [`pi-repo-context`](https://github.com/Fubuyunhua/pi-repo-context)。
 
-拆分后的 Repo Context 仓库已经存在，但本文不宣称任何拆分版本已经发布。经过审核的 `0.1.0` 发布后，请使用
-`repo_context_search` 和 `.pi/repo-context.json`。`context_vault_repo_map` 仅是 Repo Context `0.1.x` 中
-`repo_context_search` 的 deprecated alias；Repo Context 计划在 `0.2.0` 删除该 alias。Context Vault 不注册这两个
-仓库 Tool。新派生状态位于：
+拆分后的 Repo Context 仓库已经存在，但本文不宣称任何拆分版本已经发布。只有经过审核的不可变 `v0.1.0` tag 存在后，
+才可以安装：
+
+```bash
+pi install git:github.com/Fubuyunhua/pi-repo-context@v0.1.0
+```
+
+在该 tag 存在之前，不得把这条命令视为可用安装方式。该条件发布成立后，请使用 `repo_context_search` 和
+`.pi/repo-context.json`。`context_vault_repo_map` → `repo_context_search` 是仅限 Repo Context `0.1.x` 的
+deprecated alias；Repo Context 计划在 `0.2.0` 删除该 alias。Context Vault 不注册这两个仓库 Tool。Repo Context
+绝不会读取旧 `.pi/context-vault.json`；受支持的配置必须手工复制。新派生状态位于：
 
 ```text
 ${PI_CODING_AGENT_DIR}/pi-repo-context/projects/<projectId>
@@ -38,6 +45,10 @@ Repository Map configuration has moved to pi-repo-context.
 `mapInjectionMode` 和 `debugRequestFingerprints` 没有对应字段。Repo Context 采用 Tool-first，不自动注入。旧 Vault
 `repo-map/` 目录中的派生状态不会在拆分过程中被读取、移动、迁移、GC 或删除。两个拆分 package 都不会发布暂停的
 S03 研究或 legacy bench assets。
+
+所有权保持独立：Context Vault 拥有 extension ID/UI key `context-vault`、`context_vault_status` 和 Vault telemetry；
+Repo Context 拥有 extension ID/UI key `repo-context`、`repo_context_status` 和 Repo telemetry。两者不共享 status 或
+telemetry state。
 
 ## 要求与安装
 
@@ -159,11 +170,13 @@ npm ci
 npm run check
 npm test
 npm run test:package
+npm run test:pi
 npm run test:coverage
 ```
 
 Coverage gate 为 85% lines、80% branches。Package smoke 会打包并安装 artifact，验证精确的 Vault-only surface，通过 Pi
-TypeScript loader 加载，并执行 archive → receipt → get/search。
+TypeScript loader 加载，并执行 archive → receipt → get/search。在 Linux Node.js 24 上，`test:pi` 使用隔离的临时 home 和
+state root，通过真实 Pi 0.84.1 RPC 测试打包后的 extension。
 
 ## License
 

@@ -10,10 +10,18 @@ lets the agent retrieve the evidence later. It no longer indexes repositories or
 Repository indexing, Git freshness, Java/TypeScript analysis, search, Graph v1, and Resolver v1 now belong to
 [`pi-repo-context`](https://github.com/Fubuyunhua/pi-repo-context).
 
-The split Repo Context repository exists, but no split release is claimed here. After its reviewed `0.1.0` release
-becomes available, use `repo_context_search` and `.pi/repo-context.json`. `context_vault_repo_map` is a deprecated Repo
-Context `0.1.x`-only alias for `repo_context_search`; Repo Context plans to remove the alias in `0.2.0`. Context Vault
-does not register either repository tool. Repo Context stores new derived state under:
+The split Repo Context repository exists, but no split release is claimed here. If its reviewed immutable `v0.1.0` tag
+becomes available, it may then be installed with:
+
+```bash
+pi install git:github.com/Fubuyunhua/pi-repo-context@v0.1.0
+```
+
+Until that tag exists, do not treat this as an available install. After that conditional release, use
+`repo_context_search` and `.pi/repo-context.json`. `context_vault_repo_map` → `repo_context_search` is a deprecated Repo
+Context `0.1.x`-only alias; Repo Context plans to remove the alias in `0.2.0`. Context Vault does not register either
+repository tool. Repo Context never reads the old `.pi/context-vault.json`; copy supported settings manually. It stores
+new derived state under:
 
 ```text
 ${PI_CODING_AGENT_DIR}/pi-repo-context/projects/<projectId>
@@ -41,6 +49,10 @@ Copy repository settings manually:
 automatic injection. Existing derived state under the old Vault `repo-map/` directory is never read, moved, migrated,
 collected, or deleted by either split migration path. Neither split package ships the paused S03 research or legacy
 bench assets.
+
+Ownership remains distinct: Context Vault owns extension ID/UI key `context-vault`, `context_vault_status`, and Vault
+telemetry; Repo Context owns extension ID/UI key `repo-context`, `repo_context_status`, and Repo telemetry. No status or
+telemetry state is shared.
 
 ## Requirements and installation
 
@@ -169,11 +181,14 @@ npm ci
 npm run check
 npm test
 npm run test:package
+npm run test:pi
 npm run test:coverage
 ```
 
 Coverage gates are 85% lines and 80% branches. The package smoke packs and installs the artifact, verifies the exact
-Vault-only surface, loads it through Pi's TypeScript loader, and exercises archive → receipt → get/search.
+Vault-only surface, loads it through Pi's TypeScript loader, and exercises archive → receipt → get/search. On Linux
+Node.js 24, `test:pi` uses an isolated temporary home and state root to exercise the packed extension through real Pi
+0.84.1 RPC.
 
 ## License
 

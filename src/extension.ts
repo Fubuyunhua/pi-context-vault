@@ -15,7 +15,7 @@ import { Telemetry } from "./telemetry.js";
 import { frameTelemetry } from "./telemetry-frame.js";
 
 export const EXTENSION_ID = "context-vault" as const;
-export const EXTENSION_VERSION = "0.2.0" as const;
+export const EXTENSION_VERSION = "0.3.0" as const;
 export const REBUILD_MIGRATION_MESSAGE =
   "Repository rebuild has moved to pi-repo-context.\nInstall pi-repo-context and use /repo-context rebuild." as const;
 

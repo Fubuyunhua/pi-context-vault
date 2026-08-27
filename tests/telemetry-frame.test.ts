@@ -4,7 +4,7 @@ import { extractTelemetryFrame, frameTelemetry } from "../src/telemetry-frame.js
 
 describe("Vault telemetry framing", () => {
   it("round-trips one bounded Vault-only frame", () => {
-    const payload = { extension: { id: "context-vault", version: "0.2.0" }, telemetry: { archiveAttemptCount: 1 } };
+    const payload = { extension: { id: "context-vault", version: "0.3.0" }, telemetry: { archiveAttemptCount: 1 } };
     const framed = frameTelemetry(payload);
     expect(extractTelemetryFrame(`prefix\n${framed}\nsuffix`)).toEqual(payload);
     expect(framed).not.toContain("repoMap");

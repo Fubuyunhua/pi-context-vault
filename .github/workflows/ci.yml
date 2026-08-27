@@ -22,6 +22,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run ci
+      - if: matrix.node == '24.x'
+        run: npm run test:pi
 
   cross-platform-smoke:
     name: ${{ matrix.os }} Vault package + lock suites

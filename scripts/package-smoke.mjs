@@ -94,7 +94,7 @@ try {
 
   const packedRoot = join(install, "node_modules", "pi-context-vault");
   const manifest = JSON.parse(readFileSync(join(packedRoot, "package.json"), "utf8"));
-  if (manifest.name !== "pi-context-vault" || manifest.version !== "0.2.0")
+  if (manifest.name !== "pi-context-vault" || manifest.version !== "0.3.0")
     throw new Error("package identity mismatch");
   if (manifest.dependencies && Object.keys(manifest.dependencies).length > 0)
     throw new Error("Vault has runtime dependencies");
@@ -104,6 +104,8 @@ try {
   ) {
     throw new Error("Vault peer versions exceed the tested compatibility surface");
   }
+  if (manifest.scripts?.["test:pi"] !== "node scripts/pi-rpc-smoke.mjs")
+    throw new Error("packed manifest has an unexpected real Pi smoke command");
   for (const script of ["bench", "bench:plan", "bench:run", "bench:analyze", "bench:verify", "test:watcher"]) {
     if (manifest.scripts?.[script]) throw new Error(`packed manifest retains ${script}`);
   }
