@@ -1,81 +1,78 @@
 import { describe, expect, it } from "vitest";
 import { Telemetry } from "../src/telemetry.js";
 
-describe("Telemetry", () => {
-  it("returns bounded snapshot copies for hot-path metrics", () => {
-    const telemetry = new Telemetry();
-    telemetry.recordGitHead(2);
-    telemetry.recordGitDirty(3);
-    telemetry.recordGitDiff(4);
-    telemetry.recordSearchIndexBuild(5);
-    telemetry.recordGenerationWrite(6);
-    telemetry.recordRepoMapTotalBytes(100);
-    telemetry.recordGenerationPrune(7, 2, 40);
+const RETIRED_REPO_FIELDS = [
+  "capsuleBuildCount",
+  "repoMapAutomaticQueryCount",
+  "repoMapQueryCount",
+  "ensureFreshCount",
+  "gitHeadCount",
+  "searchIndexBuildCount",
+  "generationCreatedCount",
+  "repoMapTotalBytes",
+  "maintenanceFailureCount",
+] as const;
 
+describe("Vault-only telemetry", () => {
+  it("records archive, metadata, and reduction metrics in detached finite snapshots", () => {
+    const telemetry = new Telemetry();
+    telemetry.recordArchiveStarted();
+    telemetry.recordArchiveSucceeded(2, true);
+    telemetry.recordMetadataRead(3);
+    telemetry.recordMetadataWrite(4);
+    telemetry.recordMetadataTailSync(5);
+    telemetry.recordMetadataAppend(6, 1);
+    telemetry.recordArtifactGcFailure();
+    telemetry.recordReduction({
+      durationMs: 7,
+      triggered: true,
+      reducedCount: 2,
+      estimatedTokensBefore: 100,
+      estimatedTokensAfter: 60,
+      targetReached: true,
+    });
     const first = telemetry.snapshot();
     expect(first).toMatchObject({
-      gitHeadCount: 1,
-      gitHeadDurationMsTotal: 2,
-      gitDirtyCount: 1,
-      gitDirtyDurationMsTotal: 3,
-      gitDiffCount: 1,
-      gitDiffDurationMsTotal: 4,
-      searchIndexBuildCount: 1,
-      searchIndexBuildDurationMsTotal: 5,
-      generationWriteCount: 1,
-      generationWriteDurationMsTotal: 6,
-      generationPruneCount: 1,
-      generationPruneDurationMsTotal: 7,
-      generationPrunedFiles: 2,
-      generationPrunedBytes: 40,
-      repoMapTotalBytes: 60,
+      archiveAttemptCount: 1,
+      archiveSuccessCount: 1,
+      archiveDeduplicatedCount: 1,
+      archiveDurationMsTotal: 2,
+      metadataReadDurationMsTotal: 3,
+      metadataWriteDurationMsTotal: 4,
+      metadataTailSyncCount: 1,
+      metadataTailBytesRead: 5,
+      metadataAppendCount: 1,
+      metadataBytesAppended: 6,
+      metadataTombstoneCount: 1,
+      artifactGcFailureCount: 1,
+      reductionInvocationCount: 1,
+      reductionTriggeredCount: 1,
+      reducedObservationCount: 2,
+      estimatedTokensBeforeTotal: 100,
+      estimatedTokensAfterTotal: 60,
+      targetReachedCount: 1,
+      reductionDurationMsTotal: 7,
     });
-
-    first.gitHeadCount = 999;
-    expect(telemetry.snapshot().gitHeadCount).toBe(1);
-    for (const [name, value] of Object.entries(telemetry.snapshot())) {
-      expect(typeof value, name).toBe("number");
-      expect(Number.isFinite(value), name).toBe(true);
-    }
-    expect(Object.values(telemetry.snapshot()).some(Array.isArray)).toBe(false);
-  });
-
-  it("separates persisted generation bytes from successful activation", () => {
-    const telemetry = new Telemetry();
-    telemetry.recordRepoMapTotalBytes(10);
-    telemetry.recordGenerationFileWritten(20);
-
-    expect(telemetry.snapshot()).toMatchObject({
-      generationCreatedCount: 0,
-      generationBytesWritten: 20,
-      repoMapTotalBytes: 30,
-    });
-
-    telemetry.recordGenerationActivated();
-    expect(telemetry.snapshot()).toMatchObject({
-      generationCreatedCount: 1,
-      generationBytesWritten: 20,
-      repoMapTotalBytes: 30,
-    });
-
-    telemetry.recordGenerationCreated(5);
-    expect(telemetry.snapshot()).toMatchObject({
-      generationCreatedCount: 2,
-      generationBytesWritten: 25,
-      repoMapTotalBytes: 35,
-    });
-  });
-
-  it("normalizes invalid hot-path numeric inputs without retaining records", () => {
-    const telemetry = new Telemetry();
-    telemetry.recordGitHead(Number.POSITIVE_INFINITY);
-    telemetry.recordGitDirty(Number.NaN);
-    telemetry.recordGitDiff(-1);
-    telemetry.recordSearchIndexBuild(Number.NaN);
-    telemetry.recordGenerationWrite(Number.POSITIVE_INFINITY);
-    telemetry.recordRepoMapTotalBytes(Number.NaN);
-    telemetry.recordGenerationPrune(Number.NaN, Number.POSITIVE_INFINITY, -10);
-
+    first.archiveAttemptCount = 999;
+    expect(telemetry.snapshot().archiveAttemptCount).toBe(1);
     expect(Object.values(telemetry.snapshot()).every(Number.isFinite)).toBe(true);
+    for (const field of RETIRED_REPO_FIELDS) expect(telemetry.snapshot()).not.toHaveProperty(field);
+  });
+
+  it("normalizes invalid numeric inputs and retains no arrays or records", () => {
+    const telemetry = new Telemetry();
+    telemetry.recordArchiveSucceeded(Number.POSITIVE_INFINITY, false);
+    telemetry.recordMetadataWrite(Number.NaN);
+    telemetry.recordMetadataAppend(-1, Number.POSITIVE_INFINITY);
+    telemetry.recordReduction({
+      durationMs: Number.NaN,
+      triggered: false,
+      reducedCount: -1,
+      estimatedTokensBefore: Number.POSITIVE_INFINITY,
+      estimatedTokensAfter: -1,
+      targetReached: false,
+    });
+    expect(Object.values(telemetry.snapshot()).every(Number.isFinite)).toBe(true);
+    expect(Object.values(telemetry.snapshot()).some(Array.isArray)).toBe(false);
   });
 });

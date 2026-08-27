@@ -1,7 +1,18 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
   "files": {
-    "includes": ["**", "!node_modules", "!coverage", "!.pi", "!.pi-context-vault"]
+    "includes": [
+      "**",
+      "!node_modules",
+      "!coverage",
+      "!.pi",
+      "!.pi-context-vault",
+      "!docs/reports",
+      "!docs/specs/0017-repository-context-planning-contract.md",
+      "!src/repo-context",
+      "!tests/repo-context-contract.test.ts",
+      "!tests/fixtures/repo-context"
+    ]
   },
   "formatter": {
     "enabled": true,

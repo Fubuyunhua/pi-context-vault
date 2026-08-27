@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { BigIntStats, Dirent } from "node:fs";
-import { type FileHandle, mkdir, open, readdir, readFile, stat, unlink } from "node:fs/promises";
+import { type FileHandle, lstat, mkdir, open, readdir, readFile, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { atomicWriteFile, syncParentDirectory, withFileLock } from "../state/atomic.js";
 import type { Telemetry } from "../telemetry.js";
@@ -471,7 +471,6 @@ export class ArtifactStore {
           await this.#compactIfNeededUnlocked();
         } catch {
           this.#telemetry?.recordMetadataCompactionFailure();
-          this.#telemetry?.recordMaintenanceFailure();
         }
       });
       return { artifactId: contentHash, metadata, deduplicated };
@@ -583,7 +582,10 @@ export class ArtifactStore {
           try {
             await unlink(this.artifactPath(artifactId));
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+              this.#telemetry?.recordArtifactGcFailure();
+              throw error;
+            }
           }
           bytesFreed += sizes.get(artifactId) ?? 0;
           await this.#faultHook?.("after-gc-unlink");
@@ -593,7 +595,6 @@ export class ArtifactStore {
           await this.#compactIfNeededUnlocked();
         } catch {
           this.#telemetry?.recordMetadataCompactionFailure();
-          this.#telemetry?.recordMaintenanceFailure();
         }
         return {
           deletedArtifactIds: [...selected],
@@ -842,17 +843,27 @@ export class ArtifactStore {
     const artifacts = new Map<string, { modifiedAt: number; size: number }>();
     let shards: Dirent[];
     try {
+      const rootInfo = await lstat(this.#artifactsRoot);
+      if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
+        throw new Error(`Unsafe artifact root: ${this.#artifactsRoot}`);
+      }
       shards = await readdir(this.#artifactsRoot, { withFileTypes: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return artifacts;
       throw error;
     }
     for (const shard of shards) {
-      if (!shard.isDirectory() || !/^[a-f0-9]{2}$/.test(shard.name)) continue;
+      if (!/^[a-f0-9]{2}$/.test(shard.name)) continue;
+      if (!shard.isDirectory() || shard.isSymbolicLink()) {
+        throw new Error(`Unsafe artifact shard: ${join(this.#artifactsRoot, shard.name)}`);
+      }
       const shardPath = join(this.#artifactsRoot, shard.name);
       for (const entry of await readdir(shardPath, { withFileTypes: true })) {
         const match = /^([a-f0-9]{64})\.txt$/.exec(entry.name);
-        if (!entry.isFile() || match?.[1] === undefined) continue;
+        if (match?.[1] === undefined) continue;
+        if (!entry.isFile() || entry.isSymbolicLink()) {
+          throw new Error(`Unsafe artifact entry: ${join(shardPath, entry.name)}`);
+        }
         const info = await stat(join(shardPath, entry.name));
         artifacts.set(match[1], { modifiedAt: info.mtimeMs, size: info.size });
       }

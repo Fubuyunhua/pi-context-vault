@@ -32,11 +32,6 @@ try {
       sessionId: "subprocess",
       content: workerText,
     });
-  } else if (mode === "repo-map") {
-    const { RepoMapRuntime } = await vite.ssrLoadModule("/src/repo-map/runtime.ts");
-    const runtime = new RepoMapRuntime({ projectRoot: first, stateRoot: second, watch: false });
-    await runtime.start();
-    await runtime.close();
   } else {
     throw new Error(`Unknown stress mode: ${mode}`);
   }

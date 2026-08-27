@@ -24,7 +24,7 @@ jobs:
       - run: npm run ci
 
   cross-platform-smoke:
-    name: ${{ matrix.os }} package + watcher + lock suites
+    name: ${{ matrix.os }} Vault package + lock suites
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -38,5 +38,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:package
-      - run: npm run test:watcher
-      - run: npx vitest run tests/file-lock.test.ts tests/file-lock-subprocess.test.ts
+      - run: npx vitest run tests/file-lock.test.ts tests/file-lock-subprocess.test.ts tests/atomic-durability.test.ts

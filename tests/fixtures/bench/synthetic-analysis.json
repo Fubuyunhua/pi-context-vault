@@ -1,9 +1,0 @@
-{
-  "evidenceLabel": "SYNTHETIC KNOWN-ANSWER OUTPUT — NOT BENCHMARK EVIDENCE",
-  "purpose": "Parser/statistics/publication fixture only",
-  "benchmarkEvidence": false,
-  "pairs": 4,
-  "eOnlyPass": 1,
-  "fOnlyPass": 1,
-  "mcnemarExactP": 1
-}

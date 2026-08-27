@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -15,20 +15,6 @@ async function tempRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "context-vault-lock-stress-"));
   roots.push(root);
   return root;
-}
-
-async function runWorkers(argumentsForWorker: string[], count: number): Promise<void> {
-  await Promise.all(
-    Array.from({ length: count }, (_, index) =>
-      execFileAsync(
-        process.execPath,
-        ["--experimental-strip-types", workerPath, ...argumentsForWorker, String(index)],
-        {
-          timeout: 20_000,
-        },
-      ),
-    ),
-  );
 }
 
 afterEach(async () => {
@@ -97,22 +83,5 @@ describe("file lock subprocess stress", () => {
     expect(telemetry.snapshot().metadataFullRebuildCount).toBeGreaterThan(rebuildsBefore);
     const lines = (await readFile(join(metadataRoot, "observations.jsonl"), "utf8")).trim().split("\n");
     expect(lines).toHaveLength(1);
-  }, 20_000);
-
-  it("serializes RepoMap activation across processes", async () => {
-    const root = await tempRoot();
-    const projectRoot = join(root, "project");
-    const stateRoot = join(root, "state");
-    await mkdir(join(projectRoot, "src"), { recursive: true });
-    await writeFile(join(projectRoot, "src", "value.ts"), "export const subprocessLockStress = true;\n");
-
-    await runWorkers(["repo-map", projectRoot, stateRoot], 4);
-
-    const active = JSON.parse(await readFile(join(stateRoot, "active.json"), "utf8")) as { generation: number };
-    const generation = JSON.parse(
-      await readFile(join(stateRoot, "generations", `${active.generation}.json`), "utf8"),
-    ) as { snapshot: { files: Array<{ path: string }> } };
-    expect(generation.snapshot.files.map((file) => file.path)).toContain("src/value.ts");
-    await expect(readdir(stateRoot)).resolves.not.toContain("activation.lock");
   }, 20_000);
 });

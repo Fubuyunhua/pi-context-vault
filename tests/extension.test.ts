@@ -1,1806 +1,469 @@
+// biome-ignore-all lint/suspicious/noExplicitAny: heterogeneous Pi callback capture is isolated to this test harness.
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EXTENSION_ID, EXTENSION_VERSION, registerContextVault } from "../src/extension.js";
+import { ArtifactStore } from "../src/artifacts/store.js";
+import { REBUILD_MIGRATION_MESSAGE, type RegisterContextVaultOptions, registerContextVault } from "../src/extension.js";
+import { LEGACY_REPO_CONFIG_WARNING } from "../src/state/config.js";
+import { resolveProjectState } from "../src/state/project-state.js";
 
-type Handler = (...args: unknown[]) => unknown;
-type ToolResult = { content: Array<{ text: string }>; isError?: boolean };
-type Tool = { name: string; execute: (...args: unknown[]) => Promise<unknown> };
-type Command = { handler: (args: string, ctx: unknown) => Promise<void> };
 const roots: string[] = [];
-
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function harness(
-  options: Parameters<typeof registerContextVault>[1] = {},
-  projectConfig?: Record<string, unknown>,
-) {
+interface CapturedTool {
+  name: string;
+  execute: (...args: any[]) => Promise<any>;
+}
+
+async function harness(config: Record<string, unknown> = {}, options: RegisterContextVaultOptions = {}) {
   const root = await mkdtemp(join(tmpdir(), "context-vault-extension-"));
-  const project = join(root, "project");
-  await mkdir(project);
-  if (projectConfig) {
-    await mkdir(join(project, ".pi"));
-    await writeFile(join(project, ".pi", "context-vault.json"), JSON.stringify(projectConfig));
-  }
   roots.push(root);
-  const handlers = new Map<string, Handler>();
-  const tools = new Map<string, Tool>();
-  const commands = new Map<string, Command>();
+  const project = join(root, "project");
+  const piRoot = join(root, "pi");
+  await mkdir(join(project, ".pi"), { recursive: true });
+  await writeFile(join(project, ".pi", "context-vault.json"), JSON.stringify(config));
+  const handlers = new Map<string, (...args: any[]) => Promise<any>>();
+  const tools = new Map<string, CapturedTool>();
+  const commands = new Map<string, { handler: (...args: any[]) => Promise<void> }>();
+  const notifications: Array<{ text: string; type: string }> = [];
+  const statuses: Array<{ key: string; value: string | undefined }> = [];
   const pi = {
-    on: vi.fn((event: string, handler: Handler) => handlers.set(event, handler)),
-    registerTool: vi.fn((tool: Tool) => tools.set(tool.name, tool)),
-    registerCommand: vi.fn((name: string, command: Command) => commands.set(name, command)),
+    on: (event: string, handler: (...args: any[]) => Promise<any>) => handlers.set(event, handler),
+    registerTool: (tool: CapturedTool) => tools.set(tool.name, tool),
+    registerCommand: (name: string, command: { handler: (...args: any[]) => Promise<void> }) =>
+      commands.set(name, command),
   };
-  registerContextVault(pi as never, { env: { PI_CODING_AGENT_DIR: join(root, "pi") }, ...options });
-  const setStatus = vi.fn();
-  const notify = vi.fn();
+  registerContextVault(pi as never, { env: { PI_CODING_AGENT_DIR: piRoot }, ...options });
   const ctx = {
     cwd: project,
     hasUI: true,
-    ui: { setStatus, notify },
+    ui: {
+      notify: (text: string, type: string) => notifications.push({ text, type }),
+      setStatus: (key: string, value: string | undefined) => statuses.push({ key, value }),
+    },
     sessionManager: {
-      getSessionId: () => "session-1",
+      getSessionId: () => "session-one",
       getEntries: () => [],
       getBranch: () => [],
     },
-    model: { contextWindow: 12_000 },
-    getSystemPrompt: () => "system contract",
+    model: { contextWindow: 10_000 },
+    getSystemPrompt: () => "system",
   };
-  return { handlers, tools, commands, pi, ctx, setStatus, notify, project, root };
+  return { root, project, piRoot, handlers, tools, commands, notifications, statuses, ctx };
 }
 
-describe("extension observation adapter", () => {
-  it("keeps package, exported, and displayed extension versions aligned", async () => {
-    const packageMetadata = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as {
-      version: string;
-    };
-    const packageLock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8")) as {
-      version: string;
-      packages: { "": { version: string } };
-    };
-    const { handlers, ctx, setStatus } = await harness();
-
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    expect.soft(EXTENSION_VERSION).toBe(packageMetadata.version);
-    expect.soft(setStatus).toHaveBeenCalledWith(EXTENSION_ID, `vault v${packageMetadata.version}`);
-    expect.soft(packageMetadata.version).toBe("0.2.0");
-    expect.soft(packageLock.version).toBe(packageMetadata.version);
-    expect.soft(packageLock.packages[""].version).toBe(packageMetadata.version);
-    await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx);
-  });
-
-  it("registers lifecycle hooks and bounded retrieval tools", async () => {
-    const { handlers, tools, pi, ctx, setStatus } = await harness();
-    expect(pi.on).toHaveBeenCalledTimes(5);
-    expect([...tools.keys()]).toEqual(["context_vault_obs_get", "context_vault_obs_search", "context_vault_status"]);
-    expect(pi.registerCommand).toHaveBeenCalledWith("context-vault", expect.any(Object));
-
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    expect([...tools.keys()]).toContain("context_vault_repo_map");
-    expect(setStatus).toHaveBeenCalledWith(EXTENSION_ID, `vault v${EXTENSION_VERSION}`);
-
-    const original = "needle\n".repeat(4_000);
-    const transformed = (await handlers.get("tool_result")?.({
-      type: "tool_result",
-      toolCallId: "call-1",
-      toolName: "bash",
-      input: {},
-      content: [{ type: "text", text: original }],
-      details: undefined,
-      isError: false,
-    })) as ToolResult;
-    expect(Buffer.byteLength(transformed.content[0].text)).toBeLessThanOrEqual(4 * 1024);
-    const receipt = JSON.parse(transformed.content[0].text);
-
-    const getResult = (await tools
-      .get("context_vault_obs_get")
-      ?.execute("get-1", { id: receipt.id, limit: 100 })) as ToolResult;
-    expect(JSON.parse(getResult.content[0].text).evidence.text).toContain("needle");
-    const searchResult = (await tools
-      .get("context_vault_obs_search")
-      ?.execute("search-1", { query: "needle", limit: 2 })) as ToolResult;
-    expect(JSON.parse(searchResult.content[0].text).results).toHaveLength(1);
-    const mapResult = (await tools
-      .get("context_vault_repo_map")
-      ?.execute("map-1", { query: "project", limit: 3 })) as ToolResult;
-    expect(JSON.parse(mapResult.content[0].text)).toMatchObject({
-      freshness: expect.stringMatching(/^(fresh|dirty|unsupported)$/),
-      workspaceRevision: expect.any(String),
-      fallbackEvidence: [],
-    });
-
-    await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx);
-    expect(setStatus).toHaveBeenLastCalledWith(EXTENSION_ID, undefined);
-    const status = (await tools.get("context_vault_status")?.execute("status-1", {})) as ToolResult;
-    expect(JSON.parse(status.content[0].text)).toMatchObject({ initialized: false, degraded: false });
-  });
-
-  it("archives small results without replacing them and ignores non-text and its own tools", async () => {
-    const { handlers, ctx } = await harness();
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    const small = await handlers.get("tool_result")?.({
-      type: "tool_result",
-      toolCallId: "small",
-      toolName: "read",
-      input: {},
-      content: [{ type: "text", text: "small evidence" }],
-      isError: false,
-    });
-    expect(small).toBeUndefined();
-    expect(
-      await handlers.get("tool_result")?.({
-        type: "tool_result",
-        toolCallId: "image",
-        toolName: "read",
-        input: {},
-        content: [{ type: "image", data: "abc", mimeType: "image/png" }],
-        isError: false,
-      }),
-    ).toBeUndefined();
-    expect(
-      await handlers.get("tool_result")?.({
-        type: "tool_result",
-        toolCallId: "self",
-        toolName: "context_vault_obs_get",
-        input: {},
-        content: [{ type: "text", text: "self result" }],
-        isError: false,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("stays inert before initialization and preserves image blocks when replacing text", async () => {
-    const { handlers, ctx, setStatus } = await harness();
-    const event = {
-      type: "tool_result",
-      toolCallId: "mixed",
-      toolName: "bash",
-      input: {},
-      content: [
-        { type: "text", text: "large\n".repeat(4_000) },
-        { type: "image", data: "abc", mimeType: "image/png" },
-      ],
-      isError: false,
-    };
-    expect(await handlers.get("tool_result")?.(event)).toBeUndefined();
-
-    const headless = { ...ctx, hasUI: false };
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, headless);
-    const transformed = (await handlers.get("tool_result")?.(event)) as { content: Array<{ type: string }> };
-    expect(transformed.content.map((block) => block.type)).toEqual(["text", "image"]);
-    await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, headless);
-    expect(setStatus).not.toHaveBeenCalled();
-  });
-
-  it("reduces archived old results through the context hook without persisting a capsule", async () => {
-    const { handlers, ctx } = await harness({}, { mapInjectionMode: "once-per-user-turn" });
-    const narrowContext = { ...ctx, model: { contextWindow: 35_000 } };
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, narrowContext);
-    const messages: Array<Record<string, unknown>> = [
-      { role: "user", content: "CONSTRAINT: preserve chronology", timestamp: 0 },
-    ];
-    for (let index = 0; index < 20; index += 1) {
-      const text = `${index}:`.padEnd(8_000, "x");
-      await handlers.get("tool_result")?.({
-        type: "tool_result",
-        toolCallId: `context-call-${index}`,
-        toolName: "read",
-        input: {},
-        content: [{ type: "text", text }],
-        isError: false,
-      });
-      messages.push({
-        role: "assistant",
-        content: [{ type: "toolCall", id: `context-call-${index}`, name: "read", arguments: {} }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "test",
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {} },
-        stopReason: "toolUse",
-        timestamp: index * 2 + 1,
-      });
-      messages.push({
-        role: "toolResult",
-        toolCallId: `context-call-${index}`,
-        toolName: "read",
-        content: [{ type: "text", text }],
-        isError: false,
-        timestamp: index * 2 + 2,
-      });
+async function digestTree(root: string): Promise<string> {
+  const rows: string[] = [];
+  async function visit(path: string): Promise<void> {
+    for (const name of (await readdir(path)).sort()) {
+      const child = join(path, name);
+      const info = await stat(child);
+      if (info.isDirectory()) await visit(child);
+      else
+        rows.push(
+          `${relative(root, child)}\0${createHash("sha256")
+            .update(await readFile(child))
+            .digest("hex")}`,
+        );
     }
+  }
+  await visit(root);
+  return createHash("sha256").update(rows.join("\n")).digest("hex");
+}
 
-    const transformed = (await handlers.get("context")?.({ type: "context", messages }, narrowContext)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    expect(transformed.messages).toHaveLength(messages.length + 1);
-    // The capsule is frozen after the latest user message, never at index 0.
-    expect(transformed.messages[0]).toEqual(messages[0]);
-    expect(transformed.messages[1]).toMatchObject({
-      role: "custom",
-      customType: "context-vault-repo-map",
-      display: false,
-    });
-    expect(Buffer.byteLength(String(transformed.messages[1]?.content))).toBeLessThanOrEqual(6 * 1024);
-    expect(transformed.messages[2]).toEqual(messages[1]);
-    expect(JSON.stringify(transformed.messages)).toContain("context_vault_observation_receipt");
-    expect(JSON.stringify(transformed.messages.slice(-12))).not.toContain("context_vault_observation_receipt");
+async function createDirectorySymlink(target: string, path: string): Promise<boolean> {
+  try {
+    await symlink(target, path, "junction");
+    return true;
+  } catch (error) {
+    if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      return false;
+    }
+    throw error;
+  }
+}
 
-    const repeated = (await handlers.get("context")?.(
-      { type: "context", messages: transformed.messages },
-      narrowContext,
-    )) as { messages: Array<Record<string, unknown>> };
-    expect(repeated.messages.filter((message) => message.customType === "context-vault-repo-map")).toHaveLength(1);
-  }, 15_000);
+function toolEvent(toolName: string, text = "large external evidence") {
+  return {
+    toolName,
+    toolCallId: `call-${toolName}`,
+    content: [{ type: "text", text }],
+    isError: false,
+  };
+}
 
-  it("keeps repository-map capsules ephemeral, bounded, revisioned, and honest when stale", async () => {
-    const close = vi.fn(async () => undefined);
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close,
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "stale" as const,
-        generation: 7,
-        gitHead: "abc123",
-        workspaceRevision: "revision-7",
-        pendingFiles: ["src/auth.ts"],
-        dirtyFiles: ["src/auth.ts"],
-        error: "index activation failed",
-      })),
-      query: vi.fn(async () => ({
-        results: [],
-        freshness: "stale" as const,
-        generation: 7,
-        gitHead: "abc123",
-        workspaceRevision: "revision-7",
-        pendingFiles: ["src/auth.ts"],
-        fallbackEvidence: [{ kind: "git-diff" as const, excerpt: "+export const auth = true;" }],
-        error: "index activation failed",
-      })),
-    };
-    const { handlers, ctx, pi } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    const canonical = [{ role: "user", content: "fix auth", timestamp: 10 }];
-    const transformed = (await handlers.get("context")?.({ type: "context", messages: canonical }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
+describe("observation-only extension", () => {
+  it("registers only Vault lifecycle surfaces and creates no repository state", async () => {
+    const target = await harness({ reductionEnabled: false });
+    expect([...target.handlers.keys()].sort()).toEqual(["context", "session_shutdown", "session_start", "tool_result"]);
+    expect([...target.tools.keys()].sort()).toEqual([
+      "context_vault_obs_get",
+      "context_vault_obs_search",
+      "context_vault_status",
+    ]);
+    expect([...target.commands.keys()]).toEqual(["context-vault"]);
 
-    expect(canonical).toEqual([{ role: "user", content: "fix auth", timestamp: 10 }]);
-    expect("appendEntry" in pi).toBe(false);
-    // The capsule is frozen after the latest user message, never at index 0.
-    expect(transformed.messages[0]).toEqual(canonical[0]);
-    const capsule = transformed.messages[1] as { content: string; details: Record<string, unknown> };
-    expect(Buffer.byteLength(capsule.content)).toBeLessThanOrEqual(6 * 1024);
-    const payload = JSON.parse(capsule.content.slice(capsule.content.indexOf("\n") + 1));
-    expect(payload).toMatchObject({
-      captureSemantics: "turn-start-snapshot",
-      freshnessAtCapture: "stale",
-      workspaceRevisionAtCapture: "revision-7",
-      generationAtCapture: 7,
-      gitHeadAtCapture: "abc123",
-      pendingFilesAtCapture: ["src/auth.ts"],
-      error: "index activation failed",
-    });
-    expect(payload.description).toMatch(/not live|does not reflect/u);
-    expect(payload).not.toHaveProperty("freshness");
-    expect(payload).not.toHaveProperty("workspaceRevision");
-    expect(capsule.details).toMatchObject({
-      persistent: false,
-      captureSemantics: "turn-start-snapshot",
-      freshnessAtCapture: "stale",
-      workspaceRevisionAtCapture: "revision-7",
-      generationAtCapture: 7,
-      gitHeadAtCapture: "abc123",
-      pendingFilesAtCapture: ["src/auth.ts"],
-    });
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const projects = join(target.piRoot, "context-vault", "projects");
+    const [projectId] = await readdir(projects);
+    const stateRoot = join(projects, projectId as string);
+    expect((await readdir(stateRoot)).sort()).toEqual(["artifacts", "metadata"]);
+    await expect(stat(join(stateRoot, "repo-map"))).rejects.toMatchObject({ code: "ENOENT" });
 
-    // A same-turn repeat must reuse the frozen capsule without re-querying.
-    const repeated = (await handlers.get("context")?.({ type: "context", messages: transformed.messages }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    expect(repeated.messages.filter((message) => message.customType === "context-vault-repo-map")).toHaveLength(1);
-    expect(runtime.query).toHaveBeenCalledTimes(1);
+    const status = await target.tools
+      .get("context_vault_status")
+      ?.execute("call", {}, undefined, undefined, target.ctx);
+    expect(status.details.components).toEqual({ observations: expect.objectContaining({ available: true }) });
+    expect(status.details).not.toHaveProperty("repoMap");
+    expect(status.details.telemetry).not.toHaveProperty("repoMapQueryCount");
+    await target.handlers.get("session_shutdown")?.({}, target.ctx);
   });
 
-  it("uses a valid minimal stale capsule when the configured 512-byte budget is exhausted", async () => {
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "stale" as const,
-        generation: 9,
-        gitHead: "a".repeat(200),
-        workspaceRevision: "revision-minimal".repeat(20),
-        pendingFiles: ["src/oversized.ts"],
-        dirtyFiles: ["src/oversized.ts"],
-        error: "failure ".repeat(200),
-      })),
-      query: vi.fn(async () => ({
-        results: [
-          {
-            path: "src/oversized.ts",
-            kind: "semantic" as const,
-            score: 1,
-            matchedSymbols: ["oversized"],
-            symbols: [],
-            dependencies: [],
-          },
-        ],
-        freshness: "stale" as const,
-        generation: 9,
-        gitHead: "a".repeat(200),
-        workspaceRevision: "revision-minimal".repeat(20),
-        pendingFiles: Array.from({ length: 30 }, (_, index) => `src/pending-${index}.ts`),
-        fallbackEvidence: [
-          { kind: "git-diff" as const, excerpt: "oversized evidence ".repeat(1_000) },
-          { kind: "source" as const, path: "src/oversized.ts", excerpt: "source ".repeat(1_000) },
-        ],
-        error: "failure ".repeat(2_000),
-      })),
-    };
-    const { handlers, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn", mapContextMaxBytes: 512 },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    const transformed = (await handlers.get("context")?.(
-      { type: "context", messages: [{ role: "user", content: "q".repeat(512), timestamp: 1 }] },
-      ctx,
-    )) as { messages: Array<{ content: string }> };
-    const content = transformed.messages[1]?.content ?? "";
-    expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(512);
-    const payload = JSON.parse(content.slice(content.indexOf("\n") + 1));
-    expect(payload).toMatchObject({
-      captureSemantics: "turn-start-snapshot",
-      freshnessAtCapture: "stale",
-      generationAtCapture: 9,
-      pendingFileCountAtCapture: 30,
+  it("ignores all legacy repository keys of arbitrary types and reports one fixed warning", async () => {
+    const target = await harness({
+      repoMapEnabled: "not-a-boolean",
+      mapInjectionMode: { arbitrary: true },
+      mapContextMaxBytes: null,
+      mapDebounceMs: [],
+      mapGenerationRetention: -1,
+      mapQuotaBytes: "large",
+      mapExcludePatterns: 42,
+      debugRequestFingerprints: { enabled: true },
     });
-    expect(payload.description).toMatch(/not live/u);
-    expect(payload).not.toHaveProperty("freshness");
-    expect(payload).not.toHaveProperty("workspaceRevision");
-    expect(payload.workspaceRevisionAtCapture.length).toBeGreaterThan(0);
-    expect(payload.gitHeadAtCapture.length).toBeGreaterThan(0);
-    expect(payload.error.length).toBeGreaterThan(0);
-    expect("failure ".repeat(2_000).startsWith(payload.error)).toBe(true);
-    expect(payload.fallbackEvidence).toHaveLength(1);
-    expect(payload.truncatedFields).toEqual(
-      expect.arrayContaining([
-        "workspaceRevisionAtCapture",
-        "gitHeadAtCapture",
-        "query",
-        "error",
-        "fallbackEvidence",
-        "results",
-        "pendingFilesAtCapture",
-      ]),
-    );
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const result = await target.tools
+      .get("context_vault_status")
+      ?.execute("call", {}, undefined, undefined, target.ctx);
+    expect(result.details.initialized).toBe(true);
+    expect(result.details.warnings).toEqual([LEGACY_REPO_CONFIG_WARNING]);
+    expect(JSON.stringify(result.details).match(new RegExp(LEGACY_REPO_CONFIG_WARNING, "gu"))).toHaveLength(1);
+
+    await target.commands.get("context-vault")?.handler("doctor", target.ctx);
+    const report = JSON.parse(target.notifications.at(-1)?.text ?? "null");
+    expect(report.warnings).toEqual([LEGACY_REPO_CONFIG_WARNING]);
+    expect(JSON.stringify(report).match(new RegExp(LEGACY_REPO_CONFIG_WARNING, "gu"))).toHaveLength(1);
   });
 
-  it("keeps the public default at once per user turn", async () => {
-    const query = vi.fn(async () => ({
-      results: [],
-      freshness: "fresh" as const,
-      generation: 1,
-      gitHead: "head",
-      workspaceRevision: "revision",
-      pendingFiles: [],
-      fallbackEvidence: [],
-    }));
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 1,
-        gitHead: "head",
-        workspaceRevision: "revision",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query,
-    };
-    const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    const messages = [{ role: "user", content: "default cadence", timestamp: 1 }];
-    const first = (await handlers.get("context")?.({ type: "context", messages }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    const second = (await handlers.get("context")?.({ type: "context", messages: first.messages }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-
-    expect(first.messages[1]).toMatchObject({ customType: "context-vault-repo-map" });
-    expect(second.messages[1]).toEqual(first.messages[1]);
-    expect(query).toHaveBeenCalledTimes(1);
+  it("does not archive either plugin namespace and still archives eligible external results", async () => {
+    const target = await harness({ archivePolicy: "all", archiveMinBytes: 0, replacementThresholdBytes: 1 });
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    await expect(
+      target.handlers.get("tool_result")?.(toolEvent("context_vault_status"), target.ctx),
+    ).resolves.toBeUndefined();
+    await expect(
+      target.handlers.get("tool_result")?.(toolEvent("repo_context_search"), target.ctx),
+    ).resolves.toBeUndefined();
+    const external = await target.handlers.get("tool_result")?.(toolEvent("bash", "external evidence"), target.ctx);
+    expect(external?.content[0]?.text).toContain("context_vault_observation_receipt");
+    const status = await target.tools
+      .get("context_vault_status")
+      ?.execute("call", {}, undefined, undefined, target.ctx);
+    expect(status.details.telemetry.archiveAttemptCount).toBe(1);
   });
 
-  it("labels the first capture, freezes its bytes after same-turn mutation, and rebuilds next turn", async () => {
-    let liveState: {
-      freshness: "fresh" | "dirty";
-      generation: number;
-      gitHead: string;
-      workspaceRevision: string;
-      pendingFiles: string[];
-    } = {
-      freshness: "fresh",
-      generation: 3,
-      gitHead: "head-1",
-      workspaceRevision: "revision-1",
-      pendingFiles: [],
-    };
-    const query = vi.fn(async () => ({ results: [], ...liveState, fallbackEvidence: [] }));
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({ ...liveState, dirtyFiles: liveState.pendingFiles })),
-      query,
-    };
-    const { handlers, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    const turnStart = [{ role: "user", content: "fix auth", timestamp: 10 }];
-    const first = (await handlers.get("context")?.({ type: "context", messages: turnStart }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    expect(first.messages[0]).toEqual(turnStart[0]);
-    const capsule = first.messages[1] as { content: string; details: Record<string, unknown> };
-    const firstPayload = JSON.parse(capsule.content.slice(capsule.content.indexOf("\n") + 1));
-    expect(firstPayload).toMatchObject({
-      captureSemantics: "turn-start-snapshot",
-      freshnessAtCapture: "fresh",
-      workspaceRevisionAtCapture: "revision-1",
-      generationAtCapture: 3,
-      gitHeadAtCapture: "head-1",
-      pendingFilesAtCapture: [],
-    });
-    expect(firstPayload.description).toMatch(/not live|does not reflect/u);
-    expect(capsule).toMatchObject({ role: "custom", customType: "context-vault-repo-map", display: false });
-    expect(query).toHaveBeenCalledTimes(1);
-
-    // A tool edit changes the live workspace, but same-turn context must retain
-    // the exact capture bytes and must not imply that its old freshness is live.
-    liveState = {
-      freshness: "dirty",
-      generation: 4,
-      gitHead: "head-2",
-      workspaceRevision: "revision-2",
-      pendingFiles: ["src/auth.ts"],
-    };
-    const grown = [
-      ...turnStart,
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
-        timestamp: 11,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "write",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: 12,
-      },
-    ];
-    const second = (await handlers.get("context")?.({ type: "context", messages: grown }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    const repeatedCapsule = second.messages[1] as { content: string };
-    expect(repeatedCapsule.content).toBe(capsule.content);
-    expect(second.messages[1]).toEqual(capsule);
-    expect(query).toHaveBeenCalledTimes(1);
-
-    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
-    const third = (await handlers.get("context")?.({ type: "context", messages: turnStart }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    const nextPayload = JSON.parse(String(third.messages[1]?.content).split("\n").slice(1).join("\n"));
-    expect(nextPayload).toMatchObject({
-      captureSemantics: "turn-start-snapshot",
-      freshnessAtCapture: "dirty",
-      workspaceRevisionAtCapture: "revision-2",
-      generationAtCapture: 4,
-      gitHeadAtCapture: "head-2",
-      pendingFilesAtCapture: ["src/auth.ts"],
-    });
-    expect(third.messages[1]).not.toEqual(capsule);
-    expect(query).toHaveBeenCalledTimes(2);
-  });
-
-  it("refreshes once per turn and queries the already-coherent snapshot for automatic context", async () => {
-    const query = vi.fn(async () => ({
-      results: [],
-      freshness: "fresh" as const,
-      generation: 1,
-      gitHead: "h",
-      workspaceRevision: "r",
-      pendingFiles: [],
-      fallbackEvidence: [],
-    }));
-    const queryCurrent = vi.fn(async () => ({
-      results: [],
-      freshness: "fresh" as const,
-      generation: 1,
-      gitHead: "h",
-      workspaceRevision: "r",
-      pendingFiles: [],
-      fallbackEvidence: [],
-    }));
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 1,
-        gitHead: "h",
-        workspaceRevision: "r",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query,
-      queryCurrent,
-    };
-    const { handlers, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
-    await handlers.get("context")?.(
-      { type: "context", messages: [{ role: "user", content: "map query", timestamp: 1 }] },
-      ctx,
-    );
-
-    expect(runtime.ensureFresh).toHaveBeenCalledTimes(1);
-    expect(queryCurrent).toHaveBeenCalledTimes(1);
-    expect(query).not.toHaveBeenCalled();
-  });
-
-  it("keeps explicit repository-map tool queries on the live freshness path", async () => {
-    let liveResult = {
-      results: [],
-      freshness: "fresh" as "fresh" | "dirty",
-      generation: 1,
-      gitHead: "head-1",
-      workspaceRevision: "revision-1",
-      pendingFiles: [] as string[],
-      fallbackEvidence: [],
-    };
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({ ...liveResult, dirtyFiles: liveResult.pendingFiles })),
-      query: vi.fn(async () => liveResult),
-      queryCurrent: vi.fn(async () => liveResult),
-    };
-    const { handlers, tools, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    await handlers.get("context")?.(
-      { type: "context", messages: [{ role: "user", content: "capture", timestamp: 1 }] },
-      ctx,
-    );
-
-    liveResult = {
-      results: [],
-      freshness: "dirty",
-      generation: 2,
-      gitHead: "head-2",
-      workspaceRevision: "revision-2",
-      pendingFiles: ["src/edited.ts"],
-      fallbackEvidence: [],
-    };
-    const result = (await tools.get("context_vault_repo_map")?.execute("map-1", { query: "explicit" })) as ToolResult;
-    const parsed = JSON.parse(result.content[0].text);
-
-    expect(runtime.query).toHaveBeenCalledWith("explicit", { limit: undefined });
-    expect(runtime.queryCurrent).toHaveBeenCalledTimes(1);
-    expect(parsed).toEqual(liveResult);
-    expect(parsed).toMatchObject({ freshness: "dirty", workspaceRevision: "revision-2" });
-    expect(parsed).not.toHaveProperty("captureSemantics");
-    expect(parsed).not.toHaveProperty("freshnessAtCapture");
-  });
-
-  it("resets the turn sequence and freeze on session lifecycle", async () => {
-    const query = vi.fn(async () => ({
-      results: [],
-      freshness: "fresh" as const,
-      generation: 1,
-      gitHead: "h",
-      workspaceRevision: "r",
-      pendingFiles: [],
-      fallbackEvidence: [],
-    }));
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 1,
-        gitHead: "h",
-        workspaceRevision: "r",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query,
-    };
-    const { handlers, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    // Turn 1 builds and freezes.
-    const messages = [{ role: "user", content: "fix auth", timestamp: 10 }];
-    await handlers.get("context")?.({ type: "context", messages }, ctx);
-    expect(query).toHaveBeenCalledTimes(1);
-
-    // Session lifecycle resets turnSequence and the freeze; a fresh turn must
-    // build again instead of reusing the previous session's capsule.
-    await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx);
-    await handlers.get("session_start")?.({ type: "session_start", reason: "new" }, ctx);
-    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
-    const rebuilt = (await handlers.get("context")?.({ type: "context", messages }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    expect(rebuilt.messages[1]).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
-    expect(query).toHaveBeenCalledTimes(2);
-
-    // Same turn, no before_agent_start: reuse, no additional query.
-    await handlers.get("context")?.({ type: "context", messages }, ctx);
-    expect(query).toHaveBeenCalledTimes(2);
-  });
-
-  it("captures bounded, non-live details on every LLM call in every-llm-call mode", async () => {
-    let capture = {
-      results: [],
-      freshness: "fresh" as "fresh" | "dirty",
-      generation: 1,
-      gitHead: "head-1",
-      workspaceRevision: "revision-1",
-      pendingFiles: [] as string[],
-      fallbackEvidence: [] as Array<{ kind: "source"; path: string; excerpt: string }>,
-    };
-    const queryCurrent = vi.fn(async () => capture);
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({ ...capture, dirtyFiles: capture.pendingFiles })),
-      query: vi.fn(async () => capture),
-      queryCurrent,
-    };
-    const { handlers, tools, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "every-llm-call", mapContextMaxBytes: 1024 },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    const messages = [{ role: "user", content: "fix auth", timestamp: 10 }];
-    const first = (await handlers.get("context")?.({ type: "context", messages }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    const firstCapsule = first.messages[0] as { content: string; details: Record<string, unknown> };
-    const firstPayload = JSON.parse(firstCapsule.content.slice(firstCapsule.content.indexOf("\n") + 1));
-    expect(firstCapsule).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
-    expect(Buffer.byteLength(firstCapsule.content, "utf8")).toBeLessThanOrEqual(1024);
-    expect(firstPayload).toMatchObject({
-      captureSemantics: "context-call-snapshot",
-      freshnessAtCapture: "fresh",
-      workspaceRevisionAtCapture: "revision-1",
-      generationAtCapture: 1,
-      gitHeadAtCapture: "head-1",
-      pendingFilesAtCapture: [],
-    });
-    expect(firstPayload.description).toMatch(/not live/u);
-    expect(firstPayload).not.toHaveProperty("freshness");
-    expect(firstPayload).not.toHaveProperty("workspaceRevision");
-    expect(firstPayload).not.toHaveProperty("gitHead");
-    expect(firstPayload).not.toHaveProperty("pendingFiles");
-    expect(firstCapsule.details).toEqual({
-      persistent: false,
-      captureSemantics: "context-call-snapshot",
-      freshnessAtCapture: "fresh",
-      workspaceRevisionAtCapture: "revision-1",
-      generationAtCapture: 1,
-      gitHeadAtCapture: "head-1",
-      pendingFilesAtCapture: [],
-    });
-    expect(firstCapsule.details).not.toHaveProperty("freshness");
-    expect(firstCapsule.details).not.toHaveProperty("workspaceRevision");
-    expect(queryCurrent).toHaveBeenCalledTimes(1);
-
-    capture = {
-      results: [],
-      freshness: "dirty",
-      generation: 2,
-      gitHead: "head-2",
-      workspaceRevision: "revision-2",
-      pendingFiles: ["src/auth.ts"],
-      fallbackEvidence: [{ kind: "source", path: "src/auth.ts", excerpt: "captured evidence" }],
-    };
-    const grown = [
-      ...first.messages,
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "c", name: "read", arguments: {} }],
-        timestamp: 11,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "c",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: 12,
-      },
-    ];
-    const second = (await handlers.get("context")?.({ type: "context", messages: grown }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    const secondCapsule = second.messages[0] as { content: string; details: Record<string, unknown> };
-    const secondPayload = JSON.parse(secondCapsule.content.slice(secondCapsule.content.indexOf("\n") + 1));
-    expect(secondCapsule).toMatchObject({ role: "custom", customType: "context-vault-repo-map" });
-    expect(Buffer.byteLength(secondCapsule.content, "utf8")).toBeLessThanOrEqual(1024);
-    expect(secondPayload).toMatchObject({
-      captureSemantics: "context-call-snapshot",
-      freshnessAtCapture: "dirty",
-      workspaceRevisionAtCapture: "revision-2",
-      generationAtCapture: 2,
-      gitHeadAtCapture: "head-2",
-      pendingFilesAtCapture: ["src/auth.ts"],
-    });
-    expect(secondPayload.description).toMatch(/not live/u);
-    expect(secondPayload).not.toHaveProperty("freshness");
-    expect(secondPayload).not.toHaveProperty("workspaceRevision");
-    expect(secondCapsule.details).toMatchObject({
-      persistent: false,
-      captureSemantics: "context-call-snapshot",
-      freshnessAtCapture: "dirty",
-      workspaceRevisionAtCapture: "revision-2",
-      generationAtCapture: 2,
-      gitHeadAtCapture: "head-2",
-      pendingFilesAtCapture: ["src/auth.ts"],
-    });
-    expect(secondCapsule.details).not.toHaveProperty("freshness");
-    expect(secondCapsule.details).not.toHaveProperty("workspaceRevision");
-    expect(second.messages.filter((message) => message.customType === "context-vault-repo-map")).toHaveLength(1);
-    expect(second.messages[0]).toBe(secondCapsule);
-    expect(second.messages).not.toContain(firstCapsule);
-    expect(secondCapsule).not.toBe(firstCapsule);
-    expect(secondCapsule.content).not.toBe(firstCapsule.content);
-    expect(queryCurrent).toHaveBeenCalledTimes(2);
-    expect(runtime.query).not.toHaveBeenCalled();
-    const status = (await tools.get("context_vault_status")?.execute("every-status", {})) as ToolResult;
-    expect(JSON.parse(status.content[0].text).telemetry).toMatchObject({
-      repoMapAutomaticQueryCount: 2,
-      capsuleBuildCount: 2,
-    });
-  });
-
-  it("keeps explicit off Repo Map-transparent and skips turn-start refresh", async () => {
-    const query = vi.fn(async () => ({
-      results: [],
-      freshness: "fresh" as const,
-      generation: 1,
-      gitHead: "h",
-      workspaceRevision: "r",
-      pendingFiles: [],
-      fallbackEvidence: [],
-    }));
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 1,
-        gitHead: "h",
-        workspaceRevision: "r",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query,
-    };
-    const { handlers, tools, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "off", reductionEnabled: false },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
-
-    const inboundCapsule = {
-      role: "custom",
-      customType: "context-vault-repo-map",
-      content: "existing capsule",
-      display: false,
-      details: { persistent: false },
-      timestamp: 10,
-    };
-    const messages = [
-      { role: "user", content: "fix auth", timestamp: 10 },
-      inboundCapsule,
-      { role: "assistant", content: [{ type: "text", text: "continuation" }], timestamp: 11 },
-    ];
-    const result = await handlers.get("context")?.({ type: "context", messages }, ctx);
-
-    expect(result).toBeUndefined();
-    expect(messages[1]).toBe(inboundCapsule);
-    expect(runtime.ensureFresh).not.toHaveBeenCalled();
-    expect(query).not.toHaveBeenCalled();
-    const status = (await tools.get("context_vault_status")?.execute("off-status", {})) as ToolResult;
-    expect(JSON.parse(status.content[0].text).telemetry).toMatchObject({
-      repoMapAutomaticQueryCount: 0,
-      capsuleBuildCount: 0,
-    });
-  });
-
-  it("keeps observation reduction independent when automatic map injection is off", async () => {
-    const reductionFactory = vi.fn(async (options: { messages: unknown[] }) => ({
-      messages: options.messages.slice(0, 1),
-      triggered: true,
-      targetReached: true,
-      reducedCount: 1,
-      estimatedTokensBefore: 100,
+  it("runs only context reduction and respects reductionEnabled", async () => {
+    const reductionFactory = vi.fn(async (input: any) => ({
+      messages: input.messages,
+      triggered: false,
+      reducedCount: 0,
+      estimatedTokensBefore: 10,
       estimatedTokensAfter: 10,
+      targetReached: true,
     }));
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({ freshness: "fresh" as const })),
-      query: vi.fn(),
-    };
-    const { handlers, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime as never, reductionFactory: reductionFactory as never },
-      { mapInjectionMode: "off" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    const messages = [
-      { role: "user", content: "keep", timestamp: 1 },
-      { role: "assistant", content: [{ type: "text", text: "reduce" }], timestamp: 2 },
-    ];
-    const result = (await handlers.get("context")?.({ type: "context", messages }, ctx)) as {
-      messages: unknown[];
-    };
-
+    const enabled = await harness({}, { reductionFactory: reductionFactory as never });
+    await enabled.handlers.get("session_start")?.({}, enabled.ctx);
+    const messages = [{ role: "user", content: "hello", timestamp: 1 }];
+    await enabled.handlers.get("context")?.({ messages }, enabled.ctx);
     expect(reductionFactory).toHaveBeenCalledOnce();
-    expect(result.messages).toEqual([messages[0]]);
-    expect(runtime.query).not.toHaveBeenCalled();
+
+    const disabledFactory = vi.fn();
+    const disabled = await harness({ reductionEnabled: false }, { reductionFactory: disabledFactory as never });
+    await disabled.handlers.get("session_start")?.({}, disabled.ctx);
+    await disabled.handlers.get("context")?.({ messages }, disabled.ctx);
+    expect(disabledFactory).not.toHaveBeenCalled();
   });
 
-  it("keeps the explicit repository-map tool live when automatic injection is off", async () => {
-    const live = {
-      results: [],
-      freshness: "dirty" as const,
-      generation: 2,
-      gitHead: "head",
-      workspaceRevision: "revision",
-      pendingFiles: ["src/edited.ts"],
-      fallbackEvidence: [],
-    };
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({ ...live, dirtyFiles: live.pendingFiles })),
-      query: vi.fn(async () => live),
-    };
-    const { handlers, tools, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "off" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
-    const result = (await tools
-      .get("context_vault_repo_map")
-      ?.execute("map-off", { query: "edited", limit: 4 })) as ToolResult;
+  it("keeps rebuild inert and Vault GC cannot touch legacy or Repo Context state", async () => {
+    const target = await harness({ projectQuotaBytes: 1024 * 1024, retentionDays: 30 });
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const projects = join(target.piRoot, "context-vault", "projects");
+    const [projectId] = await readdir(projects);
+    const legacyRoot = join(projects, projectId as string, "repo-map");
+    const repoRoot = join(target.piRoot, "pi-repo-context", "projects", projectId as string, "repo-map");
+    await mkdir(legacyRoot, { recursive: true });
+    await mkdir(repoRoot, { recursive: true });
+    await writeFile(join(legacyRoot, "sentinel"), "legacy-bytes");
+    await writeFile(join(repoRoot, "sentinel"), "repo-bytes");
 
-    expect(runtime.start).toHaveBeenCalledOnce();
-    expect(runtime.ensureFresh).not.toHaveBeenCalled();
-    expect(runtime.query).toHaveBeenCalledWith("edited", { limit: 4 });
-    expect(JSON.parse(result.content[0].text)).toEqual(live);
+    const beforeRebuild = await digestTree(target.piRoot);
+    await target.commands.get("context-vault")?.handler("rebuild", target.ctx);
+    expect(target.notifications.at(-1)).toEqual({ text: REBUILD_MIGRATION_MESSAGE, type: "warning" });
+    expect(await digestTree(target.piRoot)).toBe(beforeRebuild);
+
+    await target.commands.get("context-vault")?.handler("gc", target.ctx);
+    expect(await readFile(join(legacyRoot, "sentinel"), "utf8")).toBe("legacy-bytes");
+    expect(await readFile(join(repoRoot, "sentinel"), "utf8")).toBe("repo-bytes");
+    expect(target.notifications.at(-1)?.text).toContain('"artifacts"');
   });
 
-  it("does not resurrect a frozen capsule after the map becomes unavailable", async () => {
-    const query = vi.fn(async () => ({
-      results: [],
-      freshness: "fresh" as const,
-      generation: 1,
-      gitHead: "h",
-      workspaceRevision: "r",
-      pendingFiles: [],
-      fallbackEvidence: [],
-    }));
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 1,
-        gitHead: "h",
-        workspaceRevision: "r",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query,
-    };
-    const failing = {
-      start: vi.fn(async () => {
-        throw new Error("map failed");
-      }),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "stale" as const,
-        generation: 0,
-        gitHead: "h",
-        workspaceRevision: "r",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query: vi.fn(),
-    };
-    let factoryCalls = 0;
-    const { handlers, ctx } = await harness(
-      {
-        repoMapRuntimeFactory: () => {
-          factoryCalls += 1;
-          return factoryCalls === 1 ? runtime : failing;
-        },
-      },
-      { mapInjectionMode: "once-per-user-turn", reductionEnabled: false },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    const messages = [{ role: "user", content: "fix auth", timestamp: 10 }];
-    const first = (await handlers.get("context")?.({ type: "context", messages }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    expect(first.messages[1]).toMatchObject({ customType: "context-vault-repo-map" });
-
-    await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx);
-    await handlers.get("session_start")?.({ type: "session_start", reason: "new" }, ctx);
-    const second = await handlers.get("context")?.({ type: "context", messages: first.messages }, ctx);
-    expect(second).toBeUndefined();
-    expect(first.messages[1]).toMatchObject({ customType: "context-vault-repo-map" });
-    expect(failing.query).not.toHaveBeenCalled();
-  });
-
-  it("initializes and disposes the map watcher idempotently across session lifecycle events", async () => {
-    const runtimes: Array<{ start: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }> = [];
-    const { handlers, ctx } = await harness({
-      repoMapRuntimeFactory: () => {
-        const runtime = {
-          start: vi.fn(async () => undefined),
-          close: vi.fn(async () => undefined),
-          ensureFresh: vi.fn(async () => undefined),
-          rebuild: vi.fn(async () => undefined),
-          status: () => ({
-            freshness: "fresh" as const,
-            generation: 1,
-            gitHead: "no-head",
-            workspaceRevision: "revision",
-            pendingFiles: [],
-            dirtyFiles: [],
-          }),
-          query: vi.fn(async () => ({
-            results: [],
-            freshness: "fresh" as const,
-            generation: 1,
-            gitHead: "no-head",
-            workspaceRevision: "revision",
-            pendingFiles: [],
-            fallbackEvidence: [],
-          })),
-        };
-        runtimes.push(runtime);
-        return runtime;
-      },
+  it("protects explicit receipts from all entries and the current branch during extension GC", async () => {
+    const target = await harness({ retentionDays: 1, projectQuotaBytes: 1 });
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const projects = join(target.piRoot, "context-vault", "projects");
+    const [projectId] = await readdir(projects);
+    const stateRoot = join(projects, projectId as string);
+    const oldStore = new ArtifactStore({
+      artifactsRoot: join(stateRoot, "artifacts"),
+      metadataRoot: join(stateRoot, "metadata"),
+      now: () => new Date("2020-01-01T00:00:00.000Z"),
     });
-
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    await handlers.get("session_start")?.({ type: "session_start", reason: "reload" }, ctx);
-    expect(runtimes).toHaveLength(2);
-    expect(runtimes[0]?.close).toHaveBeenCalledOnce();
-    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
-    expect(runtimes[1]?.close).toHaveBeenCalledOnce();
-  });
-
-  it("registers before archiving and releases only its session lease on shutdown", async () => {
-    const { handlers, ctx, project, root } = await harness();
-    const projectId = createHash("sha256").update(project).digest("hex").slice(0, 32);
-    const registryPath = join(root, "pi", "context-vault", "projects", projectId, "metadata", "active-sessions.json");
-
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    expect(JSON.parse(await readFile(registryPath, "utf8")).leases).toMatchObject([
-      { sessionId: "session-1", pid: process.pid },
-    ]);
-
-    await handlers.get("tool_result")?.({
-      type: "tool_result",
-      toolCallId: "registered-first",
+    const fromEntries = await oldStore.archive({
+      observationId: "from-all-entries",
       toolName: "read",
-      input: {},
-      content: [{ type: "text", text: "archived only after registration" }],
-      isError: false,
+      sessionId: "old-session",
+      content: "all-entry evidence",
     });
-    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
-    expect(JSON.parse(await readFile(registryPath, "utf8")).leases).toEqual([]);
-  });
-
-  it("runs repository-map maintenance together with artifact garbage collection", async () => {
-    const maintenance = vi.fn(async () => ({
-      activeGeneration: 1,
-      deletedGenerations: [2],
-      bytesFreed: 100,
-      remainingGenerations: 1,
-      remainingBytes: 200,
-      quotaSatisfied: true,
-    }));
-    const { handlers, commands, ctx, notify } = await harness({
-      repoMapRuntimeFactory: () => ({
-        start: async () => undefined,
-        close: async () => undefined,
-        ensureFresh: async () => undefined,
-        rebuild: async () => undefined,
-        maintenance,
-        status: () => ({
-          freshness: "fresh" as const,
-          generation: 1,
-          gitHead: "no-head",
-          workspaceRevision: "revision",
-          pendingFiles: [],
-          dirtyFiles: [],
-        }),
-        query: async () => ({
-          results: [],
-          freshness: "fresh" as const,
-          generation: 1,
-          gitHead: "no-head",
-          workspaceRevision: "revision",
-          pendingFiles: [],
-          fallbackEvidence: [],
-        }),
-      }),
-    });
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    await commands.get("context-vault")?.handler("gc", ctx);
-
-    expect(maintenance).toHaveBeenCalledOnce();
-    expect(JSON.parse(String(notify.mock.calls.at(-1)?.[0]))).toMatchObject({
-      artifacts: { quotaSatisfied: true },
-      repoMap: { activeGeneration: 1, deletedGenerations: [2], quotaSatisfied: true },
-    });
-  });
-
-  it("protects receipts from the resumed session tree/current branch, shared hashes, and current-session metadata", async () => {
-    const maintenance = vi.fn(async () => ({
-      activeGeneration: 1,
-      deletedGenerations: [],
-      bytesFreed: 0,
-      remainingGenerations: 1,
-      remainingBytes: 1,
-      quotaSatisfied: true,
-    }));
-    const { handlers, tools, commands, ctx, notify } = await harness(
-      {
-        repoMapRuntimeFactory: () => ({
-          start: async () => undefined,
-          close: async () => undefined,
-          ensureFresh: async () => undefined,
-          rebuild: async () => undefined,
-          maintenance,
-          status: () => ({
-            freshness: "fresh" as const,
-            generation: 1,
-            gitHead: "head",
-            workspaceRevision: "revision",
-            pendingFiles: [],
-            dirtyFiles: [],
-          }),
-          query: async () => ({
-            results: [],
-            freshness: "fresh" as const,
-            generation: 1,
-            gitHead: "head",
-            workspaceRevision: "revision",
-            pendingFiles: [],
-            fallbackEvidence: [],
-          }),
-        }),
-      },
-      { replacementThresholdBytes: 1, projectQuotaBytes: 1, retentionDays: 30 },
-    );
-    const toolResult = async (toolCallId: string, text: string) =>
-      (await handlers.get("tool_result")?.({
-        type: "tool_result",
-        toolCallId,
-        toolName: "read",
-        input: {},
-        content: [{ type: "text", text }],
-        isError: false,
-      })) as ToolResult;
-
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    const treeReceipt = await toolResult("tree", "tree evidence");
-    const sharedReceipt = await toolResult("shared", "tree evidence");
-    const branchReceipt = await toolResult("branch", "branch evidence");
-    const unreferencedReceipt = await toolResult("unreferenced", "delete me");
-
-    const resumedCtx = {
-      ...ctx,
-      sessionManager: {
-        getSessionId: () => "session-2",
-        getEntries: () => [
-          {
-            type: "message",
-            id: "tree-entry",
-            parentId: null,
-            timestamp: new Date().toISOString(),
-            message: {
-              role: "toolResult",
-              toolCallId: "tree",
-              toolName: "read",
-              content: [{ type: "text", text: treeReceipt.content[0]?.text }],
-              isError: false,
-              timestamp: 1,
-            },
-          },
-        ],
-        getBranch: () => [
-          {
-            type: "message",
-            id: "branch-entry",
-            parentId: null,
-            timestamp: new Date().toISOString(),
-            message: {
-              role: "toolResult",
-              toolCallId: "branch",
-              toolName: "read",
-              content: [{ type: "text", text: branchReceipt.content[0]?.text }],
-              isError: false,
-              timestamp: 2,
-            },
-          },
-        ],
-      },
-    };
-    await handlers.get("session_start")?.({ type: "session_start", reason: "resume" }, resumedCtx);
-    const current = await toolResult("current", "current metadata evidence");
-
-    await commands.get("context-vault")?.handler("gc", resumedCtx);
-
-    const report = JSON.parse(String(notify.mock.calls.at(-1)?.[0]));
-    expect(report.artifacts.quotaSatisfied).toBe(false);
-    expect(maintenance).toHaveBeenCalledOnce();
-    for (const receipt of [treeReceipt, sharedReceipt, branchReceipt, current]) {
-      const id = JSON.parse(receipt.content[0]?.text ?? "{}").id;
-      const fetched = (await tools.get("context_vault_obs_get")?.execute("get", { id })) as ToolResult;
-      expect(fetched.isError).not.toBe(true);
-    }
-    const unreferencedId = JSON.parse(unreferencedReceipt.content[0]?.text ?? "{}").id;
-    const deleted = (await tools.get("context_vault_obs_get")?.execute("get", { id: unreferencedId })) as ToolResult;
-    expect(deleted.isError).toBe(true);
-  });
-
-  it("fails GC safely before deletion when active session references cannot be enumerated", async () => {
-    const maintenance = vi.fn(async () => ({
-      activeGeneration: 1,
-      deletedGenerations: [],
-      bytesFreed: 0,
-      remainingGenerations: 1,
-      remainingBytes: 0,
-      quotaSatisfied: true,
-    }));
-    const { handlers, tools, commands, ctx, notify } = await harness(
-      {
-        repoMapRuntimeFactory: () => ({
-          start: async () => undefined,
-          close: async () => undefined,
-          ensureFresh: async () => undefined,
-          rebuild: async () => undefined,
-          maintenance,
-          status: () => ({
-            freshness: "fresh" as const,
-            generation: 1,
-            gitHead: "head",
-            workspaceRevision: "revision",
-            pendingFiles: [],
-            dirtyFiles: [],
-          }),
-          query: async () => ({
-            results: [],
-            freshness: "fresh" as const,
-            generation: 1,
-            gitHead: "head",
-            workspaceRevision: "revision",
-            pendingFiles: [],
-            fallbackEvidence: [],
-          }),
-        }),
-      },
-      { replacementThresholdBytes: 1, projectQuotaBytes: 1 },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    const receipt = (await handlers.get("tool_result")?.({
-      type: "tool_result",
-      toolCallId: "keep",
+    const fromBranch = await oldStore.archive({
+      observationId: "from-current-branch",
       toolName: "read",
-      input: {},
-      content: [{ type: "text", text: "must survive enumeration failure" }],
-      isError: false,
-    })) as ToolResult;
-    const failingCtx = {
-      ...ctx,
-      sessionManager: {
-        getSessionId: () => "different-session",
-        getEntries: () => {
-          throw new Error("session tree unavailable");
-        },
-        getBranch: () => [],
-      },
-    };
+      sessionId: "old-session",
+      content: "branch evidence",
+    });
+    const unreferenced = await oldStore.archive({
+      observationId: "unreferenced",
+      toolName: "read",
+      sessionId: "old-session",
+      content: "delete this evidence",
+    });
+    const receipt = (artifactId: string) => ({
+      type: "context_vault_observation_receipt",
+      evidence: { artifactId },
+    });
+    (target.ctx.sessionManager as any).getEntries = () => [{ message: receipt(fromEntries.artifactId) }];
+    (target.ctx.sessionManager as any).getBranch = () => [{ message: receipt(fromBranch.artifactId) }];
 
-    await commands.get("context-vault")?.handler("gc", failingCtx);
-
-    expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("session tree unavailable"), "error");
-    expect(maintenance).not.toHaveBeenCalled();
-    const id = JSON.parse(receipt.content[0]?.text ?? "{}").id;
-    const fetched = (await tools.get("context_vault_obs_get")?.execute("get", { id })) as ToolResult;
-    expect(fetched.isError).not.toBe(true);
+    await target.commands.get("context-vault")?.handler("gc", target.ctx);
+    await expect(oldStore.read(fromEntries.artifactId)).resolves.toBe("all-entry evidence");
+    await expect(oldStore.read(fromBranch.artifactId)).resolves.toBe("branch evidence");
+    await expect(oldStore.read(unreferenced.artifactId)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("supports status, rebuild, gc, and doctor commands and reports degraded initialization safely", async () => {
-    const { handlers, tools, commands, ctx, notify } = await harness({
-      repoMapRuntimeFactory: () => ({
-        start: async () => {
-          throw new Error("watcher unavailable");
-        },
-        close: async () => undefined,
-        ensureFresh: async () => undefined,
-        rebuild: async () => undefined,
-        status: () => ({
-          freshness: "stale" as const,
-          generation: 0,
-          gitHead: "no-head",
-          workspaceRevision: "unavailable",
-          pendingFiles: [],
-          dirtyFiles: [],
-          error: "watcher unavailable",
-        }),
-        query: async () => {
-          throw new Error("watcher unavailable");
-        },
-      }),
+  it("aborts GC before deletion when an explicit receipt source is unreadable", async () => {
+    const target = await harness({ retentionDays: 1, projectQuotaBytes: 1 });
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const projects = join(target.piRoot, "context-vault", "projects");
+    const [projectId] = await readdir(projects);
+    const stateRoot = join(projects, projectId as string);
+    const oldStore = new ArtifactStore({
+      artifactsRoot: join(stateRoot, "artifacts"),
+      metadataRoot: join(stateRoot, "metadata"),
+      now: () => new Date("2020-01-01T00:00:00.000Z"),
     });
+    const survivor = await oldStore.archive({
+      observationId: "receipt-source-failure",
+      toolName: "read",
+      sessionId: "old-session",
+      content: "must remain after source failure",
+    });
+    (target.ctx.sessionManager as any).getEntries = () => {
+      throw new Error("entry tree unreadable");
+    };
+    await target.commands.get("context-vault")?.handler("gc", target.ctx);
+    expect(target.notifications.at(-1)).toEqual({ text: "gc failed: entry tree unreadable", type: "error" });
+    await expect(oldStore.read(survivor.artifactId)).resolves.toBe("must remain after source failure");
+  });
 
+  it("releases only its exact lease and clears only the Context Vault UI key on shutdown", async () => {
+    const target = await harness();
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const projects = join(target.piRoot, "context-vault", "projects");
+    const [projectId] = await readdir(projects);
+    const stateRoot = join(projects, projectId as string);
+    const other = new ArtifactStore({
+      artifactsRoot: join(stateRoot, "artifacts"),
+      metadataRoot: join(stateRoot, "metadata"),
+    });
+    const otherLease = await other.registerActiveSession("session-one");
+    await target.handlers.get("session_shutdown")?.({}, target.ctx);
+    const registry = JSON.parse(await readFile(join(stateRoot, "metadata", "active-sessions.json"), "utf8"));
+    expect(registry.leases).toHaveLength(1);
+    expect(registry.leases[0].ownerId).toBe(otherLease.ownerId);
+    expect(target.statuses.every((row) => row.key === "context-vault")).toBe(true);
+    expect(target.statuses.at(-1)).toEqual({ key: "context-vault", value: undefined });
+    await other.releaseActiveSession(otherLease);
+  });
+
+  it("fails closed on state-root symlinks and reports degraded status without mutating Repo roots", async () => {
+    const target = await harness();
+    const projectRoot = await realpath(target.project);
+    const projectId = createHash("sha256").update(projectRoot).digest("hex").slice(0, 32);
+    const stateRoot = join(target.piRoot, "context-vault", "projects", projectId);
+    const legacyRoot = join(stateRoot, "repo-map");
+    const repoRoot = join(target.piRoot, "pi-repo-context", "projects", projectId, "repo-map");
+    await mkdir(legacyRoot, { recursive: true });
+    await mkdir(repoRoot, { recursive: true });
+    await writeFile(join(legacyRoot, "sentinel"), "legacy-safe");
+    await writeFile(join(repoRoot, "sentinel"), "repo-safe");
+    if (!(await createDirectorySymlink(legacyRoot, join(stateRoot, "artifacts")))) return;
+    if (!(await createDirectorySymlink(repoRoot, join(stateRoot, "metadata")))) return;
+
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const status = await target.tools
+      .get("context_vault_status")
+      ?.execute("call", {}, undefined, undefined, target.ctx);
+    expect(status.details.degraded).toBe(true);
+    expect(status.details.components.observations.available).toBe(false);
     await expect(
-      handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx),
+      target.handlers.get("tool_result")?.(toolEvent("bash", "original result"), target.ctx),
     ).resolves.toBeUndefined();
-    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
-    expect(JSON.parse(status.content[0].text)).toMatchObject({
-      initialized: true,
-      degraded: true,
-      components: { repoMap: { available: false, error: "watcher unavailable" } },
-    });
-
-    for (const subcommand of ["status", "rebuild", "gc", "doctor"]) {
-      await expect(commands.get("context-vault")?.handler(subcommand, ctx)).resolves.toBeUndefined();
-    }
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("degraded"), expect.any(String));
-
-    const headless = { ...ctx, hasUI: false };
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    try {
-      const tuiNotifyCount = notify.mock.calls.length;
-      await expect(commands.get("context-vault")?.handler("doctor", headless)).resolves.toBeUndefined();
-      // headless modes: report goes to console (redirected to stderr by pi's output guard), never silent
-      expect(logSpy).toHaveBeenCalledTimes(1);
-      expect(JSON.parse(String(logSpy.mock.calls[0][0]))).toMatchObject({ status: "degraded" });
-      // and the UI channel stays untouched for the headless run
-      expect(notify.mock.calls.length).toBe(tuiNotifyCount);
-    } finally {
-      logSpy.mockRestore();
-    }
+    await target.commands.get("context-vault")?.handler("doctor", target.ctx);
+    expect(JSON.parse(target.notifications.at(-1)?.text ?? "null").status).toBe("degraded");
+    await expect(target.handlers.get("session_shutdown")?.({}, target.ctx)).resolves.toBeUndefined();
+    expect(await readFile(join(legacyRoot, "sentinel"), "utf8")).toBe("legacy-safe");
+    expect(await readFile(join(repoRoot, "sentinel"), "utf8")).toBe("repo-safe");
   });
 
-  it("keeps command reports on the UI notification channel only in TUI mode", async () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    try {
-      const { handlers, commands, ctx, notify } = await harness();
-      await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-      await commands.get("context-vault")?.handler("status", ctx);
-      expect(notify).toHaveBeenCalledWith(expect.stringContaining('"initialized": true'), "info");
-      expect(logSpy).not.toHaveBeenCalled();
-    } finally {
-      logSpy.mockRestore();
-    }
-  });
+  it("rejects symlinked product namespace components during startup without changing Repo Context targets", async () => {
+    for (const component of ["context-vault", "projects"] as const) {
+      const target = await harness();
+      const repoTarget = join(
+        target.piRoot,
+        "pi-repo-context",
+        "projects",
+        `startup-redirect-${component}`,
+        "repo-map",
+      );
+      await mkdir(join(repoTarget, "nested"), { recursive: true });
+      await writeFile(join(repoTarget, "sentinel"), `${component}-startup-safe`);
+      await writeFile(join(repoTarget, "nested", "evidence"), `${component}-startup-nested-safe`);
+      const before = await digestTree(repoTarget);
+      const owned =
+        component === "context-vault"
+          ? join(target.piRoot, "context-vault")
+          : join(target.piRoot, "context-vault", "projects");
+      if (component === "projects") await mkdir(join(target.piRoot, "context-vault"));
+      if (!(await createDirectorySymlink(repoTarget, owned))) return;
 
-  it("prints the doctor report through console.log in headless modes without a UI context", async () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    try {
-      const { handlers, commands, ctx } = await harness();
-      await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-      const headless = { ...ctx, hasUI: false };
-      await commands.get("context-vault")?.handler("doctor", headless);
-      expect(logSpy).toHaveBeenCalledTimes(1);
-      const report = JSON.parse(String(logSpy.mock.calls[0][0]));
-      expect(report).toMatchObject({ status: "healthy", initialized: true, stateOutsideProjectTree: true });
-    } finally {
-      logSpy.mockRestore();
+      await target.handlers.get("session_start")?.({}, target.ctx);
+      const status = await target.tools
+        .get("context_vault_status")
+        ?.execute("call", {}, undefined, undefined, target.ctx);
+      expect(status.details.initialized).toBe(false);
+      expect(status.details.degraded).toBe(true);
+      expect(status.details.components.observations.available).toBe(false);
+      await expect(target.handlers.get("session_shutdown")?.({}, target.ctx)).resolves.toBeUndefined();
+      expect(await digestTree(repoTarget)).toBe(before);
+      expect(await readFile(join(repoTarget, "sentinel"), "utf8")).toBe(`${component}-startup-safe`);
     }
   });
 
-  it("does not report a rebuild as available when the runtime remains stale", async () => {
-    let stale = false;
-    const runtime = {
-      start: async () => undefined,
-      close: async () => undefined,
-      ensureFresh: async () => undefined,
-      rebuild: vi.fn(async () => {
-        stale = true;
-      }),
-      status: () => ({
-        freshness: stale ? ("stale" as const) : ("fresh" as const),
-        generation: 3,
-        gitHead: "abc",
-        workspaceRevision: "revision-rebuild",
-        pendingFiles: [],
-        dirtyFiles: [],
-        ...(stale ? { error: "atomic activation failed" } : {}),
-      }),
-      query: vi.fn(async () => ({
-        results: [],
-        freshness: "fresh" as const,
-        generation: 3,
-        gitHead: "abc",
-        workspaceRevision: "revision-rebuild",
-        pendingFiles: [],
-        fallbackEvidence: [],
-      })),
-    };
-    const { handlers, tools, commands, ctx, notify } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn", reductionEnabled: false },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+  it("keeps config initialization failure degraded and cannot mutate seeded repository roots", async () => {
+    const target = await harness({ unknownVaultOption: true });
+    const projectRoot = await realpath(target.project);
+    const projectId = createHash("sha256").update(projectRoot).digest("hex").slice(0, 32);
+    const legacyRoot = join(target.piRoot, "context-vault", "projects", projectId, "repo-map");
+    const repoRoot = join(target.piRoot, "pi-repo-context", "projects", projectId, "repo-map");
+    await mkdir(legacyRoot, { recursive: true });
+    await mkdir(repoRoot, { recursive: true });
+    await writeFile(join(legacyRoot, "sentinel"), "legacy-config-safe");
+    await writeFile(join(repoRoot, "sentinel"), "repo-config-safe");
 
-    await commands.get("context-vault")?.handler("rebuild", ctx);
-
-    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
-    expect(JSON.parse(status.content[0].text)).toMatchObject({
-      degraded: true,
-      components: { repoMap: { available: false, freshness: "stale", error: "atomic activation failed" } },
-    });
-    expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("rebuild failed"), "error");
-
-    const inboundCapsule = {
-      role: "custom",
-      customType: "context-vault-repo-map",
-      content: "capsule before unavailable rebuild",
-      display: false,
-      details: { persistent: false },
-      timestamp: 2,
-    };
-    const userMessage = { role: "user", content: "inspect", timestamp: 1 };
-    const messages = [userMessage, inboundCapsule];
-    await expect(handlers.get("context")?.({ type: "context", messages }, ctx)).resolves.toBeUndefined();
-    expect(runtime.query).not.toHaveBeenCalled();
-    expect(messages).toEqual([userMessage, inboundCapsule]);
-    expect(messages[0]).toBe(userMessage);
-    expect(messages[1]).toBe(inboundCapsule);
-  });
-
-  it("clears a frozen capsule across failed and successful rebuild boundaries in one turn", async () => {
-    let rebuildAttempts = 0;
-    let workspaceRevision = "revision-before";
-    const query = vi.fn(async () => ({
-      results: [],
-      freshness: "fresh" as const,
-      generation: rebuildAttempts + 1,
-      gitHead: "head",
-      workspaceRevision,
-      pendingFiles: [],
-      fallbackEvidence: [],
-    }));
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => {
-        rebuildAttempts += 1;
-        if (rebuildAttempts === 1) throw new Error("first rebuild failed");
-        workspaceRevision = "revision-after";
-      }),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: rebuildAttempts + 1,
-        gitHead: "head",
-        workspaceRevision,
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query,
-    };
-    const { handlers, commands, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-    const first = (await handlers.get("context")?.(
-      { type: "context", messages: [{ role: "user", content: "inspect", timestamp: 1 }] },
-      ctx,
-    )) as { messages: Array<Record<string, unknown>> };
-
-    await commands.get("context-vault")?.handler("rebuild", ctx);
-    await commands.get("context-vault")?.handler("rebuild", ctx);
-    const second = (await handlers.get("context")?.({ type: "context", messages: first.messages }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-
-    expect(query).toHaveBeenCalledTimes(2);
-    expect(second.messages).toHaveLength(2);
-    expect(String(second.messages[1]?.content)).toContain('"workspaceRevisionAtCapture":"revision-after"');
-    expect(second.messages[1]).not.toEqual(first.messages[1]);
-  });
-
-  it("contains capsule render failures, continues reduction, and counts failed automatic queries", async () => {
-    const cyclicSymbol: Record<string, unknown> = { name: "cyclic" };
-    cyclicSymbol.self = cyclicSymbol;
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 1,
-        gitHead: "head",
-        workspaceRevision: "revision",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query: vi
-        .fn()
-        .mockRejectedValueOnce(new Error("query failed"))
-        .mockResolvedValueOnce({
-          results: [
-            {
-              path: "src/cyclic.ts",
-              kind: "semantic",
-              matchedSymbols: ["cyclic"],
-              symbols: [cyclicSymbol],
-              dependencies: [],
-            },
-          ],
-          freshness: "fresh" as const,
-          generation: 1,
-          gitHead: "head",
-          workspaceRevision: "revision",
-          pendingFiles: [],
-          fallbackEvidence: [],
-        }),
-    };
-    const { handlers, tools, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    const failedQueryCapsule = (await handlers.get("context")?.(
-      { type: "context", messages: [{ role: "user", content: "first", timestamp: 1 }] },
-      ctx,
-    )) as { messages: Array<{ content: string }> };
-    const failedQueryPayload = JSON.parse(
-      failedQueryCapsule.messages[1]?.content.split("\n").slice(1).join("\n") ?? "",
-    );
-    expect(failedQueryPayload).toMatchObject({
-      captureSemantics: "turn-start-snapshot",
-      freshnessAtCapture: "stale",
-      workspaceRevisionAtCapture: "unavailable",
-      generationAtCapture: 0,
-      gitHeadAtCapture: "unavailable",
-      pendingFilesAtCapture: [],
-      error: "query failed",
-    });
-    expect(failedQueryPayload).not.toHaveProperty("freshness");
-    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const status = await target.tools
+      .get("context_vault_status")
+      ?.execute("call", {}, undefined, undefined, target.ctx);
+    expect(status.details.initialized).toBe(false);
+    expect(status.details.degraded).toBe(true);
+    expect(status.details.components.observations.available).toBe(false);
     await expect(
-      handlers.get("context")?.(
-        { type: "context", messages: [{ role: "user", content: "second", timestamp: 2 }] },
-        ctx,
-      ),
+      target.handlers.get("tool_result")?.(toolEvent("bash", "original result"), target.ctx),
     ).resolves.toBeUndefined();
-
-    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
-    const parsed = JSON.parse(status.content[0].text);
-    expect(parsed.telemetry.repoMapAutomaticQueryCount).toBe(2);
-    expect(parsed.telemetry.reductionInvocationCount).toBe(2);
-    expect(parsed.telemetry.capsuleBuildCount).toBe(1);
-    expect(parsed.failures).toEqual([
-      expect.objectContaining({ component: "repo-map", error: expect.stringContaining("circular") }),
-    ]);
-    expect(parsed.failures[0].error.length).toBeLessThanOrEqual(512);
+    await target.commands.get("context-vault")?.handler("doctor", target.ctx);
+    expect(JSON.parse(target.notifications.at(-1)?.text ?? "null").status).toBe("degraded");
+    await expect(target.handlers.get("session_shutdown")?.({}, target.ctx)).resolves.toBeUndefined();
+    expect(await readFile(join(legacyRoot, "sentinel"), "utf8")).toBe("legacy-config-safe");
+    expect(await readFile(join(repoRoot, "sentinel"), "utf8")).toBe("repo-config-safe");
   });
 
-  it("telemetry: context hook message structure is unchanged and capsule counters increase", async () => {
-    const query = vi.fn(async () => ({
-      results: [],
-      freshness: "fresh" as const,
-      generation: 1,
-      gitHead: "h",
-      workspaceRevision: "r",
-      pendingFiles: [],
-      fallbackEvidence: [],
-    }));
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 1,
-        gitHead: "h",
-        workspaceRevision: "r",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query,
-    };
-    const { handlers, tools, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    const turnStart = [{ role: "user", content: "fix auth", timestamp: 10 }];
-    const first = (await handlers.get("context")?.({ type: "context", messages: turnStart }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    // Message structure is identical to the pre-telemetry behavior.
-    expect(first.messages[0]).toEqual(turnStart[0]);
-    expect(first.messages[1]).toMatchObject({ role: "custom", customType: "context-vault-repo-map", display: false });
-
-    const grown = [
-      ...turnStart,
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "c", name: "read", arguments: {} }],
-        timestamp: 11,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "c",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: 12,
-      },
-    ];
-    const second = (await handlers.get("context")?.({ type: "context", messages: grown }, ctx)) as {
-      messages: Array<Record<string, unknown>>;
-    };
-    expect(second.messages[1]).toEqual(first.messages[1]);
-
-    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
-    const telemetry = JSON.parse(status.content[0].text).telemetry;
-    expect(telemetry.capsuleBuildCount).toBe(1);
-    expect(telemetry.repoMapAutomaticQueryCount).toBe(1);
-    expect(telemetry.capsuleInsertionIndex).toBe(1);
-    expect(telemetry.capsuleBytes).toBeGreaterThan(0);
-  });
-
-  it("telemetry: capsule hash change increments across user turns", async () => {
-    const query = vi.fn(async () => ({
-      results: [],
-      freshness: "fresh" as const,
-      generation: 1,
-      gitHead: "h",
-      workspaceRevision: "r",
-      pendingFiles: [],
-      fallbackEvidence: [],
-    }));
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 1,
-        gitHead: "h",
-        workspaceRevision: "r",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query,
-    };
-    const { handlers, tools, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    await handlers.get("context")?.(
-      { type: "context", messages: [{ role: "user", content: "first prompt", timestamp: 1 }] },
-      ctx,
-    );
-    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
-    await handlers.get("context")?.(
-      { type: "context", messages: [{ role: "user", content: "second prompt", timestamp: 2 }] },
-      ctx,
-    );
-
-    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
-    const telemetry = JSON.parse(status.content[0].text).telemetry;
-    expect(telemetry.capsuleBuildCount).toBe(2);
-    expect(telemetry.capsuleHashChangeCount).toBe(1);
-  });
-
-  it("telemetry: reduction counters accumulate", async () => {
-    const { handlers, tools, ctx } = await harness();
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    // Small context: reduceContext runs but does not trigger.
-    await handlers.get("context")?.(
-      { type: "context", messages: [{ role: "user", content: "hi", timestamp: 1 }] },
-      ctx,
-    );
-
-    // Large context: reduction triggers.
-    const narrowContext = { ...ctx, model: { contextWindow: 35_000 } };
-    const messages: Array<Record<string, unknown>> = [{ role: "user", content: "big", timestamp: 0 }];
-    for (let index = 0; index < 20; index += 1) {
-      const text = `${index}:`.padEnd(8_000, "x");
-      await handlers.get("tool_result")?.({
-        type: "tool_result",
-        toolCallId: `telemetry-call-${index}`,
-        toolName: "read",
-        input: {},
-        content: [{ type: "text", text }],
-        isError: false,
-      });
-      messages.push({
-        role: "assistant",
-        content: [{ type: "toolCall", id: `telemetry-call-${index}`, name: "read", arguments: {} }],
-        timestamp: index * 2 + 1,
-      });
-      messages.push({
-        role: "toolResult",
-        toolCallId: `telemetry-call-${index}`,
-        toolName: "read",
-        content: [{ type: "text", text }],
-        isError: false,
-        timestamp: index * 2 + 2,
-      });
-    }
-    await handlers.get("context")?.({ type: "context", messages }, narrowContext);
-
-    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
-    const telemetry = JSON.parse(status.content[0].text).telemetry;
-    expect(telemetry.reductionInvocationCount).toBe(2);
-    expect(telemetry.reductionTriggeredCount).toBe(1);
-    expect(telemetry.reducedObservationCount).toBeGreaterThan(0);
-    expect(telemetry.estimatedTokensBeforeTotal).toBeGreaterThan(0);
-    expect(telemetry.estimatedTokensAfterTotal).toBeGreaterThan(0);
-    expect(telemetry.reductionDurationMsTotal).toBeGreaterThanOrEqual(0);
-  }, 15_000);
-
-  it("telemetry: status snapshot is a copy, bounded, and free of raw content", async () => {
-    const query = vi.fn(async () => ({
-      results: [],
-      freshness: "fresh" as const,
-      generation: 1,
-      gitHead: "h",
-      workspaceRevision: "r",
-      pendingFiles: [],
-      fallbackEvidence: [],
-    }));
-    const runtime = {
-      start: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      ensureFresh: vi.fn(async () => undefined),
-      rebuild: vi.fn(async () => undefined),
-      status: vi.fn(() => ({
-        freshness: "fresh" as const,
-        generation: 1,
-        gitHead: "h",
-        workspaceRevision: "r",
-        pendingFiles: [],
-        dirtyFiles: [],
-      })),
-      query,
-    };
-    const { handlers, tools, ctx } = await harness(
-      { repoMapRuntimeFactory: () => runtime },
-      { mapInjectionMode: "once-per-user-turn" },
-    );
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
-
-    await handlers.get("context")?.(
-      { type: "context", messages: [{ role: "user", content: "fix auth", timestamp: 1 }] },
-      ctx,
-    );
-    await handlers.get("tool_result")?.({
-      type: "tool_result",
-      toolCallId: "marker-call",
-      toolName: "bash",
-      input: {},
-      content: [{ type: "text", text: "SECRET-TOOL-OUTPUT-MARKER-xyz" }],
-      isError: false,
+  it("preserves preexisting Observation artifact and metadata across lifecycle and failed initialization", async () => {
+    const target = await harness();
+    const state = await resolveProjectState(target.project, { PI_CODING_AGENT_DIR: target.piRoot });
+    const store = new ArtifactStore({ artifactsRoot: state.artifactsRoot, metadataRoot: state.metadataRoot });
+    const observationId = `obs_${"a".repeat(24)}`;
+    const evidence = "preexisting observation evidence must remain unchanged";
+    const archived = await store.archive({
+      observationId,
+      toolName: "read",
+      sessionId: "preexisting-session",
+      content: evidence,
     });
+    const artifactPath = join(state.artifactsRoot, archived.artifactId.slice(0, 2), `${archived.artifactId}.txt`);
+    const metadataPath = join(state.metadataRoot, "observations.jsonl");
+    const originalArtifact = await readFile(artifactPath);
+    const originalMetadata = await readFile(metadataPath);
+    const expectUnchanged = async () => {
+      expect(await readFile(artifactPath)).toEqual(originalArtifact);
+      expect(await readFile(metadataPath)).toEqual(originalMetadata);
+      await expect(store.read(archived.artifactId)).resolves.toBe(evidence);
+    };
+    const expectToolReadable = async () => {
+      const result = await target.tools
+        .get("context_vault_obs_get")
+        ?.execute("call", { id: observationId }, undefined, undefined, target.ctx);
+      expect(result.isError).not.toBe(true);
+      expect(result.details.evidence.text).toBe(evidence);
+    };
 
-    const first = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
-    const firstStatus = JSON.parse(first.content[0].text);
-    const snapshot = firstStatus.telemetry;
-    snapshot.capsuleBuildCount = 999;
-    snapshot.repoMapQueryCount = 999;
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    await expectToolReadable();
+    await expectUnchanged();
+    await target.commands.get("context-vault")?.handler("rebuild", target.ctx);
+    expect(target.notifications.at(-1)?.text).toBe(REBUILD_MIGRATION_MESSAGE);
+    await expectUnchanged();
+    await target.handlers.get("session_shutdown")?.({}, target.ctx);
+    await expectUnchanged();
 
-    const second = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
-    const secondStatus = JSON.parse(second.content[0].text);
-    expect(secondStatus.telemetry.capsuleBuildCount).toBe(1);
-    expect(secondStatus.telemetry.repoMapQueryCount).toBe(0);
+    await writeFile(join(target.project, ".pi", "context-vault.json"), JSON.stringify({ unknownVaultOption: true }));
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const degraded = await target.tools
+      .get("context_vault_status")
+      ?.execute("call", {}, undefined, undefined, target.ctx);
+    expect(degraded.details.initialized).toBe(false);
+    expect(degraded.details.degraded).toBe(true);
+    await expectUnchanged();
 
-    // Bounded: every telemetry field is a finite number, no arrays or records.
-    for (const [key, value] of Object.entries(secondStatus.telemetry)) {
-      expect(typeof value, key).toBe("number");
-      expect(Number.isFinite(value), key).toBe(true);
-    }
-
-    // Privacy: status never contains raw tool output.
-    expect(first.content[0].text).not.toContain("SECRET-TOOL-OUTPUT-MARKER-xyz");
-    expect(second.content[0].text).not.toContain("SECRET-TOOL-OUTPUT-MARKER-xyz");
+    await writeFile(join(target.project, ".pi", "context-vault.json"), "{}");
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    await expectToolReadable();
+    await target.handlers.get("session_shutdown")?.({}, target.ctx);
+    await expectUnchanged();
   });
 
-  it("telemetry: degraded state is unaffected by telemetry presence", async () => {
-    const { handlers, tools, ctx } = await harness();
-    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+  it("reports healthy status and doctor results for a normal Vault startup", async () => {
+    const target = await harness();
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    await target.commands.get("context-vault")?.handler("status", target.ctx);
+    expect(JSON.parse(target.notifications.at(-1)?.text ?? "null").degraded).toBe(false);
+    expect(target.notifications.at(-1)?.type).toBe("info");
+    await target.commands.get("context-vault")?.handler("doctor", target.ctx);
+    expect(JSON.parse(target.notifications.at(-1)?.text ?? "null").status).toBe("healthy");
+    expect(target.notifications.at(-1)?.type).toBe("info");
+  });
 
-    const status = (await tools.get("context_vault_status")?.execute("status", {})) as ToolResult;
-    const parsed = JSON.parse(status.content[0].text);
-    expect(parsed.degraded).toBe(false);
-    expect(parsed.telemetry).toBeDefined();
-    expect(parsed.components.observations.degraded).toBe(false);
+  it("emits one Vault-only telemetry frame in headless status-json/shutdown", async () => {
+    const target = await harness();
+    const headless = { ...target.ctx, hasUI: false };
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await target.handlers.get("session_start")?.({}, headless);
+    await target.commands.get("context-vault")?.handler("status-json", headless);
+    await target.handlers.get("session_shutdown")?.({}, headless);
+    const frames = log.mock.calls.flat().filter((value) => String(value).includes("@@CONTEXT_VAULT_TELEMETRY_V1@@"));
+    expect(frames).toHaveLength(1);
+    expect(String(frames[0])).not.toContain("repoMap");
   });
 });

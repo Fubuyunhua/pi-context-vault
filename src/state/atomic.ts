@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { type BigIntStats, constants } from "node:fs";
-import { lstat, mkdir, open, readdir, rename, rmdir, unlink, utimes } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, rmdir, stat, unlink, utimes } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -67,31 +67,46 @@ export async function syncParentDirectory(path: string): Promise<void> {
   await syncDirectory(dirname(path));
 }
 
-/** Creates every missing directory and durably publishes each new parent entry. */
-export async function durableMkdir(path: string): Promise<void> {
+async function assertExistingDirectory(path: string, allowSymlinkAncestor: boolean): Promise<void> {
+  const info = await lstat(path);
+  if (info.isDirectory() && !info.isSymbolicLink()) return;
+  if (allowSymlinkAncestor && info.isSymbolicLink() && (await stat(path)).isDirectory()) return;
+  throw new Error(`Refusing non-directory or symbolic-link state path: ${path}`);
+}
+
+async function durableMkdirInternal(path: string, finalPath: boolean): Promise<void> {
   try {
     await mkdir(path, { mode: 0o700 });
+    await assertExistingDirectory(path, false);
     await syncParentDirectory(path);
   } catch (error) {
     const code = errorCode(error);
     if (code === "EEXIST") {
-      // A concurrent creator may have published the entry but not synced it yet.
-      // Sync it ourselves rather than treating existence as proof of durability.
+      // A concurrent creator may have published the entry but not synced it yet. Validate the entry before syncing;
+      // only recursive ancestors may be directory symlinks (for example a symlinked PI_CODING_AGENT_DIR).
+      await assertExistingDirectory(path, !finalPath);
       await syncParentDirectory(path);
       return;
     }
     if (code !== "ENOENT") throw error;
     const parent = dirname(path);
     if (parent === path) throw error;
-    await durableMkdir(parent);
+    await durableMkdirInternal(parent, false);
     try {
       await mkdir(path, { mode: 0o700 });
+      await assertExistingDirectory(path, false);
       await syncParentDirectory(path);
     } catch (retryError) {
       if (errorCode(retryError) !== "EEXIST") throw retryError;
+      await assertExistingDirectory(path, !finalPath);
       await syncParentDirectory(path);
     }
   }
+}
+
+/** Creates every missing directory and durably publishes each new parent entry. */
+export async function durableMkdir(path: string): Promise<void> {
+  await durableMkdirInternal(path, true);
 }
 
 export async function atomicWriteFile(path: string, content: string | Uint8Array): Promise<void> {

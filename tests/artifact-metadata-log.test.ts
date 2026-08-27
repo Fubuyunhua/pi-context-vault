@@ -295,7 +295,7 @@ describe("append-only observation metadata", () => {
     expect(telemetry.snapshot()).toMatchObject({
       metadataCompactionCount: 0,
       metadataCompactionFailureCount: 1,
-      maintenanceFailureCount: 1,
+      artifactGcFailureCount: 0,
     });
     await expect(storeAt(root).listMetadata()).resolves.toEqual([
       largeLegacy,
