@@ -22,6 +22,11 @@ import {
   type RepoMapSnapshot,
   type RepoMapWarning,
 } from "./index.js";
+import {
+  RepositoryCheckpointStore,
+  type RepositorySnapshotHandle,
+  RepositorySnapshotUnavailableError,
+} from "./snapshot.js";
 
 const execFileAsync = promisify(execFile);
 const DELETED_HASH = "deleted";
@@ -31,6 +36,7 @@ const DELETED_HASH = "deleted";
 const MAX_FLUSH_PASSES = 8;
 const MAX_WATCHER_UPDATES_PER_PASS = 64;
 const MAX_FLUSH_DURATION_MS = 1_000;
+const CHECKPOINT_PUBLICATION_ERROR = "repository snapshot checkpoint publication failed";
 
 export type RepoMapFreshness = "fresh" | "dirty" | "stale" | "unsupported";
 export type RepoMapChangeEvent = "add" | "change" | "unlink";
@@ -108,6 +114,8 @@ export interface RepoMapRuntimeOptions {
   gitRunner?: RepoMapGitRunner;
   /** Injectable MiniSearch construction dependency used by deterministic telemetry tests. */
   searchFactory?: (snapshot: RepoMapSnapshot) => RepoMapSearch;
+  /** Injectable full-snapshot builder used by deterministic checkpoint failure tests. */
+  snapshotBuilder?: typeof buildRepoMap;
   now?: () => Date;
   /** Injectable monotonic clock used for deterministic telemetry tests. */
   monotonicNow?: () => number;
@@ -512,6 +520,7 @@ export class RepoMapRuntime {
   readonly #monotonicNow: () => number;
   readonly #gitRunner: RepoMapGitRunner;
   readonly #searchFactory: (snapshot: RepoMapSnapshot) => RepoMapSearch;
+  readonly #snapshotBuilder: typeof buildRepoMap;
   #projectRoot = "";
   #base?: RepoMapSnapshot;
   #effective?: RepoMapSnapshot;
@@ -536,6 +545,9 @@ export class RepoMapRuntime {
   #mutationEpoch = 0;
   #started = false;
   #flushChain: Promise<void> = Promise.resolve();
+  #baseBuildFailed = false;
+  #checkpointPublicationFailed = false;
+  readonly #checkpoints = new RepositoryCheckpointStore();
 
   constructor(options: RepoMapRuntimeOptions) {
     if (!Number.isInteger(options.mapDebounceMs ?? 300) || (options.mapDebounceMs ?? 300) <= 0) {
@@ -563,6 +575,7 @@ export class RepoMapRuntime {
     this.#monotonicNow = options.monotonicNow ?? performance.now.bind(performance);
     this.#gitRunner = options.gitRunner ?? defaultGitRunner;
     this.#searchFactory = options.searchFactory ?? ((snapshot) => new RepoMapSearch(snapshot));
+    this.#snapshotBuilder = options.snapshotBuilder ?? buildRepoMap;
   }
 
   async start(): Promise<void> {
@@ -589,6 +602,12 @@ export class RepoMapRuntime {
     this.#freshness = "stale";
     this.#watcherUpdates.push({ event, path });
     this.#mutationEpoch += 1;
+    // Derive watcher-visible state from the last immutable checkpoint. Mutable
+    // rebuild fields may currently be between awaited reconciliation steps.
+    if (!this.#checkpoints.publishWatcherPath(path)) {
+      this.#checkpointPublicationFailed = true;
+      this.#error = CHECKPOINT_PUBLICATION_ERROR;
+    }
     if (this.#started) this.#scheduleFlush();
   }
 
@@ -601,7 +620,10 @@ export class RepoMapRuntime {
   }
 
   async flush(): Promise<void> {
-    const operation = this.#flushChain.then(() => this.#flush());
+    const operation = this.#flushChain.then(async () => {
+      await this.#flush();
+      this.#publishCheckpoint();
+    });
     this.#flushChain = operation.catch(() => undefined);
     await operation;
   }
@@ -648,7 +670,9 @@ export class RepoMapRuntime {
         if (this.#pending.size > 0 || previousFreshness !== this.#freshness || reconciled) {
           try {
             await this.#activate();
-            if (this.#readFailures.size === 0) this.#error = undefined;
+            if (this.#readFailures.size === 0 && !this.#baseBuildFailed && !this.#checkpointPublicationFailed) {
+              this.#error = undefined;
+            }
           } catch (error) {
             this.#degrade(error);
           }
@@ -676,11 +700,25 @@ export class RepoMapRuntime {
     }
   }
 
+  async capture(): Promise<RepositorySnapshotHandle> {
+    try {
+      await this.ensureFresh();
+    } catch {
+      throw new RepositorySnapshotUnavailableError("ensure-fresh-failed");
+    }
+    return this.captureCurrent();
+  }
+
+  captureCurrent(): RepositorySnapshotHandle {
+    return this.#checkpoints.captureCurrent();
+  }
+
   /** Rebuild the base snapshot and atomically activate it as a new generation. */
   async rebuild(): Promise<void> {
     const operation = this.#flushChain.then(async () => {
       await this.#rebuildBase();
       await this.#flush();
+      this.#publishCheckpoint();
     });
     this.#flushChain = operation.catch(() => undefined);
     await operation;
@@ -899,6 +937,31 @@ export class RepoMapRuntime {
     }
   }
 
+  #publishCheckpoint(): void {
+    if (!this.#effective) return;
+    if (this.#checkpointPublicationFailed) {
+      this.#checkpointPublicationFailed = false;
+      if (this.#error === CHECKPOINT_PUBLICATION_ERROR) this.#error = undefined;
+      this.#freshness = this.#computedFreshness();
+    }
+    const published = this.#checkpoints.publish({
+      snapshot: this.#effective,
+      gitHead: this.#head,
+      dirtyFiles: [...this.#dirty].map(([path, contentHash]) => ({ path, contentHash })),
+      workspaceRevision: revision(this.#head, this.#dirty),
+      freshness: this.#freshness,
+      pendingPaths: [...this.#pending],
+      ...(this.#error === undefined ? {} : { runtimeError: this.#error }),
+      generation: this.#generation,
+    });
+    if (!published) {
+      this.#checkpointPublicationFailed = true;
+      this.#freshness = "stale";
+      this.#error = CHECKPOINT_PUBLICATION_ERROR;
+      return;
+    }
+  }
+
   #mutateEffective(mutation: () => void): void {
     const before = searchableContent(this.#effective);
     mutation();
@@ -1023,6 +1086,7 @@ export class RepoMapRuntime {
     this.#base = cloneSnapshot(active.snapshot);
     this.#effective = cloneSnapshot(active.snapshot);
     this.#freshness = active.freshness;
+    this.#publishCheckpoint();
   }
 
   async #reconcileDirtyOverlay(): Promise<boolean> {
@@ -1069,21 +1133,45 @@ export class RepoMapRuntime {
   }
 
   #computedFreshness(): RepoMapFreshness {
-    if (this.#pending.size > 0 || this.#watcherUpdates.length > 0 || this.#readFailures.size > 0) return "stale";
+    if (
+      this.#baseBuildFailed ||
+      this.#checkpointPublicationFailed ||
+      this.#pending.size > 0 ||
+      this.#watcherUpdates.length > 0 ||
+      this.#readFailures.size > 0
+    ) {
+      return "stale";
+    }
     if (this.#effective?.files.some((file) => file.degradedReason)) return "unsupported";
     return this.#dirty.size > 0 ? "dirty" : "fresh";
   }
 
-  async #rebuildBase(): Promise<void> {
+  async #rebuildBase(): Promise<boolean> {
+    // Build into detached local state first. A builder failure must not replace
+    // hydrated or previously published content with an incomplete rebuild.
+    const previousBase = this.#base;
+    const previousEffective = this.#effective;
+    const previousHead = this.#head;
+    const previousDirty = new Map(this.#dirty);
+    const previousReadFailures = new Map(this.#readFailures);
+    const previousPending = new Set(this.#pending);
+    const previousFreshness = this.#freshness;
+    const previousContentVersion = this.#effectiveContentVersion;
+    let head: string;
+    let snapshot: RepoMapSnapshot;
+    try {
+      head = await gitHead(this.#projectRoot, this.#gitRunner, this.#telemetry, this.#monotonicNow);
+      snapshot = await this.#snapshotBuilder({ projectRoot: this.#projectRoot, exclude: this.#options.exclude });
+    } catch (error) {
+      this.#baseBuildFailed = true;
+      this.#degrade(error);
+      return false;
+    }
+
     try {
       // Full enumeration and admission are authoritative; no per-path outcome
       // from an older admission context may be overlaid onto the new base.
       this.#fileOutcomes.clear();
-      const previousBase = this.#base;
-      const previousEffective = this.#effective;
-      const previousDirty = new Map(this.#dirty);
-      const head = await gitHead(this.#projectRoot, this.#gitRunner, this.#telemetry, this.#monotonicNow);
-      const snapshot = await buildRepoMap({ projectRoot: this.#projectRoot, exclude: this.#options.exclude });
       const nextBase = cloneSnapshot(snapshot);
       const nextEffective = cloneSnapshot(snapshot);
       const nextDirty = new Map<string, string>();
@@ -1105,13 +1193,32 @@ export class RepoMapRuntime {
       this.#readFailures = nextReadFailures;
       this.#pending = nextPending;
       await this.#reconcileDirtyOverlay();
-      this.#freshness = this.#computedFreshness();
+    } catch (error) {
+      this.#base = previousBase;
+      this.#effective = previousEffective;
+      this.#head = previousHead;
+      this.#dirty = previousDirty;
+      this.#readFailures = previousReadFailures;
+      this.#pending = previousPending;
+      this.#freshness = previousFreshness;
+      this.#effectiveContentVersion = previousContentVersion;
+      this.#baseBuildFailed = true;
+      this.#degrade(error);
+      return false;
+    }
+
+    this.#baseBuildFailed = false;
+    this.#freshness = this.#computedFreshness();
+    try {
       await this.#activate();
       if (this.#readFailures.size === 0) this.#error = undefined;
       else this.#error = [...this.#readFailures.values()][0]?.message;
     } catch (error) {
+      // Activation failure retains coherent newer in-memory evidence while the
+      // durable generation honestly remains at its last successful value.
       this.#degrade(error);
     }
+    return true;
   }
 
   async #activate(): Promise<void> {

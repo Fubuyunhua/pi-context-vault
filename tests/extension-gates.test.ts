@@ -38,11 +38,23 @@ describe("component isolation gates", () => {
     const repoMapRuntimeFactory = vi.fn(() => {
       throw new Error("must not construct");
     });
-    const harness = await gatedHarness({ repoMapEnabled: false }, { repoMapRuntimeFactory });
+    const harness = await gatedHarness({ repoMapEnabled: false, reductionEnabled: false }, { repoMapRuntimeFactory });
     expect(harness.tools).not.toContain("context_vault_repo_map");
     await harness.handlers.get("session_start")?.({} as never, harness.ctx as never);
     await harness.handlers.get("before_agent_start")?.({} as never, harness.ctx as never);
-    await harness.handlers.get("context")?.({ messages: [] } as never, harness.ctx as never);
+    const inboundCapsule = {
+      role: "custom",
+      customType: "context-vault-repo-map",
+      content: "existing capsule",
+      display: false,
+      details: { persistent: false },
+      timestamp: 1,
+    };
+    const messages = [{ role: "user", content: "hello", timestamp: 0 }, inboundCapsule];
+    await expect(
+      harness.handlers.get("context")?.({ messages } as never, harness.ctx as never),
+    ).resolves.toBeUndefined();
+    expect(messages[1]).toBe(inboundCapsule);
     expect(repoMapRuntimeFactory).not.toHaveBeenCalled();
     expect(harness.tools).not.toContain("context_vault_repo_map");
     const projects = join(harness.root, "pi", "context-vault", "projects");

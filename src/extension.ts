@@ -17,7 +17,7 @@ import {
   ObservationRuntime,
 } from "./observations/virtualization.js";
 import { RepoMapRuntime, type RepoMapRuntimeOptions, type RepoMapRuntimeQuery } from "./repo-map/runtime.js";
-import { type ContextVaultConfig, loadConfig } from "./state/config.js";
+import { type ContextVaultConfig, DEFAULT_CONFIG, loadConfig, type MapInjectionMode } from "./state/config.js";
 import { type ProjectStatePaths, resolveProjectState } from "./state/project-state.js";
 import { Telemetry } from "./telemetry.js";
 
@@ -72,6 +72,10 @@ interface FrozenMapCapsule {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function effectiveMapInjectionMode(runtime: Pick<RuntimeState, "config">): MapInjectionMode {
+  return runtime.config?.mapInjectionMode ?? DEFAULT_CONFIG.mapInjectionMode;
 }
 
 function toolResponse(operation: () => Promise<unknown>) {
@@ -503,7 +507,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   pi.on("before_agent_start", async () => {
     runtime.turnSequence += 1;
     runtime.mapCapsule = undefined;
-    if (!runtime.repoMapAvailable) return;
+    if (effectiveMapInjectionMode(runtime) === "off" || !runtime.repoMapAvailable) return;
     try {
       await runtime.repoMap?.ensureFresh();
     } catch (error) {
@@ -531,14 +535,15 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   });
 
   pi.on("context", async (event, ctx) => {
-    const hasPreviousCapsule = event.messages.some(
-      (message) => message.role === "custom" && message.customType === MAP_CAPSULE_TYPE,
-    );
-    let messages = hasPreviousCapsule
-      ? event.messages.filter((message) => !(message.role === "custom" && message.customType === MAP_CAPSULE_TYPE))
-      : event.messages;
-    const injectionMode = runtime.config?.mapInjectionMode ?? "once-per-user-turn";
-    if (runtime.repoMapAvailable && runtime.repoMap && runtime.config && injectionMode !== "off") {
+    const injectionMode = effectiveMapInjectionMode(runtime);
+    let messages = event.messages;
+    if (injectionMode !== "off" && runtime.repoMapAvailable && runtime.repoMap && runtime.config) {
+      const hasPreviousCapsule = event.messages.some(
+        (message) => message.role === "custom" && message.customType === MAP_CAPSULE_TYPE,
+      );
+      messages = hasPreviousCapsule
+        ? event.messages.filter((message) => !(message.role === "custom" && message.customType === MAP_CAPSULE_TYPE))
+        : event.messages;
       try {
         const frozen = runtime.mapCapsule;
         if (injectionMode === "once-per-user-turn" && frozen?.turn === runtime.turnSequence) {

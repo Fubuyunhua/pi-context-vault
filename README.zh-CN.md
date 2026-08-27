@@ -113,7 +113,8 @@ release-candidate checkout 显示 `vault v0.2.0`。`doctor` 应报告 `healthy`�
 3. 更大且符合归档条件的结果仅在归档成功后替换为 JSON receipt。
 4. 估算上下文超过 `softContextRatio` 时，较旧的已归档工具结果在模型可见副本中变成 receipt；最新
    `hotObservationCount` 个结果继续保留完整内容。
-5. 在模型调用和显式 Map 查询前，Repo Map 会检查 pending 文件变更与 Git HEAD。
+5. 启用自动 Map 注入时，每个用户 turn 会在首次 capsule 前刷新 Repo Map；显式 Map 查询始终使用 live freshness
+   path。
 6. Agent 可以按需搜索/恢复归档证据，并查询小型、最新的 Repo Map 切片。
 
 通常只需要用自然语言要求 Agent 使用这些能力，例如：
@@ -123,6 +124,21 @@ release-candidate checkout 显示 `vault v0.2.0`。`doctor` 应报告 `healthy`�
 在已归档的 bash Observation 中搜索失败测试名，然后恢复匹配证据。
 调用 context_vault_status，并解释所有 degraded 组件。
 ```
+
+### Repo Map 自动注入（分阶段 S01a 行为）
+
+公开默认值仍是 `"once-per-user-turn"`：Context Vault 在 turn 开始时刷新，把一个 snapshot 插到最新 user
+message 后，并在同一 turn 的后续 LLM 调用中逐字节复用 frozen capsule。`"every-llm-call"` 保留旧的每次调用
+查询/渲染以及 index-0 插入行为。
+
+显式 `"off"` 是 tool-only 模式。context hook 不会因 Repo Map 查询、构建、插入、删除或移动 capsule，并会跳过
+自动 turn-start refresh。当 `repoMapEnabled` 为 true 且 Map 可用时，Map 构建、watcher、maintenance 与使用 live
+查询路径的 `context_vault_repo_map` tool 仍继续工作；Observation reduction 与之独立。若要关闭整个 Map 组件，
+请设置 `repoMapEnabled: false`。
+
+本阶段没有实现或宣称 repository Graph、Planner/Renderer、Projection Cache 或 provider prompt-cache 改进。未来
+只有在这些 repository-context 能力、显式 tool contract 与评估完成后才可能启用默认 off；当前 checkout 并未
+启用该变更。
 
 ### Observation receipt
 
@@ -247,6 +263,7 @@ Context Vault 注册一个 slash command 和四个子命令：
   "retentionDays": 30,
   "mapContextMaxBytes": 6144,
   "mapDebounceMs": 300,
+  "mapInjectionMode": "once-per-user-turn",
   "mapExcludePatterns": ["generated/**", "vendor/**"]
 }
 ```
@@ -266,6 +283,7 @@ Context Vault 注册一个 slash command 和四个子命令：
 | `retentionDays` | `30` | 正整数；`/context-vault gc` 应用的保留时间。 |
 | `mapContextMaxBytes` | `6144` | 至少 512 的整数；注入 Map capsule 的硬字节上限。 |
 | `mapDebounceMs` | `300` | 正整数；pending Map batch 开始 reconciliation 前的延时。 |
+| `mapInjectionMode` | `"once-per-user-turn"` | `once-per-user-turn`、`every-llm-call` 或 `off`；`off` 只关闭自动注入及其 turn-start refresh。 |
 | `mapExcludePatterns` | `[]` | 非空项目相对 glob pattern 数组。 |
 
 `.git`、`.pi`、`.gradle`、`node_modules`、`dist`、`build` 和 `target` path segment 始终从 Map 中排除。配置在

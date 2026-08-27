@@ -121,7 +121,8 @@ Context Vault is automatic after startup:
 3. A larger eligible result is replaced with a JSON receipt only after archival succeeds.
 4. When estimated context usage crosses `softContextRatio`, older archived tool results become receipts in the
    model-visible copy; the newest `hotObservationCount` results remain hot.
-5. Before model calls and explicit map queries, the Repo Map checks pending filesystem changes and Git HEAD.
+5. With automatic map injection enabled, each user turn refreshes the Repo Map before its first capsule; explicit map
+   queries always use the live freshness path.
 6. The agent can search or retrieve archived evidence and query a small, current map slice on demand.
 
 You normally ask the agent in plain language. Examples:
@@ -131,6 +132,21 @@ Use context_vault_repo_map to find the authentication entry points and their exp
 Search archived bash observations for the failing test name, then retrieve the matching evidence.
 Call context_vault_status and explain any degraded component.
 ```
+
+### Automatic Repo Map injection (staged S01a behavior)
+
+The public default remains `"once-per-user-turn"`: Context Vault refreshes at turn start, inserts one snapshot after the
+latest user message, and reuses that frozen capsule byte-for-byte during later LLM calls in the same turn.
+`"every-llm-call"` preserves the legacy per-call query/render and index-0 placement.
+
+Explicit `"off"` is tool-only mode. It does not query, build, insert, remove, or move Repo Map capsules in the context
+hook, and it skips the automatic turn-start refresh. When `repoMapEnabled` is true and the map is available, map build,
+watching, maintenance, and the live `context_vault_repo_map` tool continue to work. Observation reduction remains
+independent. Set `repoMapEnabled` to `false` to disable the whole map component.
+
+This stage does not implement or claim a repository Graph, Planner/Renderer, Projection Cache, or provider prompt-cache
+improvement. A future default-off activation is gated on those repository-context pieces, an explicit tool contract,
+and evaluation; it is not active in this checkout.
 
 ### Observation receipts
 
@@ -260,6 +276,7 @@ types, and out-of-range values cause explicit degraded initialization instead of
   "retentionDays": 30,
   "mapContextMaxBytes": 6144,
   "mapDebounceMs": 300,
+  "mapInjectionMode": "once-per-user-turn",
   "mapExcludePatterns": ["generated/**", "vendor/**"]
 }
 ```
@@ -279,6 +296,7 @@ types, and out-of-range values cause explicit degraded initialization instead of
 | `retentionDays` | `30` | Positive integer; retention applied by `/context-vault gc`. |
 | `mapContextMaxBytes` | `6144` | Integer at least 512; hard byte bound for the injected map capsule. |
 | `mapDebounceMs` | `300` | Positive integer; delay before a pending map batch is reconciled. |
+| `mapInjectionMode` | `"once-per-user-turn"` | `once-per-user-turn`, `every-llm-call`, or `off`; `off` disables only automatic injection and its turn-start refresh. |
 | `mapExcludePatterns` | `[]` | Array of non-empty project-relative glob patterns. |
 
 `.git`, `.pi`, `.gradle`, `node_modules`, `dist`, `build`, and `target` path segments are always excluded from the map.

@@ -177,7 +177,7 @@ describe("extension observation adapter", () => {
   });
 
   it("reduces archived old results through the context hook without persisting a capsule", async () => {
-    const { handlers, ctx } = await harness();
+    const { handlers, ctx } = await harness({}, { mapInjectionMode: "once-per-user-turn" });
     const narrowContext = { ...ctx, model: { contextWindow: 35_000 } };
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, narrowContext);
     const messages: Array<Record<string, unknown>> = [
@@ -263,7 +263,10 @@ describe("extension observation adapter", () => {
         error: "index activation failed",
       })),
     };
-    const { handlers, ctx, pi } = await harness({ repoMapRuntimeFactory: () => runtime });
+    const { handlers, ctx, pi } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn" },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
     const canonical = [{ role: "user", content: "fix auth", timestamp: 10 }];
     const transformed = (await handlers.get("context")?.({ type: "context", messages: canonical }, ctx)) as {
@@ -345,7 +348,10 @@ describe("extension observation adapter", () => {
         error: "failure ".repeat(2_000),
       })),
     };
-    const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime }, { mapContextMaxBytes: 512 });
+    const { handlers, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn", mapContextMaxBytes: 512 },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
     const transformed = (await handlers.get("context")?.(
@@ -382,6 +388,47 @@ describe("extension observation adapter", () => {
     );
   });
 
+  it("keeps the public default at once per user turn", async () => {
+    const query = vi.fn(async () => ({
+      results: [],
+      freshness: "fresh" as const,
+      generation: 1,
+      gitHead: "head",
+      workspaceRevision: "revision",
+      pendingFiles: [],
+      fallbackEvidence: [],
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({
+        freshness: "fresh" as const,
+        generation: 1,
+        gitHead: "head",
+        workspaceRevision: "revision",
+        pendingFiles: [],
+        dirtyFiles: [],
+      })),
+      query,
+    };
+    const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+
+    const messages = [{ role: "user", content: "default cadence", timestamp: 1 }];
+    const first = (await handlers.get("context")?.({ type: "context", messages }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+    const second = (await handlers.get("context")?.({ type: "context", messages: first.messages }, ctx)) as {
+      messages: Array<Record<string, unknown>>;
+    };
+
+    expect(first.messages[1]).toMatchObject({ customType: "context-vault-repo-map" });
+    expect(second.messages[1]).toEqual(first.messages[1]);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
   it("labels the first capture, freezes its bytes after same-turn mutation, and rebuilds next turn", async () => {
     let liveState: {
       freshness: "fresh" | "dirty";
@@ -405,7 +452,10 @@ describe("extension observation adapter", () => {
       status: vi.fn(() => ({ ...liveState, dirtyFiles: liveState.pendingFiles })),
       query,
     };
-    const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    const { handlers, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn" },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
     const turnStart = [{ role: "user", content: "fix auth", timestamp: 10 }];
@@ -512,7 +562,10 @@ describe("extension observation adapter", () => {
       query,
       queryCurrent,
     };
-    const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    const { handlers, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn" },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
     await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
@@ -545,7 +598,10 @@ describe("extension observation adapter", () => {
       query: vi.fn(async () => liveResult),
       queryCurrent: vi.fn(async () => liveResult),
     };
-    const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    const { handlers, tools, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn" },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
     await handlers.get("context")?.(
       { type: "context", messages: [{ role: "user", content: "capture", timestamp: 1 }] },
@@ -597,7 +653,10 @@ describe("extension observation adapter", () => {
       })),
       query,
     };
-    const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    const { handlers, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn" },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
     // Turn 1 builds and freezes.
@@ -641,7 +700,7 @@ describe("extension observation adapter", () => {
       query: vi.fn(async () => capture),
       queryCurrent,
     };
-    const { handlers, ctx } = await harness(
+    const { handlers, tools, ctx } = await harness(
       { repoMapRuntimeFactory: () => runtime },
       { mapInjectionMode: "every-llm-call", mapContextMaxBytes: 1024 },
     );
@@ -691,7 +750,7 @@ describe("extension observation adapter", () => {
       fallbackEvidence: [{ kind: "source", path: "src/auth.ts", excerpt: "captured evidence" }],
     };
     const grown = [
-      ...messages,
+      ...first.messages,
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "c", name: "read", arguments: {} }],
@@ -735,11 +794,21 @@ describe("extension observation adapter", () => {
     });
     expect(secondCapsule.details).not.toHaveProperty("freshness");
     expect(secondCapsule.details).not.toHaveProperty("workspaceRevision");
+    expect(second.messages.filter((message) => message.customType === "context-vault-repo-map")).toHaveLength(1);
+    expect(second.messages[0]).toBe(secondCapsule);
+    expect(second.messages).not.toContain(firstCapsule);
+    expect(secondCapsule).not.toBe(firstCapsule);
+    expect(secondCapsule.content).not.toBe(firstCapsule.content);
     expect(queryCurrent).toHaveBeenCalledTimes(2);
     expect(runtime.query).not.toHaveBeenCalled();
+    const status = (await tools.get("context_vault_status")?.execute("every-status", {})) as ToolResult;
+    expect(JSON.parse(status.content[0].text).telemetry).toMatchObject({
+      repoMapAutomaticQueryCount: 2,
+      capsuleBuildCount: 2,
+    });
   });
 
-  it("injects no automatic capsule in off mode", async () => {
+  it("keeps explicit off Repo Map-transparent and skips turn-start refresh", async () => {
     const query = vi.fn(async () => ({
       results: [],
       freshness: "fresh" as const,
@@ -764,13 +833,107 @@ describe("extension observation adapter", () => {
       })),
       query,
     };
-    const { handlers, ctx } = await harness({ repoMapRuntimeFactory: () => runtime }, { mapInjectionMode: "off" });
+    const { handlers, tools, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "off", reductionEnabled: false },
+    );
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
+
+    const inboundCapsule = {
+      role: "custom",
+      customType: "context-vault-repo-map",
+      content: "existing capsule",
+      display: false,
+      details: { persistent: false },
+      timestamp: 10,
+    };
+    const messages = [
+      { role: "user", content: "fix auth", timestamp: 10 },
+      inboundCapsule,
+      { role: "assistant", content: [{ type: "text", text: "continuation" }], timestamp: 11 },
+    ];
+    const result = await handlers.get("context")?.({ type: "context", messages }, ctx);
+
+    expect(result).toBeUndefined();
+    expect(messages[1]).toBe(inboundCapsule);
+    expect(runtime.ensureFresh).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    const status = (await tools.get("context_vault_status")?.execute("off-status", {})) as ToolResult;
+    expect(JSON.parse(status.content[0].text).telemetry).toMatchObject({
+      repoMapAutomaticQueryCount: 0,
+      capsuleBuildCount: 0,
+    });
+  });
+
+  it("keeps observation reduction independent when automatic map injection is off", async () => {
+    const reductionFactory = vi.fn(async (options: { messages: unknown[] }) => ({
+      messages: options.messages.slice(0, 1),
+      triggered: true,
+      targetReached: true,
+      reducedCount: 1,
+      estimatedTokensBefore: 100,
+      estimatedTokensAfter: 10,
+    }));
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({ freshness: "fresh" as const })),
+      query: vi.fn(),
+    };
+    const { handlers, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime as never, reductionFactory: reductionFactory as never },
+      { mapInjectionMode: "off" },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
-    const messages = [{ role: "user", content: "fix auth", timestamp: 10 }];
-    const result = await handlers.get("context")?.({ type: "context", messages }, ctx);
-    expect(result).toBeUndefined();
-    expect(query).not.toHaveBeenCalled();
+    const messages = [
+      { role: "user", content: "keep", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "reduce" }], timestamp: 2 },
+    ];
+    const result = (await handlers.get("context")?.({ type: "context", messages }, ctx)) as {
+      messages: unknown[];
+    };
+
+    expect(reductionFactory).toHaveBeenCalledOnce();
+    expect(result.messages).toEqual([messages[0]]);
+    expect(runtime.query).not.toHaveBeenCalled();
+  });
+
+  it("keeps the explicit repository-map tool live when automatic injection is off", async () => {
+    const live = {
+      results: [],
+      freshness: "dirty" as const,
+      generation: 2,
+      gitHead: "head",
+      workspaceRevision: "revision",
+      pendingFiles: ["src/edited.ts"],
+      fallbackEvidence: [],
+    };
+    const runtime = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      ensureFresh: vi.fn(async () => undefined),
+      rebuild: vi.fn(async () => undefined),
+      status: vi.fn(() => ({ ...live, dirtyFiles: live.pendingFiles })),
+      query: vi.fn(async () => live),
+    };
+    const { handlers, tools, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "off" },
+    );
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    await handlers.get("before_agent_start")?.({ type: "before_agent_start" }, ctx);
+    const result = (await tools
+      .get("context_vault_repo_map")
+      ?.execute("map-off", { query: "edited", limit: 4 })) as ToolResult;
+
+    expect(runtime.start).toHaveBeenCalledOnce();
+    expect(runtime.ensureFresh).not.toHaveBeenCalled();
+    expect(runtime.query).toHaveBeenCalledWith("edited", { limit: 4 });
+    expect(JSON.parse(result.content[0].text)).toEqual(live);
   });
 
   it("does not resurrect a frozen capsule after the map becomes unavailable", async () => {
@@ -816,12 +979,15 @@ describe("extension observation adapter", () => {
       query: vi.fn(),
     };
     let factoryCalls = 0;
-    const { handlers, ctx } = await harness({
-      repoMapRuntimeFactory: () => {
-        factoryCalls += 1;
-        return factoryCalls === 1 ? runtime : failing;
+    const { handlers, ctx } = await harness(
+      {
+        repoMapRuntimeFactory: () => {
+          factoryCalls += 1;
+          return factoryCalls === 1 ? runtime : failing;
+        },
       },
-    });
+      { mapInjectionMode: "once-per-user-turn", reductionEnabled: false },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
     const messages = [{ role: "user", content: "fix auth", timestamp: 10 }];
@@ -832,8 +998,10 @@ describe("extension observation adapter", () => {
 
     await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx);
     await handlers.get("session_start")?.({ type: "session_start", reason: "new" }, ctx);
-    const second = await handlers.get("context")?.({ type: "context", messages }, ctx);
+    const second = await handlers.get("context")?.({ type: "context", messages: first.messages }, ctx);
     expect(second).toBeUndefined();
+    expect(first.messages[1]).toMatchObject({ customType: "context-vault-repo-map" });
+    expect(failing.query).not.toHaveBeenCalled();
   });
 
   it("initializes and disposes the map watcher idempotently across session lifecycle events", async () => {
@@ -1221,7 +1389,7 @@ describe("extension observation adapter", () => {
         dirtyFiles: [],
         ...(stale ? { error: "atomic activation failed" } : {}),
       }),
-      query: async () => ({
+      query: vi.fn(async () => ({
         results: [],
         freshness: "fresh" as const,
         generation: 3,
@@ -1229,9 +1397,12 @@ describe("extension observation adapter", () => {
         workspaceRevision: "revision-rebuild",
         pendingFiles: [],
         fallbackEvidence: [],
-      }),
+      })),
     };
-    const { handlers, tools, commands, ctx, notify } = await harness({ repoMapRuntimeFactory: () => runtime });
+    const { handlers, tools, commands, ctx, notify } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn", reductionEnabled: false },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
     await commands.get("context-vault")?.handler("rebuild", ctx);
@@ -1242,6 +1413,22 @@ describe("extension observation adapter", () => {
       components: { repoMap: { available: false, freshness: "stale", error: "atomic activation failed" } },
     });
     expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("rebuild failed"), "error");
+
+    const inboundCapsule = {
+      role: "custom",
+      customType: "context-vault-repo-map",
+      content: "capsule before unavailable rebuild",
+      display: false,
+      details: { persistent: false },
+      timestamp: 2,
+    };
+    const userMessage = { role: "user", content: "inspect", timestamp: 1 };
+    const messages = [userMessage, inboundCapsule];
+    await expect(handlers.get("context")?.({ type: "context", messages }, ctx)).resolves.toBeUndefined();
+    expect(runtime.query).not.toHaveBeenCalled();
+    expect(messages).toEqual([userMessage, inboundCapsule]);
+    expect(messages[0]).toBe(userMessage);
+    expect(messages[1]).toBe(inboundCapsule);
   });
 
   it("clears a frozen capsule across failed and successful rebuild boundaries in one turn", async () => {
@@ -1275,7 +1462,10 @@ describe("extension observation adapter", () => {
       })),
       query,
     };
-    const { handlers, commands, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    const { handlers, commands, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn" },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
     const first = (await handlers.get("context")?.(
       { type: "context", messages: [{ role: "user", content: "inspect", timestamp: 1 }] },
@@ -1331,7 +1521,10 @@ describe("extension observation adapter", () => {
           fallbackEvidence: [],
         }),
     };
-    const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    const { handlers, tools, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn" },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
     const failedQueryCapsule = (await handlers.get("context")?.(
@@ -1395,7 +1588,10 @@ describe("extension observation adapter", () => {
       })),
       query,
     };
-    const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    const { handlers, tools, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn" },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
     const turnStart = [{ role: "user", content: "fix auth", timestamp: 10 }];
@@ -1460,7 +1656,10 @@ describe("extension observation adapter", () => {
       })),
       query,
     };
-    const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    const { handlers, tools, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn" },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
     await handlers.get("context")?.(
@@ -1553,7 +1752,10 @@ describe("extension observation adapter", () => {
       })),
       query,
     };
-    const { handlers, tools, ctx } = await harness({ repoMapRuntimeFactory: () => runtime });
+    const { handlers, tools, ctx } = await harness(
+      { repoMapRuntimeFactory: () => runtime },
+      { mapInjectionMode: "once-per-user-turn" },
+    );
     await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
 
     await handlers.get("context")?.(
