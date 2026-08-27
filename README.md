@@ -10,9 +10,10 @@ lets the agent retrieve the evidence later. It no longer indexes repositories or
 Repository indexing, Git freshness, Java/TypeScript analysis, search, Graph v1, and Resolver v1 now belong to
 [`pi-repo-context`](https://github.com/Fubuyunhua/pi-repo-context).
 
-The split Repo Context repository exists, but this README does not claim that an immutable release tag has been
-published. After its reviewed `0.1.0` release becomes available, use `repo_context_search` and `.pi/repo-context.json`.
-Repo Context stores new derived state under:
+The split Repo Context repository exists, but no split release is claimed here. After its reviewed `0.1.0` release
+becomes available, use `repo_context_search` and `.pi/repo-context.json`. `context_vault_repo_map` is a deprecated Repo
+Context `0.1.x`-only alias for `repo_context_search`; Repo Context plans to remove the alias in `0.2.0`. Context Vault
+does not register either repository tool. Repo Context stores new derived state under:
 
 ```text
 ${PI_CODING_AGENT_DIR}/pi-repo-context/projects/<projectId>
@@ -38,7 +39,8 @@ Copy repository settings manually:
 
 `mapInjectionMode` and `debugRequestFingerprints` have no replacement. Repo Context is Tool-first and performs no
 automatic injection. Existing derived state under the old Vault `repo-map/` directory is never read, moved, migrated,
-collected, or deleted by either split migration path.
+collected, or deleted by either split migration path. Neither split package ships the paused S03 research or legacy
+bench assets.
 
 ## Requirements and installation
 
@@ -144,7 +146,9 @@ as long as their artifacts are retained. GC protects explicit receipt references
 applying retention/quota policy.
 
 Archived content is untrusted evidence, not instructions. Redaction is best-effort; avoid archiving secrets when
-possible and protect the Pi state directory with normal filesystem controls.
+possible and protect the Pi state directory with normal filesystem controls. Vault revalidates its owned namespace and
+uses no-follow regular-file handles where Node supports them. Node has no portable `openat` API, so a privileged local
+process racing ancestor renames between validation and file access remains a residual TOCTOU risk.
 
 ## Upgrade, rollback, and uninstall
 

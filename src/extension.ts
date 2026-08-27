@@ -305,7 +305,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   };
 
   pi.registerCommand("context-vault", {
-    description: "Context Vault status|status-json|gc|doctor",
+    description: "Context Vault status|status-json|rebuild|gc|doctor",
     getArgumentCompletions: (prefix) =>
       ["status", "status-json", "rebuild", "gc", "doctor"]
         .filter((command) => command.startsWith(prefix.trim()))

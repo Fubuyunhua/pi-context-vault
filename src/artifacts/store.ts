@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { BigIntStats, Dirent } from "node:fs";
-import { type FileHandle, lstat, mkdir, open, readdir, readFile, stat, unlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { atomicWriteFile, syncParentDirectory, withFileLock } from "../state/atomic.js";
+import { type BigIntStats, constants, type Dirent } from "node:fs";
+import { type FileHandle, lstat, mkdir, open, readdir, realpath, unlink } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+import { atomicWriteFile, durableMkdir, syncParentDirectory, withFileLock } from "../state/atomic.js";
 import type { Telemetry } from "../telemetry.js";
 import { redactSecrets } from "./redaction.js";
 
@@ -112,6 +112,13 @@ export interface GarbageCollectResult {
   bytesFreed: number;
   remainingBytes: number;
   quotaSatisfied: boolean;
+}
+
+interface OwnedDirectoryIdentity {
+  path: string;
+  canonicalPath: string;
+  dev: bigint;
+  ino: bigint;
 }
 
 interface MetadataIndex {
@@ -355,6 +362,17 @@ function defaultProcessAlive(pid: number): boolean {
   }
 }
 
+function errorCode(error: unknown): string {
+  return (error as NodeJS.ErrnoException).code ?? "";
+}
+
+function noFollowFlags(flags: number): number {
+  if (process.platform === "win32") return flags;
+  let result = flags | constants.O_NONBLOCK;
+  if (typeof constants.O_NOFOLLOW === "number") result |= constants.O_NOFOLLOW;
+  return result;
+}
+
 export class ArtifactStore {
   readonly #artifactsRoot: string;
   readonly #metadataPath: string;
@@ -367,14 +385,17 @@ export class ArtifactStore {
   readonly #compactionObsoleteRecords: number;
   readonly #compactionObsoleteRatio: number;
   readonly #faultHook?: (point: ArtifactStoreFaultPoint) => void | Promise<void>;
+  #ownedDirectories?: OwnedDirectoryIdentity[];
+  #namespaceInitialization?: Promise<void>;
   #index = emptyIndex();
   #indexMutex = Promise.resolve();
 
   constructor(options: ArtifactStoreOptions) {
-    this.#artifactsRoot = options.artifactsRoot;
-    this.#metadataPath = join(options.metadataRoot, METADATA_FILE);
-    this.#activeSessionsPath = join(options.metadataRoot, ACTIVE_SESSIONS_FILE);
-    this.#lockPath = join(options.metadataRoot, LOCK_FILE);
+    this.#artifactsRoot = resolve(options.artifactsRoot);
+    const metadataRoot = resolve(options.metadataRoot);
+    this.#metadataPath = join(metadataRoot, METADATA_FILE);
+    this.#activeSessionsPath = join(metadataRoot, ACTIVE_SESSIONS_FILE);
+    this.#lockPath = join(metadataRoot, LOCK_FILE);
     this.#now = options.now ?? (() => new Date());
     this.#telemetry = options.telemetry;
     this.#isProcessAlive = options.isProcessAlive ?? defaultProcessAlive;
@@ -391,6 +412,192 @@ export class ArtifactStore {
     return join(this.#artifactsRoot, artifactId.slice(0, 2), `${artifactId}.txt`);
   }
 
+  #ownedDirectoryPaths(): string[] {
+    const metadataRoot = dirname(this.#metadataPath);
+    const stateRoot = dirname(this.#artifactsRoot);
+    if (dirname(metadataRoot) !== stateRoot || basename(this.#artifactsRoot) !== "artifacts") {
+      throw new Error("Artifact and metadata roots must be sibling Vault state directories");
+    }
+    if (basename(metadataRoot) !== "metadata") {
+      throw new Error("Artifact and metadata roots must be sibling Vault state directories");
+    }
+
+    const ancestors = [stateRoot];
+    let cursor = stateRoot;
+    while (basename(cursor) !== "context-vault") {
+      const parent = dirname(cursor);
+      if (parent === cursor) break;
+      cursor = parent;
+    }
+    if (basename(cursor) === "context-vault") {
+      ancestors.length = 0;
+      let child = stateRoot;
+      while (true) {
+        ancestors.unshift(child);
+        if (child === cursor) break;
+        child = dirname(child);
+      }
+    }
+    return [...ancestors, this.#artifactsRoot, metadataRoot];
+  }
+
+  async #captureOwnedDirectory(path: string, parent?: OwnedDirectoryIdentity): Promise<OwnedDirectoryIdentity> {
+    const info = await lstat(path, { bigint: true });
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Unsafe Context Vault state directory: ${path}`);
+    const canonicalPath = await realpath(path);
+    if (parent !== undefined && canonicalPath !== join(parent.canonicalPath, basename(path))) {
+      throw new Error(`Context Vault state directory escapes its root: ${path}`);
+    }
+    return { path, canonicalPath, dev: info.dev, ino: info.ino };
+  }
+
+  async #initializeNamespace(): Promise<void> {
+    const paths = this.#ownedDirectoryPaths();
+    const stateRoot = dirname(this.#artifactsRoot);
+    const identities = new Map<string, OwnedDirectoryIdentity>();
+    for (const path of paths) {
+      if (path === this.#artifactsRoot || path === dirname(this.#metadataPath)) {
+        await durableMkdir(path);
+      }
+      const parent = identities.get(dirname(path));
+      const identity = await this.#captureOwnedDirectory(path, parent);
+      identities.set(path, identity);
+    }
+    if (!identities.has(stateRoot)) throw new Error(`Unsafe Context Vault state directory: ${stateRoot}`);
+    this.#ownedDirectories = paths.map((path) => identities.get(path) as OwnedDirectoryIdentity);
+  }
+
+  async #validateNamespace(): Promise<void> {
+    if (this.#ownedDirectories === undefined) {
+      this.#namespaceInitialization ??= this.#initializeNamespace();
+      await this.#namespaceInitialization;
+    }
+    const expectedDirectories = this.#ownedDirectories as OwnedDirectoryIdentity[];
+    for (const expected of expectedDirectories) {
+      let info: BigIntStats;
+      try {
+        info = await lstat(expected.path, { bigint: true });
+      } catch {
+        throw new Error(`Unsafe or replaced Context Vault state directory: ${expected.path}`);
+      }
+      if (!info.isDirectory() || info.isSymbolicLink() || info.dev !== expected.dev || info.ino !== expected.ino) {
+        throw new Error(`Unsafe or replaced Context Vault state directory: ${expected.path}`);
+      }
+    }
+  }
+
+  async #openRegularFile(
+    path: string,
+    flags: number,
+    mode?: number,
+    validateNamespace = true,
+  ): Promise<{ handle: FileHandle; existed: boolean }> {
+    if (validateNamespace) await this.#validateNamespace();
+    let before: BigIntStats | undefined;
+    try {
+      before = await lstat(path, { bigint: true });
+      if (!before.isFile() || before.isSymbolicLink()) throw new Error(`Unsafe Context Vault state file: ${path}`);
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") throw error;
+    }
+
+    const handle = await open(path, noFollowFlags(flags), mode);
+    try {
+      const opened = await handle.stat({ bigint: true });
+      if (!opened.isFile() || (before !== undefined && (opened.dev !== before.dev || opened.ino !== before.ino))) {
+        throw new Error(`Unsafe or replaced Context Vault state file: ${path}`);
+      }
+      return { handle, existed: before !== undefined };
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+  }
+
+  async #readRegularFile(
+    path: string,
+    missing: "throw" | "undefined" = "throw",
+    validateNamespace = true,
+  ): Promise<string | undefined> {
+    let opened: { handle: FileHandle; existed: boolean };
+    try {
+      opened = await this.#openRegularFile(path, constants.O_RDONLY, undefined, validateNamespace);
+    } catch (error) {
+      if (missing === "undefined" && errorCode(error) === "ENOENT") return undefined;
+      throw error;
+    }
+    try {
+      return await opened.handle.readFile({ encoding: "utf8" });
+    } finally {
+      await opened.handle.close();
+    }
+  }
+
+  async #atomicWriteFixedFile(path: string, content: string | Uint8Array): Promise<void> {
+    await this.#validateNamespace();
+    try {
+      const before = await lstat(path);
+      if (!before.isFile() || before.isSymbolicLink()) throw new Error(`Unsafe Context Vault state file: ${path}`);
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") throw error;
+    }
+    await atomicWriteFile(path, content);
+    const opened = await this.#openRegularFile(path, constants.O_RDONLY);
+    await opened.handle.close();
+  }
+
+  async #validateArtifactShard(artifactId: string, create: boolean): Promise<string> {
+    await this.#validateNamespace();
+    const shardPath = join(this.#artifactsRoot, artifactId.slice(0, 2));
+    try {
+      const info = await lstat(shardPath);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Unsafe artifact shard: ${shardPath}`);
+    } catch (error) {
+      if (!create || errorCode(error) !== "ENOENT") throw error;
+      await mkdir(shardPath, { mode: 0o700 });
+      await syncParentDirectory(shardPath);
+      const info = await lstat(shardPath);
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Unsafe artifact shard: ${shardPath}`);
+    }
+    const artifactsIdentity = (this.#ownedDirectories as OwnedDirectoryIdentity[]).find(
+      (entry) => entry.path === this.#artifactsRoot,
+    );
+    if (
+      artifactsIdentity === undefined ||
+      (await realpath(shardPath)) !== join(artifactsIdentity.canonicalPath, artifactId.slice(0, 2))
+    ) {
+      throw new Error(`Artifact shard escapes its root: ${shardPath}`);
+    }
+    return shardPath;
+  }
+
+  async #readArtifactVerified(artifactId: string): Promise<string> {
+    assertArtifactId(artifactId);
+    await this.#validateArtifactShard(artifactId, false);
+    const source = await this.#readRegularFile(this.artifactPath(artifactId), "throw", false);
+    const hash = createHash("sha256")
+      .update(source as string, "utf8")
+      .digest("hex");
+    if (hash !== artifactId) throw new Error(`Artifact content hash mismatch: ${artifactId}`);
+    return source as string;
+  }
+
+  async #withStoreLock<T>(operation: () => Promise<T>): Promise<T> {
+    await this.#validateNamespace();
+    try {
+      const lock = await lstat(this.#lockPath);
+      if (!lock.isDirectory() || lock.isSymbolicLink()) {
+        throw new Error(`Unsafe Context Vault state lock: ${this.#lockPath}`);
+      }
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") throw error;
+    }
+    return withFileLock(this.#lockPath, async () => {
+      await this.#validateNamespace();
+      return operation();
+    });
+  }
+
   async registerActiveSession(sessionId: string): Promise<ActiveSessionLease> {
     if (sessionId.length === 0) throw new Error("sessionId must not be empty");
     const lease: ActiveSessionLeaseRecord = {
@@ -399,11 +606,11 @@ export class ArtifactStore {
       pid: process.pid,
       registeredAt: this.#now().toISOString(),
     };
-    await withFileLock(this.#lockPath, async () => {
+    await this.#withStoreLock(async () => {
       const registry = await this.#readActiveSessionsUnlocked();
       const leases = registry.leases.filter((candidate) => this.#isProcessAlive(candidate.pid));
       leases.push(lease);
-      await atomicWriteFile(
+      await this.#atomicWriteFixedFile(
         this.#activeSessionsPath,
         JSON.stringify({ schemaVersion: 1, leases } satisfies ActiveSessionRegistry),
       );
@@ -412,13 +619,13 @@ export class ArtifactStore {
   }
 
   async releaseActiveSession(lease: ActiveSessionLease): Promise<void> {
-    await withFileLock(this.#lockPath, async () => {
+    await this.#withStoreLock(async () => {
       const registry = await this.#readActiveSessionsUnlocked();
       const leases = registry.leases.filter(
         (candidate) => candidate.ownerId !== lease.ownerId || candidate.sessionId !== lease.sessionId,
       );
       if (leases.length !== registry.leases.length) {
-        await atomicWriteFile(
+        await this.#atomicWriteFixedFile(
           this.#activeSessionsPath,
           JSON.stringify({ schemaVersion: 1, leases } satisfies ActiveSessionRegistry),
         );
@@ -453,15 +660,17 @@ export class ArtifactStore {
     // Reject an unpublishable record before the artifact or metadata index can change.
     encodeValidatedRecord(record);
 
-    return withFileLock(this.#lockPath, async () => {
+    return this.#withStoreLock(async () => {
       const artifactPath = this.artifactPath(contentHash);
+      await this.#validateArtifactShard(contentHash, true);
       let deduplicated = false;
       try {
-        await stat(artifactPath);
+        await this.#readArtifactVerified(contentHash);
         deduplicated = true;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        await atomicWriteFile(artifactPath, sanitized.content);
+        if (errorCode(error) !== "ENOENT") throw error;
+        await this.#atomicWriteFixedFile(artifactPath, sanitized.content);
+        await this.#readArtifactVerified(contentHash);
       }
       await this.#faultHook?.("after-artifact-publication");
       await this.#withIndexMutex(async () => {
@@ -478,10 +687,12 @@ export class ArtifactStore {
   }
 
   async read(artifactId: string): Promise<string> {
-    return readFile(this.artifactPath(artifactId), "utf8");
+    await this.#validateNamespace();
+    return this.#readArtifactVerified(artifactId);
   }
 
   async listMetadata(): Promise<ArtifactMetadata[]> {
+    await this.#validateNamespace();
     return this.#withIndexMutex(async () => {
       await this.#synchronizePathUnlocked();
       return [...this.#index.live.values()];
@@ -489,6 +700,7 @@ export class ArtifactStore {
   }
 
   async getMetadata(observationId: string): Promise<ArtifactMetadata | undefined> {
+    await this.#validateNamespace();
     return this.#withIndexMutex(async () => {
       await this.#synchronizePathUnlocked();
       return this.#index.live.get(observationId);
@@ -496,6 +708,7 @@ export class ArtifactStore {
   }
 
   async getMetadataByToolCallId(sessionId: string, toolCallId: string): Promise<ArtifactMetadata | undefined> {
+    await this.#validateNamespace();
     return this.#withIndexMutex(async () => {
       await this.#synchronizePathUnlocked();
       const values = this.#index.byToolCall.get(toolCallKey(sessionId, toolCallId));
@@ -513,12 +726,12 @@ export class ArtifactStore {
       throw new Error("quotaBytes must not be negative");
     const referenced = options.referencedArtifactIds ?? new Set<string>();
 
-    return withFileLock(this.#lockPath, async () =>
+    return this.#withStoreLock(async () =>
       this.#withIndexMutex(async () => {
         const registry = await this.#readActiveSessionsUnlocked();
         const leases = registry.leases.filter((lease) => this.#isProcessAlive(lease.pid));
         if (leases.length !== registry.leases.length) {
-          await atomicWriteFile(
+          await this.#atomicWriteFixedFile(
             this.#activeSessionsPath,
             JSON.stringify({ schemaVersion: 1, leases } satisfies ActiveSessionRegistry),
           );
@@ -580,9 +793,14 @@ export class ArtifactStore {
         let bytesFreed = 0;
         for (const artifactId of selected) {
           try {
-            await unlink(this.artifactPath(artifactId));
+            await this.#validateArtifactShard(artifactId, false);
+            const artifactPath = this.artifactPath(artifactId);
+            const info = await lstat(artifactPath);
+            if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Unsafe artifact entry: ${artifactPath}`);
+            await this.#validateNamespace();
+            await unlink(artifactPath);
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            if (errorCode(error) !== "ENOENT") {
               this.#telemetry?.recordArtifactGcFailure();
               throw error;
             }
@@ -621,12 +839,8 @@ export class ArtifactStore {
   }
 
   async #readActiveSessionsUnlocked(): Promise<ActiveSessionRegistry> {
-    try {
-      return parseActiveSessions(await readFile(this.#activeSessionsPath, "utf8"));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schemaVersion: 1, leases: [] };
-      throw error;
-    }
+    const source = await this.#readRegularFile(this.#activeSessionsPath, "undefined");
+    return source === undefined ? { schemaVersion: 1, leases: [] } : parseActiveSessions(source);
   }
 
   async #parseRangeIntoIndex(
@@ -688,9 +902,9 @@ export class ArtifactStore {
     const startedAt = performance.now();
     let handle: FileHandle;
     try {
-      handle = await open(this.#metadataPath, "r");
+      handle = (await this.#openRegularFile(this.#metadataPath, constants.O_RDONLY)).handle;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (errorCode(error) === "ENOENT") {
         this.#index = emptyIndex();
         return;
       }
@@ -761,15 +975,14 @@ export class ArtifactStore {
   async #appendRecordsUnlocked(records: readonly MetadataLogRecord[]): Promise<void> {
     if (records.length === 0) return;
     const encodedRecords = encodeValidatedRecords(records);
-    await mkdir(dirname(this.#metadataPath), { recursive: true, mode: 0o700 });
-    const existed = await stat(this.#metadataPath).then(
-      () => true,
-      (error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return false;
-        throw error;
-      },
+    await this.#validateNamespace();
+    const openedFile = await this.#openRegularFile(
+      this.#metadataPath,
+      constants.O_RDWR | constants.O_CREAT,
+      0o600,
+      false,
     );
-    const handle = await open(this.#metadataPath, "a+", 0o600);
+    const { handle, existed } = openedFile;
     const startedAt = performance.now();
     try {
       const readStartedAt = performance.now();
@@ -832,7 +1045,7 @@ export class ArtifactStore {
     );
     const content = Buffer.concat(encodeValidatedRecords(records));
     await this.#faultHook?.("before-compaction-replace");
-    await atomicWriteFile(this.#metadataPath, content);
+    await this.#atomicWriteFixedFile(this.#metadataPath, content);
     this.#index = emptyIndex();
     await this.#faultHook?.("after-compaction-replace");
     await this.#synchronizePathUnlocked();
@@ -841,31 +1054,27 @@ export class ArtifactStore {
 
   async #listArtifactsUnlocked(): Promise<Map<string, { modifiedAt: number; size: number }>> {
     const artifacts = new Map<string, { modifiedAt: number; size: number }>();
-    let shards: Dirent[];
-    try {
-      const rootInfo = await lstat(this.#artifactsRoot);
-      if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
-        throw new Error(`Unsafe artifact root: ${this.#artifactsRoot}`);
-      }
-      shards = await readdir(this.#artifactsRoot, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return artifacts;
-      throw error;
-    }
+    await this.#validateNamespace();
+    const shards: Dirent[] = await readdir(this.#artifactsRoot, { withFileTypes: true });
     for (const shard of shards) {
       if (!/^[a-f0-9]{2}$/.test(shard.name)) continue;
-      if (!shard.isDirectory() || shard.isSymbolicLink()) {
-        throw new Error(`Unsafe artifact shard: ${join(this.#artifactsRoot, shard.name)}`);
-      }
       const shardPath = join(this.#artifactsRoot, shard.name);
+      if (!shard.isDirectory() || shard.isSymbolicLink()) throw new Error(`Unsafe artifact shard: ${shardPath}`);
+      await this.#validateArtifactShard(`${shard.name}${"0".repeat(62)}`, false);
       for (const entry of await readdir(shardPath, { withFileTypes: true })) {
         const match = /^([a-f0-9]{64})\.txt$/.exec(entry.name);
         if (match?.[1] === undefined) continue;
-        if (!entry.isFile() || entry.isSymbolicLink()) {
-          throw new Error(`Unsafe artifact entry: ${join(shardPath, entry.name)}`);
+        const artifactId = match[1];
+        const artifactPath = join(shardPath, entry.name);
+        if (!entry.isFile() || entry.isSymbolicLink()) throw new Error(`Unsafe artifact entry: ${artifactPath}`);
+        await this.#validateArtifactShard(artifactId, false);
+        const opened = await this.#openRegularFile(artifactPath, constants.O_RDONLY, undefined, false);
+        try {
+          const info = await opened.handle.stat();
+          artifacts.set(artifactId, { modifiedAt: info.mtimeMs, size: info.size });
+        } finally {
+          await opened.handle.close();
         }
-        const info = await stat(join(shardPath, entry.name));
-        artifacts.set(match[1], { modifiedAt: info.mtimeMs, size: info.size });
       }
     }
     return artifacts;

@@ -25,6 +25,11 @@ it("keeps English and Chinese README migration and Vault surfaces aligned", () =
     for (const token of [
       "pi-repo-context",
       "repo_context_search",
+      "context_vault_repo_map",
+      "0.1.x",
+      "0.2.0",
+      "S03",
+      "bench",
       ".pi/repo-context.json",
       "context_vault_obs_get",
       "context_vault_obs_search",
@@ -77,6 +82,7 @@ it("publishes only Vault-owned source and has no repository runtime dependency",
   expect(manifest.scripts).not.toHaveProperty("bench");
 
   const extension = readFileSync("src/extension.ts", "utf8");
+  expect(extension).toContain('description: "Context Vault status|status-json|rebuild|gc|doctor"');
   for (const forbidden of [
     "RepoMapRuntime",
     "RepositoryGraph",
@@ -86,4 +92,11 @@ it("publishes only Vault-owned source and has no repository runtime dependency",
   ]) {
     expect(extension).not.toContain(forbidden);
   }
+});
+
+it("keeps the pre-split mixed release candidate frozen outside active release docs", () => {
+  expect(() => readFileSync("docs/releases/v0.2.0.md", "utf8")).toThrow();
+  const legacy = readFileSync("docs/legacy/releases/v0.2.0-rc.md", "utf8");
+  expect(legacy).toContain("RELEASE CANDIDATE / UNTAGGED");
+  expect(readFileSync("docs/legacy/README.md", "utf8")).toContain("releases/v0.2.0-rc.md");
 });

@@ -9,8 +9,10 @@ Context Vault 会归档符合条件的文本 Tool Result，把较大或较旧结
 仓库索引、Git freshness、Java/TypeScript 分析、搜索、Graph v1 和 Resolver v1 现在属于
 [`pi-repo-context`](https://github.com/Fubuyunhua/pi-repo-context)。
 
-拆分后的 Repo Context 仓库已经存在，但本文不宣称不可变 release tag 已经发布。经过审核的 `0.1.0` 发布后，请使用
-`repo_context_search` 和 `.pi/repo-context.json`。新派生状态位于：
+拆分后的 Repo Context 仓库已经存在，但本文不宣称任何拆分版本已经发布。经过审核的 `0.1.0` 发布后，请使用
+`repo_context_search` 和 `.pi/repo-context.json`。`context_vault_repo_map` 仅是 Repo Context `0.1.x` 中
+`repo_context_search` 的 deprecated alias；Repo Context 计划在 `0.2.0` 删除该 alias。Context Vault 不注册这两个
+仓库 Tool。新派生状态位于：
 
 ```text
 ${PI_CODING_AGENT_DIR}/pi-repo-context/projects/<projectId>
@@ -34,7 +36,8 @@ Repository Map configuration has moved to pi-repo-context.
 | `mapExcludePatterns` | `excludePatterns` |
 
 `mapInjectionMode` 和 `debugRequestFingerprints` 没有对应字段。Repo Context 采用 Tool-first，不自动注入。旧 Vault
-`repo-map/` 目录中的派生状态不会在拆分过程中被读取、移动、迁移、GC 或删除。
+`repo-map/` 目录中的派生状态不会在拆分过程中被读取、移动、迁移、GC 或删除。两个拆分 package 都不会发布暂停的
+S03 研究或 legacy bench assets。
 
 ## 要求与安装
 
@@ -135,7 +138,10 @@ ${PI_CODING_AGENT_DIR}/context-vault/projects/<projectId>/
 Observation artifact 是权威证据，拆分不会移动或重写它们。只要 artifact 仍被保留，receipt 就可以恢复。GC 会先保护显式
 receipt 引用和 active-session lease，再应用 retention/quota 策略。
 
-归档内容是不可信证据，不是指令。Redaction 只能尽力而为；应尽量避免归档 secret，并使用常规文件系统权限保护 Pi 状态目录。
+归档内容是不可信证据，不是指令。Redaction 只能尽力而为；应尽量避免归档 secret，并使用常规文件系统权限保护 Pi
+状态目录。Vault 会重新验证自己拥有的 namespace，并在 Node 支持时通过 no-follow regular-file handle 访问文件。
+Node 没有可移植的 `openat` API，因此具备本地高权限、且能在验证与文件访问之间竞速替换 ancestor 的进程仍会造成残余
+TOCTOU 风险。
 
 ## 升级、回滚与卸载
 
