@@ -10,17 +10,16 @@ lets the agent retrieve the evidence later. It no longer indexes repositories or
 Repository indexing, Git freshness, Java/TypeScript analysis, search, Graph v1, and Resolver v1 now belong to
 [`pi-repo-context`](https://github.com/Fubuyunhua/pi-repo-context).
 
-The split Repo Context repository exists, but no split release is claimed here. If its reviewed immutable `v0.1.0` tag
-becomes available, it may then be installed with:
+If the reviewed immutable `v0.1.0` tag exists in the upstream Repo Context repository, verify its presence before using
+this exact install command:
 
 ```bash
 pi install git:github.com/Fubuyunhua/pi-repo-context@v0.1.0
 ```
 
-Until that tag exists, do not treat this as an available install. After that conditional release, use
-`repo_context_search` and `.pi/repo-context.json`. `context_vault_repo_map` → `repo_context_search` is a deprecated Repo
-Context `0.1.x`-only alias; Repo Context plans to remove the alias in `0.2.0`. Context Vault does not register either
-repository tool. Repo Context never reads the old `.pi/context-vault.json`; copy supported settings manually. It stores
+Once installed from that tag, use `repo_context_search` and `.pi/repo-context.json`. `context_vault_repo_map` →
+`repo_context_search` is a deprecated Repo Context `0.1.x`-only alias; Repo Context plans to remove the alias in `0.2.0`.
+Context Vault does not register either repository tool. Repo Context never reads the old `.pi/context-vault.json`; copy supported settings manually. It stores
 new derived state under:
 
 ```text
@@ -59,7 +58,13 @@ telemetry state is shared.
 - Node.js `>=22.19.0`
 - Tested with Pi `0.84.1`
 
-Install from a reviewed immutable tag when publishing. For local development:
+To install v0.3.0, first verify that the reviewed immutable `v0.3.0` tag exists in the upstream repository, then use:
+
+```bash
+pi install git:github.com/Fubuyunhua/pi-context-vault@v0.3.0
+```
+
+If the tag is not present, use a reviewed local checkout for development instead:
 
 ```bash
 git clone https://github.com/Fubuyunhua/pi-context-vault.git
