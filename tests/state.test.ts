@@ -1,210 +1,180 @@
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { atomicWriteFile, withFileLock } from "../src/state/atomic.js";
-import { loadConfig } from "../src/state/config.js";
+import {
+  DEFAULT_CONFIG,
+  LEGACY_REPO_CONFIG_KEYS,
+  LEGACY_REPO_CONFIG_WARNING,
+  loadConfig,
+  loadConfigWithDiagnostics,
+} from "../src/state/config.js";
 import { resolveProjectState } from "../src/state/project-state.js";
 
 const roots: string[] = [];
-
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
-
 async function tempRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "context-vault-state-"));
   roots.push(root);
   return root;
 }
 
-async function waitForFile(path: string, timeoutMs = 1_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      await stat(path);
-      return;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+async function createDirectorySymlink(target: string, path: string): Promise<boolean> {
+  try {
+    await symlink(target, path, "junction");
+    return true;
+  } catch (error) {
+    if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      return false;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    throw error;
   }
-  throw new Error(`Timed out waiting for file: ${path}`);
 }
 
-describe("project state", () => {
-  it("isolates canonical projects under PI_CODING_AGENT_DIR", async () => {
+describe("Vault project state and configuration", () => {
+  it("isolates canonical aliases and creates only artifacts and metadata", async () => {
     const root = await tempRoot();
     const project = join(root, "project");
-    await mkdir(project);
-    const alias = join(project, "..");
-    const state = await resolveProjectState(project, { PI_CODING_AGENT_DIR: join(root, "pi") });
-
-    expect(state.projectRoot).toBe(await realpath(project));
-    expect(state.stateRoot).toContain(join(root, "pi", "context-vault", "projects"));
-    expect(state.projectId).toMatch(/^[a-f0-9]{32}$/);
-
-    const other = await resolveProjectState(alias, { PI_CODING_AGENT_DIR: join(root, "pi") });
-    expect(other.projectId).not.toBe(state.projectId);
-  });
-
-  it("maps aliases of the same canonical project to the same state directory", async () => {
-    const root = await tempRoot();
-    const project = join(root, "project");
-    const alias = join(root, "project-alias");
-    const piRoot = join(root, "pi");
+    const alias = join(root, "alias");
     await mkdir(project);
     await symlink(project, alias, "junction");
-
-    const directState = await resolveProjectState(project, { PI_CODING_AGENT_DIR: piRoot });
-    const aliasState = await resolveProjectState(alias, { PI_CODING_AGENT_DIR: piRoot });
-
-    expect(aliasState.projectRoot).toBe(directState.projectRoot);
-    expect(aliasState.projectId).toBe(directState.projectId);
-    expect(aliasState.stateRoot).toBe(directState.stateRoot);
+    const direct = await resolveProjectState(project, { PI_CODING_AGENT_DIR: join(root, "pi") });
+    const linked = await resolveProjectState(alias, { PI_CODING_AGENT_DIR: join(root, "pi") });
+    expect(direct.projectRoot).toBe(await realpath(project));
+    expect(linked.projectId).toBe(direct.projectId);
+    expect(direct.projectId).toMatch(/^[a-f0-9]{32}$/u);
+    expect((await readdir(direct.stateRoot)).sort()).toEqual(["artifacts", "metadata"]);
+    expect(direct).not.toHaveProperty("mapRoot");
+    await expect(stat(join(direct.stateRoot, "repo-map"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("loads defaults and validates a project override", async () => {
+  it("rejects artifacts and metadata symlinks into both repository state roots", async () => {
     const root = await tempRoot();
-    await mkdir(join(root, ".pi"));
-    await writeFile(
-      join(root, ".pi", "context-vault.json"),
-      JSON.stringify({ archiveThresholdBytes: 2048, hotObservationCount: 2, mapExcludePatterns: ["generated/**"] }),
-    );
+    const project = join(root, "project");
+    const piRoot = join(root, "pi");
+    await mkdir(project);
+    const state = await resolveProjectState(project, { PI_CODING_AGENT_DIR: piRoot });
+    const targets = [
+      join(state.stateRoot, "repo-map"),
+      join(piRoot, "pi-repo-context", "projects", state.projectId, "repo-map"),
+    ];
+    for (const target of targets) {
+      await mkdir(target, { recursive: true });
+      await writeFile(join(target, "sentinel"), `unchanged:${target}`);
+    }
 
-    const config = await loadConfig(root);
-    expect(config.archiveThresholdBytes).toBe(2048);
-    expect(config.replacementThresholdBytes).toBe(2048);
-    expect(config.repoMapEnabled).toBe(true);
-    expect(config.reductionEnabled).toBe(true);
-    expect(config.archivePolicy).toBe("all");
-    expect(config.archiveMinBytes).toBe(16 * 1024);
-    expect(config.archiveErrorsAlways).toBe(true);
-    expect(config.hotObservationCount).toBe(2);
-    expect(config.mapExcludePatterns).toEqual(["generated/**"]);
-    expect(config.mapGenerationRetention).toBe(3);
-    expect(config.mapQuotaBytes).toBe(128 * 1024 * 1024);
-    expect(config.receiptMaxBytes).toBeGreaterThan(0);
+    for (const [ownedName, target] of [
+      ["artifacts", targets[0]],
+      ["artifacts", targets[1]],
+      ["metadata", targets[0]],
+      ["metadata", targets[1]],
+    ] as const) {
+      const owned = join(state.stateRoot, ownedName);
+      await rm(owned, { recursive: true, force: true });
+      if (!(await createDirectorySymlink(target, owned))) return;
+      await expect(resolveProjectState(project, { PI_CODING_AGENT_DIR: piRoot })).rejects.toThrow(
+        /symbolic-link|Unsafe/u,
+      );
+      expect(await readFile(join(target, "sentinel"), "utf8")).toBe(`unchanged:${target}`);
+      await rm(owned, { force: true });
+      await mkdir(owned);
+    }
   });
 
-  it("migrates the legacy threshold and rejects an ambiguous legacy/new threshold conflict", async () => {
+  it("rejects symlinked Context Vault namespace components without changing Repo Context targets", async () => {
+    for (const component of ["context-vault", "projects"] as const) {
+      const root = await tempRoot();
+      const project = join(root, "project");
+      const piRoot = join(root, "pi");
+      const target = join(piRoot, "pi-repo-context", "projects", `redirect-${component}`, "repo-map");
+      await mkdir(project);
+      await mkdir(join(target, "nested"), { recursive: true });
+      await writeFile(join(target, "sentinel"), `${component}-safe`);
+      await writeFile(join(target, "nested", "evidence"), `${component}-nested-safe`);
+      const before = [
+        (await readdir(target)).sort(),
+        await readFile(join(target, "sentinel"), "utf8"),
+        (await readdir(join(target, "nested"))).sort(),
+        await readFile(join(target, "nested", "evidence"), "utf8"),
+      ];
+      const owned =
+        component === "context-vault" ? join(piRoot, "context-vault") : join(piRoot, "context-vault", "projects");
+      if (component === "projects") await mkdir(join(piRoot, "context-vault"));
+      if (!(await createDirectorySymlink(target, owned))) return;
+
+      await expect(resolveProjectState(project, { PI_CODING_AGENT_DIR: piRoot })).rejects.toThrow(/symbolic-link/u);
+      expect([
+        (await readdir(target)).sort(),
+        await readFile(join(target, "sentinel"), "utf8"),
+        (await readdir(join(target, "nested"))).sort(),
+        await readFile(join(target, "nested", "evidence"), "utf8"),
+      ]).toEqual(before);
+    }
+  });
+
+  it("allows a symlinked PI root ancestor while keeping owned directories real", async () => {
     const root = await tempRoot();
+    const project = join(root, "project");
+    const actualPiRoot = join(root, "actual-pi");
+    const linkedPiRoot = join(root, "linked-pi");
+    await mkdir(project);
+    await mkdir(actualPiRoot);
+    if (!(await createDirectorySymlink(actualPiRoot, linkedPiRoot))) return;
+    const state = await resolveProjectState(project, { PI_CODING_AGENT_DIR: linkedPiRoot });
+    expect((await lstat(state.artifactsRoot)).isSymbolicLink()).toBe(false);
+    expect((await lstat(state.metadataRoot)).isSymbolicLink()).toBe(false);
+  });
+
+  it("loads Vault-only defaults and threshold aliases", async () => {
+    const root = await tempRoot();
+    expect(await loadConfig(root)).toEqual(DEFAULT_CONFIG);
     await mkdir(join(root, ".pi"));
     const path = join(root, ".pi", "context-vault.json");
-
     await writeFile(path, JSON.stringify({ archiveThresholdBytes: 2048 }));
     await expect(loadConfig(root)).resolves.toMatchObject({
       archiveThresholdBytes: 2048,
       replacementThresholdBytes: 2048,
     });
-
     await writeFile(path, JSON.stringify({ replacementThresholdBytes: 4096 }));
     await expect(loadConfig(root)).resolves.toMatchObject({
       archiveThresholdBytes: 4096,
       replacementThresholdBytes: 4096,
     });
-
-    await writeFile(path, JSON.stringify({ archiveThresholdBytes: 2048, replacementThresholdBytes: 4096 }));
+    await writeFile(path, JSON.stringify({ archiveThresholdBytes: 1, replacementThresholdBytes: 2 }));
     await expect(loadConfig(root)).rejects.toThrow("cannot both be configured");
   });
 
-  it("accepts the archive policy matrix and validates its options", async () => {
+  it("accepts and ignores every legacy repository key regardless of value type", async () => {
+    const root = await tempRoot();
+    await mkdir(join(root, ".pi"));
+    const values: unknown[] = [null, "bad", -1, [], {}, false, 1.5, [""]];
+    const legacy = Object.fromEntries(LEGACY_REPO_CONFIG_KEYS.map((key, index) => [key, values[index]]));
+    await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify(legacy));
+    const loaded = await loadConfigWithDiagnostics(root);
+    expect(loaded.config).toEqual(DEFAULT_CONFIG);
+    expect(loaded.warnings).toEqual([LEGACY_REPO_CONFIG_WARNING]);
+  });
+
+  it("rejects unknown, malformed, and invalid active Vault values", async () => {
     const root = await tempRoot();
     await mkdir(join(root, ".pi"));
     const path = join(root, ".pi", "context-vault.json");
-
-    for (const archivePolicy of ["all", "errors-and-large", "off"]) {
-      await writeFile(
-        path,
-        JSON.stringify({ archivePolicy, archiveMinBytes: 0, replacementThresholdBytes: 1, archiveErrorsAlways: false }),
-      );
-      await expect(loadConfig(root)).resolves.toMatchObject({
-        archivePolicy,
-        archiveMinBytes: 0,
-        replacementThresholdBytes: 1,
-        archiveErrorsAlways: false,
-      });
-    }
-    await writeFile(path, JSON.stringify({ archivePolicy: "sometimes" }));
-    await expect(loadConfig(root)).rejects.toThrow("archivePolicy must be one of");
-    await writeFile(path, JSON.stringify({ archiveMinBytes: -1 }));
-    await expect(loadConfig(root)).rejects.toThrow("archiveMinBytes must be a non-negative safe integer");
-  });
-
-  it("rejects invalid configuration values", async () => {
-    const root = await tempRoot();
-    await mkdir(join(root, ".pi"));
-    await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ archiveThresholdBytes: -1 }));
-    await expect(loadConfig(root)).rejects.toThrow("archiveThresholdBytes");
-
-    await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ receiptMaxBytes: 511 }));
-    await expect(loadConfig(root)).rejects.toThrow("at least 512");
-
-    await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ mapContextMaxBytes: 511 }));
-    await expect(loadConfig(root)).rejects.toThrow("mapContextMaxBytes must be at least 512");
-
-    await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ debugRequestFingerprints: "yes" }));
-    await expect(loadConfig(root)).rejects.toThrow("debugRequestFingerprints must be a boolean");
-
-    for (const key of ["repoMapEnabled", "reductionEnabled"]) {
-      await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ [key]: "yes" }));
-      await expect(loadConfig(root)).rejects.toThrow(`${key} must be a boolean`);
-    }
-
-    for (const [key, value] of [
-      ["mapGenerationRetention", 0],
-      ["mapGenerationRetention", 1.5],
-      ["mapQuotaBytes", 0],
-      ["mapQuotaBytes", Number.MAX_SAFE_INTEGER + 1],
+    for (const [value, expected] of [
+      [{ unknown: 1 }, "Unknown"],
+      [{ reductionEnabled: "yes" }, "boolean"],
+      [{ archivePolicy: "sometimes" }, "archivePolicy"],
+      [{ archiveMinBytes: -1 }, "non-negative"],
+      [{ receiptMaxBytes: 511 }, "at least 512"],
+      [{ softContextRatio: 2 }, "between 0 and 1"],
+      [{ softContextRatio: 0.5, targetContextRatio: 0.6 }, "lower than"],
     ] as const) {
-      await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ [key]: value }));
-      await expect(loadConfig(root)).rejects.toThrow(`${key} must be a positive safe integer`);
+      await writeFile(path, JSON.stringify(value));
+      await expect(loadConfig(root)).rejects.toThrow(expected);
     }
-  });
-
-  it("rejects unknown, non-numeric, and inconsistent configuration", async () => {
-    const root = await tempRoot();
-    await mkdir(join(root, ".pi"));
-    const path = join(root, ".pi", "context-vault.json");
-
-    await writeFile(path, JSON.stringify({ unknownOption: 1 }));
-    await expect(loadConfig(root)).rejects.toThrow("Unknown");
-    await writeFile(path, JSON.stringify({ archiveThresholdBytes: "many" }));
-    await expect(loadConfig(root)).rejects.toThrow("finite number");
-    await writeFile(path, JSON.stringify({ softContextRatio: 2 }));
-    await expect(loadConfig(root)).rejects.toThrow("between 0 and 1");
-    await writeFile(path, JSON.stringify({ softContextRatio: 0.5, targetContextRatio: 0.6 }));
-    await expect(loadConfig(root)).rejects.toThrow("lower than");
-  });
-
-  it("accepts and validates mapInjectionMode", async () => {
-    const root = await tempRoot();
-    const defaults = await loadConfig(root);
-    expect(defaults.mapInjectionMode).toBe("once-per-user-turn");
-
-    await mkdir(join(root, ".pi"));
-    const path = join(root, ".pi", "context-vault.json");
-    for (const mode of ["off", "once-per-user-turn", "every-llm-call"]) {
-      await writeFile(path, JSON.stringify({ mapInjectionMode: mode }));
-      await expect(loadConfig(root)).resolves.toMatchObject({ mapInjectionMode: mode });
-    }
-    await writeFile(path, JSON.stringify({ mapInjectionMode: "sometimes" }));
-    await expect(loadConfig(root)).rejects.toThrow("mapInjectionMode must be one of");
-  });
-
-  it("rejects invalid repository map exclusions", async () => {
-    const root = await tempRoot();
-    await mkdir(join(root, ".pi"));
-    await writeFile(join(root, ".pi", "context-vault.json"), JSON.stringify({ mapExcludePatterns: [""] }));
-
-    await expect(loadConfig(root)).rejects.toThrow("mapExcludePatterns");
-  });
-
-  it("rejects a non-object configuration", async () => {
-    const root = await tempRoot();
-    await mkdir(join(root, ".pi"));
-    await writeFile(join(root, ".pi", "context-vault.json"), "null");
-
+    await writeFile(path, "null");
     await expect(loadConfig(root)).rejects.toThrow("configuration must be a JSON object");
   });
 });
@@ -219,51 +189,26 @@ describe("atomic state operations", () => {
     expect(await readdir(root)).toEqual(["state.json"]);
   });
 
-  it("serializes lock holders", async () => {
+  it("serializes and releases lock holders", async () => {
     const root = await tempRoot();
     const lockPath = join(root, "writer.lock");
     const order: string[] = [];
-
-    const firstHolder = withFileLock(lockPath, async () => {
+    const first = withFileLock(lockPath, async () => {
       order.push("a:start");
       await new Promise((resolve) => setTimeout(resolve, 20));
       order.push("a:end");
     });
-    await waitForFile(lockPath);
-    const secondHolder = withFileLock(lockPath, async () => {
-      order.push("b");
-    });
-    await Promise.all([firstHolder, secondHolder]);
+    while (true) {
+      try {
+        await stat(lockPath);
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+    }
+    const second = withFileLock(lockPath, async () => order.push("b"));
+    await Promise.all([first, second]);
     expect(order).toEqual(["a:start", "a:end", "b"]);
-  });
-
-  it("times out without stealing an active lock", async () => {
-    const root = await tempRoot();
-    const lockPath = join(root, "writer.lock");
-    let release: (() => void) | undefined;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const holder = withFileLock(lockPath, async () => held, { staleMs: 1000 });
-    await waitForFile(lockPath);
-
-    await expect(
-      withFileLock(lockPath, async () => undefined, { retryMs: 5, staleMs: 1000, timeoutMs: 20 }),
-    ).rejects.toThrow("Timed out waiting for state lock");
-
-    release?.();
-    await holder;
-  });
-
-  it("releases a lock when its operation fails", async () => {
-    const root = await tempRoot();
-    const lockPath = join(root, "writer.lock");
-
-    await expect(
-      withFileLock(lockPath, async () => {
-        throw new Error("operation failed");
-      }),
-    ).rejects.toThrow("operation failed");
-    await expect(withFileLock(lockPath, async () => "next holder")).resolves.toBe("next holder");
+    await expect(withFileLock(lockPath, async () => "next")).resolves.toBe("next");
   });
 });

@@ -1,5 +1,5 @@
 import type { PathLike } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -91,6 +91,25 @@ describe("atomic write crash durability", () => {
     expect(directorySync.mock.calls.map(([path]) => path)).toEqual([root]);
   });
 
+  it("rejects an existing final file or directory symlink", async () => {
+    const root = await mkdtemp(join(tmpdir(), "context-vault-durable-mkdir-unsafe-"));
+    roots.push(root);
+    const file = join(root, "file");
+    await writeFile(file, "not a directory");
+    await expect(durableMkdir(file)).rejects.toThrow("Refusing non-directory");
+
+    const target = join(root, "target");
+    const linked = join(root, "linked");
+    await mkdir(target);
+    try {
+      await symlink(target, linked, "junction");
+    } catch (error) {
+      if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
+      throw error;
+    }
+    await expect(durableMkdir(linked)).rejects.toThrow("symbolic-link");
+  });
+
   it("durably precreates production state paths before archive metadata publication", async () => {
     const root = await mkdtemp(join(tmpdir(), "context-vault-production-durability-"));
     roots.push(root);
@@ -105,7 +124,6 @@ describe("atomic write crash durability", () => {
       piRoot,
       join(piRoot, "context-vault"),
       join(piRoot, "context-vault", "projects"),
-      state.stateRoot,
       state.stateRoot,
       state.stateRoot,
     ]);

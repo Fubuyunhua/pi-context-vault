@@ -1,0 +1,140 @@
+import { readFileSync } from "node:fs";
+import { expect, it } from "vitest";
+import { EXTENSION_VERSION, REBUILD_MIGRATION_MESSAGE } from "../src/extension.js";
+import { LEGACY_REPO_CONFIG_KEYS, LEGACY_REPO_CONFIG_WARNING } from "../src/state/config.js";
+
+const ACTIVE_CONFIG_KEYS = [
+  "reductionEnabled",
+  "archivePolicy",
+  "archiveMinBytes",
+  "replacementThresholdBytes",
+  "archiveErrorsAlways",
+  "archiveThresholdBytes",
+  "receiptMaxBytes",
+  "hotObservationCount",
+  "softContextRatio",
+  "targetContextRatio",
+  "projectQuotaBytes",
+  "retentionDays",
+] as const;
+
+it("keeps English and Chinese README migration and Vault surfaces aligned", () => {
+  const english = readFileSync("README.md", "utf8");
+  const chinese = readFileSync("README.zh-CN.md", "utf8");
+  for (const text of [english, chinese]) {
+    for (const token of [
+      "pi-repo-context",
+      "pi install git:github.com/Fubuyunhua/pi-repo-context@v0.1.0",
+      "repo_context_search",
+      "repo_context_status",
+      "context_vault_repo_map",
+      "context-vault",
+      "repo-context",
+      "UI",
+      "telemetry",
+      "0.1.x",
+      "0.2.0",
+      "S03",
+      "bench",
+      ".pi/repo-context.json",
+      "context_vault_obs_get",
+      "context_vault_obs_search",
+      "context_vault_status",
+      "/context-vault status",
+      "/context-vault status-json",
+      "/context-vault gc",
+      "/context-vault doctor",
+      "npm run test:pi",
+      LEGACY_REPO_CONFIG_WARNING,
+      ...REBUILD_MIGRATION_MESSAGE.split("\n"),
+      ...ACTIVE_CONFIG_KEYS,
+      ...LEGACY_REPO_CONFIG_KEYS,
+    ]) {
+      expect(text, `README missing ${token}`).toContain(token);
+    }
+  }
+});
+
+it("publishes only Vault-owned source and has no repository runtime dependency", () => {
+  const manifest = JSON.parse(readFileSync("package.json", "utf8")) as {
+    name?: string;
+    version?: string;
+    files?: string[];
+    dependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    scripts?: Record<string, string>;
+  };
+  expect({ name: manifest.name, manifestVersion: manifest.version, runtimeVersion: EXTENSION_VERSION }).toEqual({
+    name: "pi-context-vault",
+    manifestVersion: "0.3.0",
+    runtimeVersion: "0.3.0",
+  });
+  expect(manifest.dependencies ?? {}).toEqual({});
+  expect(manifest.files).toEqual([
+    "extensions/index.ts",
+    "src/artifacts/redaction.ts",
+    "src/artifacts/store.ts",
+    "src/context/reduction.ts",
+    "src/observations/virtualization.ts",
+    "src/state/atomic.ts",
+    "src/state/config.ts",
+    "src/state/project-state.ts",
+    "src/extension.ts",
+    "src/telemetry.ts",
+    "src/telemetry-frame.ts",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+  ]);
+  expect(manifest.peerDependencies).toEqual({
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    typebox: "1.3.7",
+  });
+  expect(manifest.devDependencies).toMatchObject(manifest.peerDependencies as Record<string, string>);
+  expect(manifest.scripts?.["test:pi"]).toBe("node scripts/pi-rpc-smoke.mjs");
+  expect(manifest.scripts).not.toHaveProperty("test:watcher");
+  expect(manifest.scripts).not.toHaveProperty("bench");
+
+  const extension = readFileSync("src/extension.ts", "utf8");
+  expect(extension).toContain('description: "Context Vault status|status-json|rebuild|gc|doctor"');
+  for (const forbidden of [
+    "RepoMapRuntime",
+    "RepositoryGraph",
+    "FrozenMapCapsule",
+    "context_vault_repo_map",
+    "before_agent_start",
+  ]) {
+    expect(extension).not.toContain(forbidden);
+  }
+});
+
+it("keeps release language unpublished and the pre-split candidate frozen", () => {
+  expect(() => readFileSync("docs/releases/v0.2.0.md", "utf8")).toThrow();
+  const legacy = readFileSync("docs/legacy/releases/v0.2.0-rc.md", "utf8");
+  expect(legacy).toContain("RELEASE CANDIDATE / UNTAGGED");
+  expect(readFileSync("docs/legacy/README.md", "utf8")).toContain("releases/v0.2.0-rc.md");
+
+  const candidate = readFileSync("docs/releases/v0.3.0.md", "utf8");
+  expect(candidate).toContain("RELEASE CANDIDATE / UNPUBLISHED");
+  expect(candidate).not.toMatch(/^Release date:/mu);
+  for (const token of [
+    "0.3.0",
+    "7062879b9a3bf3ccc491ea73824fd6abeb41a6a6",
+    "6243694de90d1a557e3f5f3b18e7aa08dc0bd1f6",
+    "0d6af86614d7550d67785d17a378e6f1865d8eca",
+    "@earendil-works/pi-coding-agent` `0.84.1",
+    "typebox` `1.3.7",
+    "pi install git:github.com/Fubuyunhua/pi-context-vault@v0.3.0",
+    "pi install git:github.com/Fubuyunhua/pi-repo-context@v0.1.0",
+    "context_vault_repo_map",
+    "repo_context_search",
+    "repo_context_status",
+    ".pi/context-vault.json",
+    "extension ID/UI key",
+    ...REBUILD_MIGRATION_MESSAGE.split("\n"),
+    ...LEGACY_REPO_CONFIG_KEYS,
+  ]) {
+    expect(candidate, `release candidate missing ${token}`).toContain(token);
+  }
+});

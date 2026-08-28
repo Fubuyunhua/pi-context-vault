@@ -1,48 +1,78 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const projectRoot = resolve(import.meta.dirname, "..");
-const smokeRoot = mkdtempSync(resolve(tmpdir(), "pi-context-vault-smoke-"));
-const stateRoot = join(smokeRoot, "pi-state");
-const installRoot = join(smokeRoot, "installed");
-const assetsRoot = join(smokeRoot, "assets");
-const piCli = resolve(projectRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+const root = resolve(import.meta.dirname, "..");
+const scratch = mkdtempSync(join(tmpdir(), "pi-context-vault-package-"));
 const npmCli = process.env.npm_execpath;
-const run = (command, args, options = {}) =>
-  execFileSync(command, args, { cwd: projectRoot, encoding: "utf8", stdio: "pipe", ...options });
-const sha256 = (text) => createHash("sha256").update(text).digest("hex");
+const run = (command, args, cwd = root) => execFileSync(command, args, { cwd, encoding: "utf8", stdio: "pipe" });
+
+function assertDependencyAbsent(tree, forbidden) {
+  const visit = (node, ancestry) => {
+    for (const [name, dependency] of Object.entries(node?.dependencies ?? {})) {
+      if (name === forbidden) throw new Error(`dependency tree contains ${forbidden} at ${ancestry}>${name}`);
+      visit(dependency, `${ancestry}>${name}`);
+    }
+  };
+  visit(tree, "root");
+}
+
+function walk(rootPath) {
+  const files = [];
+  const visit = (path, prefix = "") => {
+    for (const name of readdirSync(path, { withFileTypes: true })) {
+      const relativePath = prefix ? `${prefix}/${name.name}` : name.name;
+      if (name.isDirectory()) visit(join(path, name.name), relativePath);
+      else files.push(relativePath);
+    }
+  };
+  visit(rootPath);
+  return files.sort();
+}
 
 try {
-  if (!npmCli) throw new Error("package smoke must run through npm so npm_execpath is available");
-  mkdirSync(stateRoot, { recursive: true });
-  const pack = JSON.parse(run(process.execPath, [npmCli, "pack", "--json", "--pack-destination", smokeRoot]));
-  const packed = pack[0];
-  if (!packed?.filename) throw new Error("npm pack did not create a tarball");
-  const tarball = join(smokeRoot, packed.filename);
-  const files = new Set(packed.files?.map((entry) => entry.path));
-  for (const required of [
-    "extensions/index.ts",
-    "src/extension.ts",
-    "src/bench/cli.ts",
-    "src/bench/runner.ts",
-    "scripts/bench.mjs",
-    "docs/specs/0014-ablation-harness.md",
+  if (!npmCli) throw new Error("package smoke must run through npm");
+  const packed = JSON.parse(run(process.execPath, [npmCli, "pack", "--json", "--pack-destination", scratch]))[0];
+  const expectedFiles = [
+    "LICENSE",
     "README.md",
     "README.zh-CN.md",
-    "deepResearch.md",
-    "docs/specs/0001-v0.1.md",
-    "docs/releases/v0.1.0.md",
-    "docs/releases/v0.2.0.md",
-    "LICENSE",
-  ]) {
-    if (!files.has(required)) throw new Error(`Release package is missing ${required}`);
+    "extensions/index.ts",
+    "package.json",
+    "src/artifacts/redaction.ts",
+    "src/artifacts/store.ts",
+    "src/context/reduction.ts",
+    "src/extension.ts",
+    "src/observations/virtualization.ts",
+    "src/state/atomic.ts",
+    "src/state/config.ts",
+    "src/state/project-state.ts",
+    "src/telemetry-frame.ts",
+    "src/telemetry.ts",
+  ];
+  const packedFiles = packed.files.map((entry) => entry.path).sort();
+  if (JSON.stringify(packedFiles) !== JSON.stringify(expectedFiles)) {
+    throw new Error(`packed artifact file set mismatch: ${JSON.stringify(packedFiles)}`);
+  }
+  const files = new Set(packedFiles);
+  const forbiddenPrefixes = ["src/repo-map/", "src/repo-context/", "src/bench/", "tests/", "docs/"];
+  for (const path of files) {
+    if (forbiddenPrefixes.some((prefix) => path.startsWith(prefix)))
+      throw new Error(`packed artifact includes ${path}`);
+    if (/bench|ablation|gold-task/iu.test(path)) throw new Error(`packed artifact includes research path ${path}`);
   }
 
-  mkdirSync(installRoot, { recursive: true });
-  writeFileSync(join(installRoot, "package.json"), '{"name":"packed-smoke","private":true}\n');
+  const install = join(scratch, "install");
+  const project = join(scratch, "project");
+  const agentRoot = join(scratch, "agent");
+  mkdirSync(install, { recursive: true });
+  mkdirSync(join(project, ".pi"), { recursive: true });
+  writeFileSync(
+    join(project, ".pi", "context-vault.json"),
+    JSON.stringify({ archivePolicy: "all", archiveMinBytes: 0, replacementThresholdBytes: 1 }),
+  );
+  writeFileSync(join(install, "package.json"), '{"name":"vault-smoke","private":true}\n');
   run(
     process.execPath,
     [
@@ -52,152 +82,78 @@ try {
       "--no-audit",
       "--no-fund",
       "--no-package-lock",
-      "--legacy-peer-deps",
-      tarball,
+      join(scratch, packed.filename),
+      "@earendil-works/pi-coding-agent@0.84.1",
+      "typebox@1.3.7",
     ],
-    { cwd: installRoot },
+    install,
   );
-  const packedRoot = join(installRoot, "node_modules", "pi-context-vault");
-  const packedBench = join(packedRoot, "scripts", "bench.mjs");
-  if (!readFileSync(join(packedRoot, "package.json"), "utf8").includes('"pi-context-vault"'))
-    throw new Error("Packed artifact was not extracted into the isolated install");
+  const dependencyTree = JSON.parse(run(process.execPath, [npmCli, "ls", "--all", "--json"], install));
+  for (const name of ["pi-repo-context", "chokidar", "java-parser", "minisearch"])
+    assertDependencyAbsent(dependencyTree, name);
 
-  mkdirSync(assetsRoot, { recursive: true });
-  const repository = join(assetsRoot, "repository");
-  mkdirSync(repository);
-  run("git", ["init", "--quiet"], { cwd: repository });
-  run("git", ["config", "user.email", "fake@example.invalid"], { cwd: repository });
-  run("git", ["config", "user.name", "Packed Smoke"], { cwd: repository });
-  writeFileSync(join(repository, "base.txt"), "packed synthetic smoke\n");
-  run("git", ["add", "base.txt"], { cwd: repository });
-  run("git", ["commit", "--quiet", "-m", "base"], { cwd: repository });
-  const baseCommit = run("git", ["rev-parse", "HEAD"], { cwd: repository }).trim();
-  const prompt = "Packed synthetic mechanics smoke. No benchmark claim.\n";
-  const promptPath = join(assetsRoot, "prompt.txt");
-  writeFileSync(promptPath, prompt);
-  const arms = {
-    A: {
-      id: "A",
-      extensionEnabled: false,
-      config: { archivePolicy: "off", repoMapEnabled: false, reductionEnabled: false, mapInjectionMode: "off" },
-    },
-    B: {
-      id: "B",
-      extensionEnabled: true,
-      config: { archivePolicy: "all", repoMapEnabled: false, reductionEnabled: false, mapInjectionMode: "off" },
-    },
-    C: {
-      id: "C",
-      extensionEnabled: true,
-      config: { archivePolicy: "all", repoMapEnabled: false, reductionEnabled: true, mapInjectionMode: "off" },
-    },
-    D: {
-      id: "D",
-      extensionEnabled: true,
-      config: { archivePolicy: "off", repoMapEnabled: true, reductionEnabled: false, mapInjectionMode: "off" },
-    },
-    E: {
-      id: "E",
-      extensionEnabled: true,
-      config: {
-        archivePolicy: "all",
-        repoMapEnabled: true,
-        reductionEnabled: true,
-        mapInjectionMode: "once-per-user-turn",
-      },
-    },
-    F: {
-      id: "F",
-      extensionEnabled: true,
-      config: {
-        archivePolicy: "all",
-        repoMapEnabled: true,
-        reductionEnabled: true,
-        mapInjectionMode: "every-llm-call",
-      },
-    },
-  };
-  const experiment = {
-    schemaVersion: "context-vault-ablation-experiment/v1",
-    experimentId: "packed-synthetic-no-provider",
-    seed: 31,
-    repeats: 6,
-    provider: "fake",
-    model: "fake-model",
-    thinking: "off",
-    tools: ["read"],
-    piCommit: "synthetic",
-    extensionCommit: "synthetic",
-    packageLockHash: "synthetic",
-    timeoutMs: 1000,
-    maxInfrastructureRetries: 0,
-    cacheSupport: "reported",
-    extensionPath: join(packedRoot, "extensions", "index.ts"),
-    allowedCredentialEnv: [],
-    arms: Object.values(arms),
-    publicationFields: [],
-  };
-  const task = {
-    schemaVersion: "context-vault-ablation-task/v1",
-    taskId: "packed-synthetic",
-    assetHash: "synthetic-only",
-    repository,
-    baseCommit,
-    promptPath,
-    promptHash: sha256(prompt),
-    language: "Synthetic",
-    repoMapStratum: "mixed",
-    evaluator: { kind: "command", command: "true", args: [], timeoutMs: 500 },
-  };
-  const experimentPath = join(assetsRoot, "experiment.json");
-  const tasksPath = join(assetsRoot, "tasks.jsonl");
-  const planPath = join(assetsRoot, "plan.json");
-  const resultsRoot = join(assetsRoot, "results");
-  writeFileSync(experimentPath, JSON.stringify(experiment));
-  writeFileSync(tasksPath, `${JSON.stringify(task)}\n`);
-  const fakePi = join(assetsRoot, "fake-pi.mjs");
+  const packedRoot = join(install, "node_modules", "pi-context-vault");
+  const manifest = JSON.parse(readFileSync(join(packedRoot, "package.json"), "utf8"));
+  if (manifest.name !== "pi-context-vault" || manifest.version !== "0.3.0")
+    throw new Error("package identity mismatch");
+  if (manifest.dependencies && Object.keys(manifest.dependencies).length > 0)
+    throw new Error("Vault has runtime dependencies");
+  if (
+    manifest.peerDependencies?.["@earendil-works/pi-coding-agent"] !== "0.84.1" ||
+    manifest.peerDependencies?.typebox !== "1.3.7"
+  ) {
+    throw new Error("Vault peer versions exceed the tested compatibility surface");
+  }
+  if (manifest.scripts?.["test:pi"] !== "node scripts/pi-rpc-smoke.mjs")
+    throw new Error("packed manifest has an unexpected real Pi smoke command");
+  for (const script of ["bench", "bench:plan", "bench:run", "bench:analyze", "bench:verify", "test:watcher"]) {
+    if (manifest.scripts?.[script]) throw new Error(`packed manifest retains ${script}`);
+  }
+  const installedFiles = walk(packedRoot);
+  if (JSON.stringify(installedFiles) !== JSON.stringify(expectedFiles)) {
+    throw new Error(`installed package file set mismatch: ${JSON.stringify(installedFiles)}`);
+  }
+  for (const path of installedFiles) {
+    if (forbiddenPrefixes.some((prefix) => path.startsWith(prefix)))
+      throw new Error(`installed package includes ${path}`);
+    if (!path.endsWith(".ts")) continue;
+    const text = readFileSync(join(packedRoot, path), "utf8");
+    if (/from\s+["'][^"']*(?:repo-map|repo-context|bench)[^"']*["']/u.test(text)) {
+      throw new Error(`forbidden source import in ${path}`);
+    }
+    if (
+      /RepoMapRuntime|RepositoryGraph|FrozenMapCapsule|from\s+["'](?:chokidar|java-parser|minisearch)["']/u.test(text)
+    ) {
+      throw new Error(`forbidden repository symbol in ${path}`);
+    }
+  }
+  if (existsSync(join(install, "node_modules", "pi-repo-context")))
+    throw new Error("Repo Context unexpectedly installed");
+
+  const loader = join(install, "load-packed-extension.mjs");
   writeFileSync(
-    fakePi,
-    `#!/usr/bin/env node\nimport{mkdirSync,readFileSync,writeFileSync}from'node:fs';import{join}from'node:path';import{createHash}from'node:crypto';const a=process.argv.slice(2),s=a[a.indexOf('--session-dir')+1],e=a.includes('-e');mkdirSync(s,{recursive:true});writeFileSync(join(s,'session.jsonl'),JSON.stringify({type:'message',message:{role:'assistant',model:'fake-model',content:[],usage:{input:2,output:1,cacheRead:0,cacheWrite:0,totalTokens:3,cost:{total:0}}}}));if(e){const c=JSON.parse(readFileSync(join(process.cwd(),'.pi','context-vault.json'),'utf8')),m=c.mapInjectionMode==='off'?0:1,r=c.reductionEnabled?1:0,p=JSON.stringify({initialized:true,degraded:false,failures:[],components:{observations:{available:true},repoMap:{available:c.repoMapEnabled}},telemetry:{capsuleBuildCount:m,repoMapAutomaticQueryCount:m,reductionInvocationCount:r,reductionTriggeredCount:0,archiveAttemptCount:0,archiveSuccessCount:0,archiveFailureCount:0}}),h=createHash('sha256').update(p).digest('hex');process.stderr.write('@@CONTEXT_VAULT_TELEMETRY_V1@@ '+Buffer.byteLength(p)+' '+h+'\\n'+p+'\\n@@END_CONTEXT_VAULT_TELEMETRY@@\\n')}\n`,
+    loader,
+    `import{pathToFileURL}from"node:url";\nimport{readdir,readFile,stat}from"node:fs/promises";\nimport{join}from"node:path";\nconst{createJiti}=await import(pathToFileURL(process.argv[3]).href);\nconst jiti=createJiti(import.meta.url,{moduleCache:false});\nconst factory=await jiti.import(process.argv[2],{default:true});\nprocess.env.PI_CODING_AGENT_DIR=process.argv[5];\nconst handlers=new Map(),tools=new Map(),commands=[];\nfactory({on:(name,handler)=>handlers.set(name,handler),registerTool:(tool)=>tools.set(tool.name,tool),registerCommand:(name)=>commands.push(name)});\nconst actual={events:[...handlers.keys()].sort(),tools:[...tools.keys()].sort(),commands};\nconst expected={events:["context","session_shutdown","session_start","tool_result"],tools:["context_vault_obs_get","context_vault_obs_search","context_vault_status"],commands:["context-vault"]};\nif(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error("unexpected registration: "+JSON.stringify(actual));\nconst project=process.argv[4],agentRoot=process.argv[5];\nconst ctx={cwd:project,hasUI:false,sessionManager:{getSessionId:()=>"packed-session",getEntries:()=>[],getBranch:()=>[]},model:{contextWindow:10000},getSystemPrompt:()=>"system"};\nawait handlers.get("session_start")({},ctx);\nconst result=await handlers.get("tool_result")({toolName:"bash",toolCallId:"packed-call",content:[{type:"text",text:"packed evidence"}],isError:false},ctx);\nif(!result?.content?.[0]?.text?.includes("context_vault_observation_receipt"))throw new Error("packed archive did not produce receipt");\nconst receipt=JSON.parse(result.content[0].text);\nconst got=await tools.get("context_vault_obs_get").execute("get",{id:receipt.id},undefined,undefined,ctx);\nif(got.isError||!got.content?.[0]?.text?.includes("packed evidence"))throw new Error("packed get failed");\nconst searched=await tools.get("context_vault_obs_search").execute("search",{query:"packed"},undefined,undefined,ctx);\nif(searched.isError||!searched.content?.[0]?.text?.includes("packed"))throw new Error("packed search failed");\nconst projects=join(agentRoot,"context-vault","projects");\nconst [projectId]=await readdir(projects);\nconst rows=(await readdir(join(projects,projectId))).sort();\nif(JSON.stringify(rows)!==JSON.stringify(["artifacts","metadata"]))throw new Error("unexpected Vault state: "+JSON.stringify(rows));\nawait handlers.get("session_shutdown")({},ctx);\nconsole.log("packed-vault-registration-archive-get-search-state-ok");\n`,
   );
-  chmodSync(fakePi, 0o755);
-  const packedCli = (...args) => run(process.execPath, [packedBench, ...args], { cwd: packedRoot });
-  packedCli("plan", "--experiment", experimentPath, "--tasks", tasksPath, "--output", planPath);
-  packedCli(
-    "run",
-    "--experiment",
-    experimentPath,
-    "--tasks",
-    tasksPath,
-    "--plan",
-    planPath,
-    "--output",
-    resultsRoot,
-    "--fake-pi-command",
-    fakePi,
+  const jiti = join(
+    install,
+    "node_modules",
+    "@earendil-works",
+    "pi-coding-agent",
+    "node_modules",
+    "jiti",
+    "lib",
+    "jiti-static.mjs",
   );
-  packedCli("verify", "--results", resultsRoot);
-  packedCli(
-    "analyze",
-    "--tasks",
-    tasksPath,
-    "--plan",
-    planPath,
-    "--results",
-    resultsRoot,
-    "--output",
-    join(assetsRoot, "analysis.json"),
+  if (!existsSync(jiti)) throw new Error("Pi peer does not provide its TypeScript loader");
+  const loaded = run(
+    process.execPath,
+    [loader, join(packedRoot, "extensions", "index.ts"), jiti, project, agentRoot],
+    install,
   );
-
-  run(process.execPath, [piCli, "install", tarball], {
-    env: { ...process.env, PI_CODING_AGENT_DIR: stateRoot },
-  });
-  const packages = run(process.execPath, [piCli, "list"], {
-    env: { ...process.env, PI_CODING_AGENT_DIR: stateRoot },
-  });
-  if (!packages.includes("pi-context-vault"))
-    throw new Error(`Pi did not list the packed package. Output:\n${packages}`);
-  console.log("packed-artifact-plan-run-verify-analyze-ok");
+  if (!loaded.includes("packed-vault-registration-archive-get-search-state-ok"))
+    throw new Error("packed Vault did not load");
+  console.log("packed-observation-vault-install-load-cycle-ok");
 } finally {
-  rmSync(smokeRoot, { recursive: true, force: true });
+  rmSync(scratch, { recursive: true, force: true });
 }

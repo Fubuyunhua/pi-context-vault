@@ -9,5 +9,6 @@
     "verbatimModuleSyntax": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["extensions/**/*.ts", "src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+  "include": ["extensions/**/*.ts", "src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
+  "exclude": ["src/repo-context/**", "tests/repo-context-contract.test.ts", "tests/fixtures/repo-context/**"]
 }

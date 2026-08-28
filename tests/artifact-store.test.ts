@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,6 +17,18 @@ async function tempRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "context-vault-artifacts-"));
   roots.push(root);
   return root;
+}
+
+async function createDirectorySymlink(target: string, path: string): Promise<boolean> {
+  try {
+    await symlink(target, path, "junction");
+    return true;
+  } catch (error) {
+    if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function storeAt(root: string, now = () => new Date("2026-08-14T00:00:00.000Z")): ArtifactStore {
@@ -315,6 +328,57 @@ describe("artifact store", () => {
     await mkdir(registryPath);
     await expect(store.garbageCollect({ retentionDays: 0, quotaBytes: 0 })).rejects.toThrow();
     expect(await store.read(survivor.artifactId)).toBe("must survive malformed registry");
+  });
+
+  it("fails archive and GC on artifact shard symlinks into both repository roots", async () => {
+    for (const kind of ["legacy", "new"] as const) {
+      const root = await tempRoot();
+      const content = `symlink-protected-${kind}`;
+      const artifactId = createHash("sha256").update(content).digest("hex");
+      const target =
+        kind === "legacy"
+          ? join(root, "context-vault", "projects", "project", "repo-map")
+          : join(root, "pi-repo-context", "projects", "project", "repo-map");
+      await mkdir(join(root, "artifacts"), { recursive: true });
+      await mkdir(join(root, "metadata"), { recursive: true });
+      await mkdir(target, { recursive: true });
+      await writeFile(join(target, "sentinel"), `${kind}-sentinel`);
+      if (!(await createDirectorySymlink(target, join(root, "artifacts", artifactId.slice(0, 2))))) return;
+      const store = storeAt(root);
+      await expect(
+        store.archive({ observationId: `obs-${kind}`, toolName: "read", sessionId: "session", content }),
+      ).rejects.toThrow(/symbolic-link|Unsafe/u);
+      await expect(store.garbageCollect({ retentionDays: 0, quotaBytes: 0 })).rejects.toThrow("Unsafe artifact shard");
+      expect(await readFile(join(target, "sentinel"), "utf8")).toBe(`${kind}-sentinel`);
+      await expect(stat(join(target, `${artifactId}.txt`))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
+  it("records a Vault-owned artifact GC failure when unlink fails", async () => {
+    const root = await tempRoot();
+    const telemetry = new Telemetry();
+    let artifactPath = "";
+    const store = new ArtifactStore({
+      artifactsRoot: join(root, "artifacts"),
+      metadataRoot: join(root, "metadata"),
+      telemetry,
+      now: () => new Date("2026-08-14T00:00:00.000Z"),
+      faultHook: async (point) => {
+        if (point !== "after-gc-tombstone-sync") return;
+        await rm(artifactPath);
+        await mkdir(artifactPath);
+      },
+    });
+    const archived = await store.archive({
+      observationId: "gc-unlink-failure",
+      toolName: "read",
+      sessionId: "inactive",
+      content: "unlink must fail",
+    });
+    artifactPath = join(root, "artifacts", archived.artifactId.slice(0, 2), `${archived.artifactId}.txt`);
+    await expect(store.garbageCollect({ retentionDays: 0, quotaBytes: 0 })).rejects.toThrow();
+    expect(telemetry.snapshot().artifactGcFailureCount).toBe(1);
+    expect(telemetry.snapshot()).not.toHaveProperty("maintenanceFailureCount");
   });
 
   it("throws persistence failures so callers can keep the original tool result", async () => {

@@ -2,18 +2,27 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export type ArchivePolicy = "all" | "errors-and-large" | "off";
-export type MapInjectionMode = "off" | "once-per-user-turn" | "every-llm-call";
+
+export const LEGACY_REPO_CONFIG_WARNING = "Repository Map configuration has moved to pi-repo-context." as const;
+export const LEGACY_REPO_CONFIG_KEYS = Object.freeze([
+  "repoMapEnabled",
+  "mapInjectionMode",
+  "mapContextMaxBytes",
+  "mapDebounceMs",
+  "mapGenerationRetention",
+  "mapQuotaBytes",
+  "mapExcludePatterns",
+  "debugRequestFingerprints",
+] as const);
+const LEGACY_KEYS = new Set<string>(LEGACY_REPO_CONFIG_KEYS);
 
 export interface ContextVaultConfig {
-  /** Fully disables repository-map construction, watching, tools, and automatic injection. */
-  repoMapEnabled: boolean;
-  /** Fully disables context reduction while leaving archival policy independent. */
   reductionEnabled: boolean;
   archivePolicy: ArchivePolicy;
   archiveMinBytes: number;
   replacementThresholdBytes: number;
   archiveErrorsAlways: boolean;
-  /** @deprecated Use replacementThresholdBytes. Kept normalized to the effective replacement threshold. */
+  /** @deprecated Use replacementThresholdBytes. */
   archiveThresholdBytes: number;
   receiptMaxBytes: number;
   hotObservationCount: number;
@@ -21,18 +30,14 @@ export interface ContextVaultConfig {
   targetContextRatio: number;
   projectQuotaBytes: number;
   retentionDays: number;
-  mapContextMaxBytes: number;
-  mapDebounceMs: number;
-  mapGenerationRetention: number;
-  mapQuotaBytes: number;
-  mapExcludePatterns: string[];
-  mapInjectionMode: MapInjectionMode;
-  /** Reserved for a later debug Spec; inert in this release. */
-  debugRequestFingerprints: boolean;
+}
+
+export interface LoadedContextVaultConfig {
+  config: ContextVaultConfig;
+  warnings: string[];
 }
 
 export const DEFAULT_CONFIG: Readonly<ContextVaultConfig> = Object.freeze({
-  repoMapEnabled: true,
   reductionEnabled: true,
   archivePolicy: "all",
   archiveMinBytes: 16 * 1024,
@@ -45,46 +50,23 @@ export const DEFAULT_CONFIG: Readonly<ContextVaultConfig> = Object.freeze({
   targetContextRatio: 0.6,
   projectQuotaBytes: 512 * 1024 * 1024,
   retentionDays: 30,
-  mapContextMaxBytes: 6 * 1024,
-  mapDebounceMs: 300,
-  mapGenerationRetention: 3,
-  mapQuotaBytes: 128 * 1024 * 1024,
-  mapExcludePatterns: [],
-  mapInjectionMode: "once-per-user-turn",
-  debugRequestFingerprints: false,
 });
 
+const ACTIVE_KEYS = new Set<keyof ContextVaultConfig>(Object.keys(DEFAULT_CONFIG) as Array<keyof ContextVaultConfig>);
 const ARCHIVE_POLICIES = new Set<ArchivePolicy>(["all", "errors-and-large", "off"]);
-const MAP_INJECTION_MODES = new Set<MapInjectionMode>(["off", "once-per-user-turn", "every-llm-call"]);
-
 const POSITIVE_INTEGERS = new Set<keyof ContextVaultConfig>([
   "receiptMaxBytes",
   "hotObservationCount",
   "projectQuotaBytes",
   "retentionDays",
-  "mapContextMaxBytes",
-  "mapDebounceMs",
-  "mapGenerationRetention",
-  "mapQuotaBytes",
 ]);
-
 const POSITIVE_SAFE_INTEGERS = new Set<keyof ContextVaultConfig>([
   "archiveThresholdBytes",
   "replacementThresholdBytes",
-  "mapGenerationRetention",
-  "mapQuotaBytes",
 ]);
+const BOOLEAN_OPTIONS = new Set<keyof ContextVaultConfig>(["reductionEnabled", "archiveErrorsAlways"]);
 
-const STRING_ARRAYS = new Set<keyof ContextVaultConfig>(["mapExcludePatterns"]);
-
-const BOOLEAN_OPTIONS = new Set<keyof ContextVaultConfig>([
-  "repoMapEnabled",
-  "reductionEnabled",
-  "archiveErrorsAlways",
-  "debugRequestFingerprints",
-]);
-
-export async function loadConfig(projectRoot: string): Promise<ContextVaultConfig> {
+export async function loadConfigWithDiagnostics(projectRoot: string): Promise<LoadedContextVaultConfig> {
   const configPath = join(projectRoot, ".pi", "context-vault.json");
   let override: Record<string, unknown> = {};
   try {
@@ -103,20 +85,12 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
     throw new Error("archiveThresholdBytes and replacementThresholdBytes cannot both be configured");
   }
 
-  const config = {
-    ...DEFAULT_CONFIG,
-    mapExcludePatterns: [...DEFAULT_CONFIG.mapExcludePatterns],
-  } as ContextVaultConfig;
+  const legacyPresent = Object.keys(override).some((key) => LEGACY_KEYS.has(key));
+  const config = { ...DEFAULT_CONFIG } as ContextVaultConfig;
   for (const [key, value] of Object.entries(override)) {
-    if (!(key in DEFAULT_CONFIG)) throw new Error(`Unknown Context Vault option: ${key}`);
+    if (LEGACY_KEYS.has(key)) continue;
+    if (!ACTIVE_KEYS.has(key as keyof ContextVaultConfig)) throw new Error(`Unknown Context Vault option: ${key}`);
     const typedKey = key as keyof ContextVaultConfig;
-    if (STRING_ARRAYS.has(typedKey)) {
-      if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim().length === 0)) {
-        throw new Error(`${key} must be an array of non-empty strings`);
-      }
-      config.mapExcludePatterns = [...value];
-      continue;
-    }
     if (typedKey === "archivePolicy") {
       if (typeof value !== "string" || !ARCHIVE_POLICIES.has(value as ArchivePolicy)) {
         throw new Error("archivePolicy must be one of all, errors-and-large, off");
@@ -124,17 +98,8 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
       config.archivePolicy = value as ArchivePolicy;
       continue;
     }
-    if (typedKey === "mapInjectionMode") {
-      if (typeof value !== "string" || !MAP_INJECTION_MODES.has(value as MapInjectionMode)) {
-        throw new Error("mapInjectionMode must be one of off, once-per-user-turn, every-llm-call");
-      }
-      config.mapInjectionMode = value as MapInjectionMode;
-      continue;
-    }
     if (BOOLEAN_OPTIONS.has(typedKey)) {
-      if (typeof value !== "boolean") {
-        throw new Error(`${key} must be a boolean`);
-      }
+      if (typeof value !== "boolean") throw new Error(`${key} must be a boolean`);
       (config[typedKey] as boolean) = value;
       continue;
     }
@@ -154,19 +119,15 @@ export async function loadConfig(projectRoot: string): Promise<ContextVaultConfi
     (config[typedKey] as number) = value;
   }
 
-  if ("archiveThresholdBytes" in override) {
-    config.replacementThresholdBytes = config.archiveThresholdBytes;
-  } else if ("replacementThresholdBytes" in override) {
-    config.archiveThresholdBytes = config.replacementThresholdBytes;
-  }
+  if ("archiveThresholdBytes" in override) config.replacementThresholdBytes = config.archiveThresholdBytes;
+  else if ("replacementThresholdBytes" in override) config.archiveThresholdBytes = config.replacementThresholdBytes;
   if (config.targetContextRatio >= config.softContextRatio) {
     throw new Error("targetContextRatio must be lower than softContextRatio");
   }
-  if (config.receiptMaxBytes < 512) {
-    throw new Error("receiptMaxBytes must be at least 512 bytes");
-  }
-  if (config.mapContextMaxBytes < 512) {
-    throw new Error("mapContextMaxBytes must be at least 512 bytes");
-  }
-  return config;
+  if (config.receiptMaxBytes < 512) throw new Error("receiptMaxBytes must be at least 512 bytes");
+  return { config, warnings: legacyPresent ? [LEGACY_REPO_CONFIG_WARNING] : [] };
+}
+
+export async function loadConfig(projectRoot: string): Promise<ContextVaultConfig> {
+  return (await loadConfigWithDiagnostics(projectRoot)).config;
 }
