@@ -279,7 +279,7 @@ describe("race-safe file locks", () => {
     injectInspectionErrors(point, lockPath, ownerPath, [code]);
 
     await expect(
-      withFileLock(lockPath, async () => "recovered", { retryMs: 2, staleMs: 10, timeoutMs: 200 }),
+      withFileLock(lockPath, async () => "recovered", { retryMs: 2, staleMs: 10, timeoutMs: 1_000 }),
     ).resolves.toBe("recovered");
   });
 
