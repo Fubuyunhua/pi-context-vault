@@ -25,6 +25,7 @@ it("keeps English and Chinese README migration and Vault surfaces aligned", () =
     for (const token of [
       "pi-repo-context",
       "pi install git:github.com/Fubuyunhua/pi-repo-context@v0.1.0",
+      "pi install git:github.com/Fubuyunhua/pi-context-vault@v0.3.0",
       "repo_context_search",
       "repo_context_status",
       "context_vault_repo_map",
@@ -53,6 +54,12 @@ it("keeps English and Chinese README migration and Vault surfaces aligned", () =
       expect(text, `README missing ${token}`).toContain(token);
     }
   }
+  expect(english).toContain("verify that the reviewed immutable `v0.3.0` tag exists");
+  expect(english).toContain("If the reviewed immutable `v0.1.0` tag exists");
+  expect(english).toContain("If the tag is not present, use a reviewed local checkout");
+  expect(chinese).toContain("请先验证经过审核的不可变 `v0.3.0` tag 存在");
+  expect(chinese).toContain("如果经过审核的不可变 `v0.1.0` tag 存在");
+  expect(chinese).toContain("如果该 tag 不存在，请改用经过审核的本地 checkout");
 });
 
 it("publishes only Vault-owned source and has no repository runtime dependency", () => {
@@ -109,15 +116,23 @@ it("publishes only Vault-owned source and has no repository runtime dependency",
   }
 });
 
-it("keeps release language unpublished and the pre-split candidate frozen", () => {
+it("keeps the final release record stable and the pre-split candidate frozen", () => {
   expect(() => readFileSync("docs/releases/v0.2.0.md", "utf8")).toThrow();
   const legacy = readFileSync("docs/legacy/releases/v0.2.0-rc.md", "utf8");
   expect(legacy).toContain("RELEASE CANDIDATE / UNTAGGED");
   expect(readFileSync("docs/legacy/README.md", "utf8")).toContain("releases/v0.2.0-rc.md");
 
-  const candidate = readFileSync("docs/releases/v0.3.0.md", "utf8");
-  expect(candidate).toContain("RELEASE CANDIDATE / UNPUBLISHED");
-  expect(candidate).not.toMatch(/^Release date:/mu);
+  const release = readFileSync("docs/releases/v0.3.0.md", "utf8");
+  expect(release).toMatch(/^# pi-context-vault v0\.3\.0$/mu);
+  expect(release).toMatch(/^Release date: 2026-08-28$/mu);
+  expect(release).toContain("records the approved v0.3.0 payload");
+  expect(release).toContain("presence of the immutable `v0.3.0` tag in the upstream repository");
+  expect(release).toContain("source of truth for release availability");
+  expect(release).toContain("this document does not create or publish a tag, package, or release");
+  expect(release).toContain("Verify that the reviewed immutable `v0.3.0` tag exists");
+  expect(release).toContain("If that tag is not present, use a reviewed local checkout");
+  expect(release).not.toContain("RELEASE CANDIDATE / UNPUBLISHED");
+  expect(release).not.toContain("- [ ]");
   for (const token of [
     "0.3.0",
     "7062879b9a3bf3ccc491ea73824fd6abeb41a6a6",
@@ -132,9 +147,10 @@ it("keeps release language unpublished and the pre-split candidate frozen", () =
     "repo_context_status",
     ".pi/context-vault.json",
     "extension ID/UI key",
+    "Validation evidence and publication procedure",
     ...REBUILD_MIGRATION_MESSAGE.split("\n"),
     ...LEGACY_REPO_CONFIG_KEYS,
   ]) {
-    expect(candidate, `release candidate missing ${token}`).toContain(token);
+    expect(release, `release record missing ${token}`).toContain(token);
   }
 });

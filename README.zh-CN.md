@@ -9,17 +9,16 @@ Context Vault 会归档符合条件的文本 Tool Result，把较大或较旧结
 仓库索引、Git freshness、Java/TypeScript 分析、搜索、Graph v1 和 Resolver v1 现在属于
 [`pi-repo-context`](https://github.com/Fubuyunhua/pi-repo-context)。
 
-拆分后的 Repo Context 仓库已经存在，但本文不宣称任何拆分版本已经发布。只有经过审核的不可变 `v0.1.0` tag 存在后，
-才可以安装：
+如果经过审核的不可变 `v0.1.0` tag 存在于 Repo Context 上游仓库中，请先验证其存在，再使用以下精确安装命令：
 
 ```bash
 pi install git:github.com/Fubuyunhua/pi-repo-context@v0.1.0
 ```
 
-在该 tag 存在之前，不得把这条命令视为可用安装方式。该条件发布成立后，请使用 `repo_context_search` 和
-`.pi/repo-context.json`。`context_vault_repo_map` → `repo_context_search` 是仅限 Repo Context `0.1.x` 的
-deprecated alias；Repo Context 计划在 `0.2.0` 删除该 alias。Context Vault 不注册这两个仓库 Tool。Repo Context
-绝不会读取旧 `.pi/context-vault.json`；受支持的配置必须手工复制。新派生状态位于：
+从该 tag 安装后，请使用 `repo_context_search` 和 `.pi/repo-context.json`。`context_vault_repo_map` →
+`repo_context_search` 是仅限 Repo Context `0.1.x` 的 deprecated alias；Repo Context 计划在 `0.2.0` 删除该 alias。
+Context Vault 不注册这两个仓库 Tool。Repo Context 绝不会读取旧 `.pi/context-vault.json`；受支持的配置必须手工复制。
+新派生状态位于：
 
 ```text
 ${PI_CODING_AGENT_DIR}/pi-repo-context/projects/<projectId>
@@ -55,7 +54,13 @@ telemetry state。
 - Node.js `>=22.19.0`
 - 已用 Pi `0.84.1` 测试
 
-正式发布时应从经过审核的不可变 tag 安装。本地开发：
+安装 v0.3.0 前，请先验证经过审核的不可变 `v0.3.0` tag 存在于上游仓库中，然后使用：
+
+```bash
+pi install git:github.com/Fubuyunhua/pi-context-vault@v0.3.0
+```
+
+如果该 tag 不存在，请改用经过审核的本地 checkout 进行开发：
 
 ```bash
 git clone https://github.com/Fubuyunhua/pi-context-vault.git
