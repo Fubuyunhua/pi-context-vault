@@ -127,9 +127,16 @@ Sol/medium 40 runs 的 provider transport errors：
 5. P1：处理 java-parser 依赖审计项
 6. P2：上述修复后只跑 8 个假设驱动模型实验，不立即重跑 40/80 runs
 
+## GitHub Issues
+
+- Context Vault multi-keyword search / search→get handoff: [pi-context-vault#53](https://github.com/Fubuyunhua/pi-context-vault/issues/53)
+- Repo Context portable read-error fixtures: [pi-repo-context#3](https://github.com/Fubuyunhua/pi-repo-context/issues/3)
+- Repo Context file-lock timing stability: [pi-repo-context#4](https://github.com/Fubuyunhua/pi-repo-context/issues/4)
+- Repo Context dependency audit: [pi-repo-context#5](https://github.com/Fubuyunhua/pi-repo-context/issues/5)
+
 ## 证据来源
 
-- `diagnostics/out/diagnostic-evidence.json`
+- `docs/diagnostics/PLUGIN-DIAG-01-evidence.json`
 - `diagnostics/out/vault-search-repro.json`
 - EXP-MEM-02 `_work/*/result.json`
 - 5.6-sol 四臂 `results-*.json` / `transcript-*.json`
