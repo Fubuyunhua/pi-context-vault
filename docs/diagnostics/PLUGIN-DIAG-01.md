@@ -148,6 +148,12 @@ Sol/medium 40 runs 的 provider transport errors：
 
 既有非基础设施 runs 中，repo-only 使用 canonical search 6/9，both 仅 1/9；这不是因果证明，但与工具面缺少引导、双装工具选择增多构成需要验证的采用信号。
 
+## 工具错误语义缺陷
+
+两个插件都通过 return `{ isError:true }` 表达工具失败，但 Pi agent-core 的成功分支会无条件生成 `isError:false`，只有 `execute()` 抛异常才生成错误 tool result。现有插件测试直接调用 execute 并检查返回对象，因此没有覆盖真实 wrapped runtime。
+
+影响：无效 Observation ID、存储错误、Repo index/query unavailable 等状态可能被 Pi 记录为普通成功调用。Repo Context 需要进一步区分“硬失败（throw）”与“可用但 stale/degraded 的正常证据”。
+
 ## 评测 harness 修正
 
 继续诊断发现：
@@ -163,8 +169,10 @@ Sol/medium 40 runs 的 provider transport errors：
 ## GitHub Issues
 
 - Context Vault multi-keyword search / search→get handoff: [pi-context-vault#53](https://github.com/Fubuyunhua/pi-context-vault/issues/53)
+- Context Vault wrapped tool error semantics: [pi-context-vault#54](https://github.com/Fubuyunhua/pi-context-vault/issues/54)
 - Repo Context ranking noise: [pi-repo-context#6](https://github.com/Fubuyunhua/pi-repo-context/issues/6)
 - Repo Context tool guidance/deprecated alias: [pi-repo-context#7](https://github.com/Fubuyunhua/pi-repo-context/issues/7)
+- Repo Context wrapped tool error semantics: [pi-repo-context#8](https://github.com/Fubuyunhua/pi-repo-context/issues/8)
 - Repo Context portable read-error fixtures: [pi-repo-context#3](https://github.com/Fubuyunhua/pi-repo-context/issues/3)
 - Repo Context file-lock timing stability: [pi-repo-context#4](https://github.com/Fubuyunhua/pi-repo-context/issues/4)
 - Repo Context dependency audit: [pi-repo-context#5](https://github.com/Fubuyunhua/pi-repo-context/issues/5)
