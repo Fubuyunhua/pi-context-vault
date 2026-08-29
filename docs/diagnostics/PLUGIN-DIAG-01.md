@@ -148,6 +148,12 @@ Sol/medium 40 runs 的 provider transport errors：
 
 既有非基础设施 runs 中，repo-only 使用 canonical search 6/9，both 仅 1/9；这不是因果证明，但与工具面缺少引导、双装工具选择增多构成需要验证的采用信号。
 
+## Vault search 规模性能
+
+确定性 100/500/1000 Observation benchmark 显示每次 search 都逐条读取 artifact，延迟近似线性；1,000 条时 miss/最旧命中/最新命中均约 1.17–1.24 秒。最新命中同样扫描全库，因为结果未达到默认 limit=10。
+
+建议建立按 metadata log generation/content hash 失效的 token/line 索引或缓存，并记录 candidates scanned、bytes read、cache hit 与 duration。
+
 ## 工具错误语义缺陷
 
 两个插件都通过 return `{ isError:true }` 表达工具失败，但 Pi agent-core 的成功分支会无条件生成 `isError:false`，只有 `execute()` 抛异常才生成错误 tool result。现有插件测试直接调用 execute 并检查返回对象，因此没有覆盖真实 wrapped runtime。
@@ -170,6 +176,7 @@ Sol/medium 40 runs 的 provider transport errors：
 
 - Context Vault multi-keyword search / search→get handoff: [pi-context-vault#53](https://github.com/Fubuyunhua/pi-context-vault/issues/53)
 - Context Vault wrapped tool error semantics: [pi-context-vault#54](https://github.com/Fubuyunhua/pi-context-vault/issues/54)
+- Context Vault search full-scan performance: [pi-context-vault#55](https://github.com/Fubuyunhua/pi-context-vault/issues/55)
 - Repo Context ranking noise: [pi-repo-context#6](https://github.com/Fubuyunhua/pi-repo-context/issues/6)
 - Repo Context tool guidance/deprecated alias: [pi-repo-context#7](https://github.com/Fubuyunhua/pi-repo-context/issues/7)
 - Repo Context wrapped tool error semantics: [pi-repo-context#8](https://github.com/Fubuyunhua/pi-repo-context/issues/8)
@@ -184,6 +191,7 @@ Sol/medium 40 runs 的 provider transport errors：
 - `docs/diagnostics/PLUGIN-DIAG-01-vault-query-replay.json`
 - `docs/diagnostics/PLUGIN-DIAG-01-repo-adoption.json`
 - `docs/diagnostics/PLUGIN-DIAG-01-tool-surface.json`
+- `docs/diagnostics/PLUGIN-DIAG-01-vault-search-scale.json`
 - EXP-MEM-02 `_work/*/result.json`
 - 5.6-sol 四臂 `results-*.json` / `transcript-*.json`
 - 两个插件本地及 Linux-root 容器测试输出

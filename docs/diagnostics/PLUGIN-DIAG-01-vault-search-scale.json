@@ -1,0 +1,59 @@
+{
+  "generatedAt": "2026-08-29T15:50:05.914Z",
+  "rows": [
+    {
+      "count": 100,
+      "kind": "miss",
+      "results": 0,
+      "durationMs": 131.46
+    },
+    {
+      "count": 100,
+      "kind": "oldest",
+      "results": 1,
+      "durationMs": 118.31
+    },
+    {
+      "count": 100,
+      "kind": "newest",
+      "results": 1,
+      "durationMs": 145.11
+    },
+    {
+      "count": 500,
+      "kind": "miss",
+      "results": 0,
+      "durationMs": 619.96
+    },
+    {
+      "count": 500,
+      "kind": "oldest",
+      "results": 1,
+      "durationMs": 622.69
+    },
+    {
+      "count": 500,
+      "kind": "newest",
+      "results": 1,
+      "durationMs": 624.56
+    },
+    {
+      "count": 1000,
+      "kind": "miss",
+      "results": 0,
+      "durationMs": 1202.22
+    },
+    {
+      "count": 1000,
+      "kind": "oldest",
+      "results": 1,
+      "durationMs": 1236.23
+    },
+    {
+      "count": 1000,
+      "kind": "newest",
+      "results": 1,
+      "durationMs": 1166.03
+    }
+  ]
+}
