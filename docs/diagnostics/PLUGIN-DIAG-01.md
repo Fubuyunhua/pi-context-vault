@@ -160,6 +160,10 @@ Sol/medium 40 runs 的 provider transport errors：
 
 影响：无效 Observation ID、存储错误、Repo index/query unavailable 等状态可能被 Pi 记录为普通成功调用。Repo Context 需要进一步区分“硬失败（throw）”与“可用但 stale/degraded 的正常证据”。
 
+## Model-visible status 路径暴露
+
+真实 lifecycle 复现显示，Vault status 的 2/2 路径字段和 Repo Context status 的 3/3 路径字段均为绝对路径，并包含私有 agent/home 目录段。建议拆分 model-safe status 与用户显式 doctor/debug 输出，至少从模型可见 content 移除 `stateRoot/mapRoot`。
+
 ## 评测 harness 修正
 
 继续诊断发现：
@@ -177,9 +181,11 @@ Sol/medium 40 runs 的 provider transport errors：
 - Context Vault multi-keyword search / search→get handoff: [pi-context-vault#53](https://github.com/Fubuyunhua/pi-context-vault/issues/53)
 - Context Vault wrapped tool error semantics: [pi-context-vault#54](https://github.com/Fubuyunhua/pi-context-vault/issues/54)
 - Context Vault search full-scan performance: [pi-context-vault#55](https://github.com/Fubuyunhua/pi-context-vault/issues/55)
+- Context Vault status path privacy: [pi-context-vault#56](https://github.com/Fubuyunhua/pi-context-vault/issues/56)
 - Repo Context ranking noise: [pi-repo-context#6](https://github.com/Fubuyunhua/pi-repo-context/issues/6)
 - Repo Context tool guidance/deprecated alias: [pi-repo-context#7](https://github.com/Fubuyunhua/pi-repo-context/issues/7)
 - Repo Context wrapped tool error semantics: [pi-repo-context#8](https://github.com/Fubuyunhua/pi-repo-context/issues/8)
+- Repo Context status path privacy: [pi-repo-context#9](https://github.com/Fubuyunhua/pi-repo-context/issues/9)
 - Repo Context portable read-error fixtures: [pi-repo-context#3](https://github.com/Fubuyunhua/pi-repo-context/issues/3)
 - Repo Context file-lock timing stability: [pi-repo-context#4](https://github.com/Fubuyunhua/pi-repo-context/issues/4)
 - Repo Context dependency audit: [pi-repo-context#5](https://github.com/Fubuyunhua/pi-repo-context/issues/5)
@@ -192,6 +198,7 @@ Sol/medium 40 runs 的 provider transport errors：
 - `docs/diagnostics/PLUGIN-DIAG-01-repo-adoption.json`
 - `docs/diagnostics/PLUGIN-DIAG-01-tool-surface.json`
 - `docs/diagnostics/PLUGIN-DIAG-01-vault-search-scale.json`
+- `docs/diagnostics/PLUGIN-DIAG-01-status-paths.json`
 - EXP-MEM-02 `_work/*/result.json`
 - 5.6-sol 四臂 `results-*.json` / `transcript-*.json`
 - 两个插件本地及 Linux-root 容器测试输出
