@@ -1,0 +1,22 @@
+{
+  "generatedAt": "2026-08-29T18:39:27.467Z",
+  "vault": {
+    "name": "vault",
+    "contentBytes": 1861,
+    "exposedPathFieldCount": 2,
+    "exposedAbsolutePathCount": 2,
+    "exposesPrivateHomeSegment": true,
+    "exposedPathFields": [
+      "project.root",
+      "project.stateRoot"
+    ]
+  },
+  "repo": {
+    "name": "repo",
+    "contentBytes": 1625,
+    "exposedPathFieldCount": 0,
+    "exposedAbsolutePathCount": 0,
+    "exposesPrivateHomeSegment": false,
+    "exposedPathFields": []
+  }
+}

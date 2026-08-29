@@ -1,0 +1,96 @@
+{
+  "repo": "vault",
+  "repository": "Fubuyunhua/pi-context-vault",
+  "head": "7dda0d30a95be89a98e21bba0e929ce3c7ec5051",
+  "startedAt": "2026-08-29T18:26:56.118Z",
+  "finishedAt": "2026-08-29T18:31:37.618Z",
+  "consumedClosedIssues": [
+    53,
+    54
+  ],
+  "sourceChangedFiles": [
+    "biome.json",
+    "scripts/package-smoke.mjs",
+    "src/extension.ts",
+    "src/observations/virtualization.ts",
+    "tests/extension.test.ts",
+    "tests/observation-virtualization.test.ts"
+  ],
+  "steps": [
+    {
+      "name": "npm-ci",
+      "command": "npm ci",
+      "required": true,
+      "durationMs": 85967,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "project-ci",
+      "command": "npm run ci",
+      "required": true,
+      "durationMs": 147063,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "production-audit",
+      "command": "npm audit --omit=dev --json",
+      "required": false,
+      "durationMs": 1152,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "search-repro",
+      "command": "bun run diagnostics/repro-vault-search.ts",
+      "required": true,
+      "durationMs": 262,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "search-scale",
+      "command": "bun run diagnostics/benchmark-vault-search.ts",
+      "required": true,
+      "durationMs": 42957,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "search-duplicates",
+      "command": "bun run diagnostics/repro-vault-search-duplicates.ts",
+      "required": true,
+      "durationMs": 557,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "quota",
+      "command": "bun run diagnostics/repro-vault-quota.ts",
+      "required": true,
+      "durationMs": 1257,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    }
+  ],
+  "worktreeDirtyAfter": false,
+  "passed": true,
+  "criticalIssues": [
+    53,
+    55,
+    58
+  ],
+  "closedCriticalIssues": [
+    53
+  ],
+  "modelRetestReady": false,
+  "runDirectory": "diagnostics/watch/runs/2026-08-29T18-26-58-336Z-vault-7dda0d30a95b"
+}

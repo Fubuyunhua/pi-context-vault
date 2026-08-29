@@ -1,0 +1,81 @@
+{
+  "repo": "repo",
+  "repository": "Fubuyunhua/pi-repo-context",
+  "head": "162e4a22c3c4f4333d0c012ffef2c36fb5f34fa5",
+  "startedAt": "2026-08-29T18:31:54.549Z",
+  "finishedAt": "2026-08-29T18:35:52.434Z",
+  "consumedClosedIssues": [
+    3,
+    4,
+    5,
+    9
+  ],
+  "sourceChangedFiles": [
+    "biome.json",
+    "package-lock.json",
+    "package.json",
+    "scripts/package-smoke.mjs",
+    "src/extension.ts",
+    "src/repo-map/graph.ts",
+    "src/repo-map/index.ts",
+    "src/repo-map/java.ts",
+    "src/repo-map/runtime.ts",
+    "src/repo-map/snapshot.ts",
+    "src/state/atomic.ts",
+    "tests/extension.test.ts",
+    "tests/file-lock.test.ts",
+    "tests/java-repo-map.test.ts",
+    "tests/legacy-state-isolation.test.ts",
+    "tests/package-boundary.test.ts",
+    "tests/repo-map-runtime.test.ts",
+    "tests/repo-map.test.ts"
+  ],
+  "steps": [
+    {
+      "name": "npm-ci",
+      "command": "npm ci",
+      "required": true,
+      "durationMs": 82734,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "project-ci",
+      "command": "npm run ci",
+      "required": true,
+      "durationMs": 72385,
+      "exitCode": 1,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "production-audit",
+      "command": "npm audit --omit=dev --json",
+      "required": false,
+      "durationMs": 4137,
+      "exitCode": 1,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "startup-benchmark",
+      "command": "bun run diagnostics/benchmark-repo-startup.ts",
+      "required": true,
+      "durationMs": 74402,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    }
+  ],
+  "worktreeDirtyAfter": false,
+  "passed": false,
+  "criticalIssues": [
+    6,
+    7,
+    10
+  ],
+  "closedCriticalIssues": [],
+  "modelRetestReady": false,
+  "runDirectory": "diagnostics/watch/runs/2026-08-29T18-31-58-731Z-repo-162e4a22c3c4"
+}
