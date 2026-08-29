@@ -7,6 +7,7 @@ export const MAX_QUERY_LENGTH = 512;
 export const MAX_RETRIEVAL_BYTES = 32 * 1024;
 export const MAX_SEARCH_RESULTS = 20;
 export const MAX_SEARCH_TERMS = 32;
+const MAX_RECENT_OBSERVATION_IDS = 5;
 
 export type ObservationSearchMatchMode = "terms" | "phrase";
 
@@ -69,6 +70,8 @@ export interface ObservationGetResult {
 export interface ObservationSearchHit {
   observationId: string;
   observation: ArtifactMetadata;
+  occurrenceCount: number;
+  recentObservationIds: string[];
   score: number;
   matchedTerms: string[];
   matches: Array<{ line: number; text: string }>;
@@ -453,9 +456,29 @@ export class ObservationRuntime {
     const linePattern =
       matchMode === "terms" ? separatorNormalizedPattern(terms) : literalAnyCaseInsensitivePattern([query]);
     const ranked: Array<{ hit: ObservationSearchHit; relevance: number; recency: number }> = [];
+    const artifacts = new Map<
+      string,
+      { metadata: ArtifactMetadata; occurrenceCount: number; recentObservationIds: string[] }
+    >();
     const entries = (await this.#store.listMetadata()).reverse();
-    for (const [recency, metadata] of entries.entries()) {
+    for (const metadata of entries) {
       if (params.toolName !== undefined && metadata.toolName !== params.toolName) continue;
+      const artifact = artifacts.get(metadata.artifactId);
+      if (artifact === undefined) {
+        artifacts.set(metadata.artifactId, {
+          metadata,
+          occurrenceCount: 1,
+          recentObservationIds: [metadata.observationId],
+        });
+        continue;
+      }
+      artifact.occurrenceCount += 1;
+      if (artifact.recentObservationIds.length < MAX_RECENT_OBSERVATION_IDS) {
+        artifact.recentObservationIds.push(metadata.observationId);
+      }
+    }
+    for (const [recency, artifact] of [...artifacts.values()].entries()) {
+      const { metadata } = artifact;
       const content = await this.#store.read(metadata.artifactId);
       const normalizedContent = matchMode === "terms" ? normalizedSearchText(content) : undefined;
       const matchedTerms =
@@ -474,6 +497,8 @@ export class ObservationRuntime {
         hit: {
           observationId,
           observation: metadata,
+          occurrenceCount: artifact.occurrenceCount,
+          recentObservationIds: artifact.recentObservationIds,
           score: relevance,
           matchedTerms,
           matches: page.matches,
