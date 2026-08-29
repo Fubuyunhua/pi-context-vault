@@ -17,6 +17,10 @@ afterEach(async () => {
 
 interface CapturedTool {
   name: string;
+  description: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
+  parameters: any;
   execute: (...args: any[]) => Promise<any>;
 }
 
@@ -122,6 +126,48 @@ describe("observation-only extension", () => {
     expect(status.details).not.toHaveProperty("repoMap");
     expect(status.details.telemetry).not.toHaveProperty("repoMapQueryCount");
     await target.handlers.get("session_shutdown")?.({}, target.ctx);
+  });
+
+  it("advertises term search metadata and supports the returned search-to-get handoff", async () => {
+    const target = await harness({ archivePolicy: "all", archiveMinBytes: 0, replacementThresholdBytes: 1 });
+    const searchTool = target.tools.get("context_vault_obs_search");
+    const getTool = target.tools.get("context_vault_obs_get");
+    expect(searchTool?.description).toContain("whitespace-separated literal terms");
+    expect(searchTool?.promptSnippet).toContain("Search archived observations");
+    expect(getTool?.promptSnippet).toContain("observation or artifact ID");
+    expect(searchTool?.promptGuidelines).toEqual([expect.stringContaining("context_vault_obs_search")]);
+    expect(searchTool?.promptGuidelines?.[0]).toContain("context_vault_obs_get");
+    expect(searchTool?.promptGuidelines?.[0]).toContain("nextAction.arguments.id");
+    expect(searchTool?.promptGuidelines?.[0]).toContain("phrase mode is only for contiguous literal matching");
+    expect(searchTool?.parameters.properties.matchMode).toMatchObject({ default: "terms" });
+    expect(searchTool?.parameters.properties.matchMode.anyOf).toEqual([
+      expect.objectContaining({ const: "terms" }),
+      expect.objectContaining({ const: "phrase" }),
+    ]);
+
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    await target.handlers.get("tool_result")?.(
+      toolEvent("bash", "parse_config appears here\nlegacy_api appears later"),
+      target.ctx,
+    );
+    const searched = await searchTool?.execute(
+      "search",
+      { query: "legacy_api parse_config" },
+      undefined,
+      undefined,
+      target.ctx,
+    );
+    expect(searched.isError).toBeUndefined();
+    const hit = searched.details.results[0];
+    expect(hit.observationId).toMatch(/^obs_[a-f0-9]{24}$/u);
+    expect(hit.nextAction).toEqual({
+      tool: "context_vault_obs_get",
+      arguments: { id: hit.observationId },
+    });
+    const fetched = await getTool?.execute("get", hit.nextAction.arguments, undefined, undefined, target.ctx);
+    expect(fetched.isError).toBeUndefined();
+    expect(fetched.details.evidence.text).toContain("parse_config");
+    expect(fetched.details.evidence.text).toContain("legacy_api");
   });
 
   it("ignores all legacy repository keys of arbitrary types and reports one fixed warning", async () => {

@@ -7,6 +7,7 @@ import {
   MAX_QUERY_LENGTH,
   MAX_RETRIEVAL_BYTES,
   MAX_SEARCH_RESULTS,
+  MAX_SEARCH_TERMS,
   ObservationRuntime,
 } from "./observations/virtualization.js";
 import { type ContextVaultConfig, loadConfigWithDiagnostics } from "./state/config.js";
@@ -256,7 +257,8 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   pi.registerTool({
     name: "context_vault_obs_get",
     label: "Get Observation",
-    description: "Retrieve bounded evidence from an archived Context Vault observation.",
+    description: "Retrieve bounded evidence from an archived Context Vault observation or artifact ID.",
+    promptSnippet: "Retrieve more bounded evidence for a Context Vault observation or artifact ID",
     parameters: Type.Object(
       {
         id: Type.String({ minLength: 28, maxLength: 64 }),
@@ -274,10 +276,21 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   pi.registerTool({
     name: "context_vault_obs_search",
     label: "Search Observations",
-    description: "Search sanitized archived observations and return bounded evidence lines.",
+    description: `Search sanitized archived observations. Default terms mode requires all (up to ${MAX_SEARCH_TERMS}) Unicode-whitespace-separated literal terms anywhere in an observation, in any order and across lines; phrase mode requires a contiguous literal match within one line. Returns at most five matching lines per observation.`,
+    promptSnippet: "Search archived observations by literal terms or a contiguous literal phrase",
+    promptGuidelines: [
+      "Use context_vault_obs_search to find archived evidence, then execute its returned nextAction by calling context_vault_obs_get with nextAction.arguments.id for more bounded evidence; phrase mode is only for contiguous literal matching.",
+    ],
     parameters: Type.Object(
       {
         query: Type.String({ minLength: 1, maxLength: MAX_QUERY_LENGTH }),
+        matchMode: Type.Optional(
+          Type.Union([Type.Literal("terms"), Type.Literal("phrase")], {
+            default: "terms",
+            description:
+              "terms requires every literal term; phrase requires a contiguous literal match within one line",
+          }),
+        ),
         toolName: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_RESULTS })),
       },

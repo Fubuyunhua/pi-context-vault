@@ -220,6 +220,137 @@ describe("observation virtualization", () => {
     expect(Buffer.byteLength(searched.results[0]?.matches[0]?.text ?? "", "utf8")).toBeLessThanOrEqual(1024);
   });
 
+  it("searches natural keyword queries with cross-line AND matching in any order", async () => {
+    const { runtime } = await setup({ threshold: 1 });
+    const archived = await runtime.virtualize({
+      toolCallId: "issue-53-fixture",
+      toolName: "read",
+      text: [
+        "The parse_config helper reads each config parser key.",
+        "It preserves value identifiers while applying env expansion.",
+        "Compatibility remains available through legacy_api.",
+      ].join("\n"),
+      isError: false,
+    });
+
+    for (const query of [
+      "parse_config legacy_api",
+      "legacy_api parse_config",
+      "config parser key value env expansion",
+    ]) {
+      const searched = await runtime.search({ query });
+      expect(searched).toMatchObject({ matchMode: "terms", truncated: false });
+      expect(searched.results.map((hit) => hit.observationId)).toEqual([archived.observationId]);
+    }
+    await expect(runtime.search({ query: "parse_config missing" })).resolves.toMatchObject({ results: [] });
+  });
+
+  it("keeps phrase mode and get(query) on contiguous literal per-line matching", async () => {
+    const { runtime } = await setup({ threshold: 1 });
+    const archived = await runtime.virtualize({
+      toolCallId: "phrase",
+      toolName: "read",
+      text: "Return an extra metadata key\nmetadata\nkey",
+      isError: false,
+    });
+
+    await expect(runtime.search({ query: "metadata key", matchMode: "phrase" })).resolves.toMatchObject({
+      matchMode: "phrase",
+      results: [{ observationId: archived.observationId, matches: [{ line: 1 }] }],
+    });
+    await expect(runtime.search({ query: "extra key", matchMode: "phrase" })).resolves.toMatchObject({ results: [] });
+    const fetched = await runtime.get({ id: archived.observationId, query: "extra key" });
+    expect(fetched.matches).toEqual([]);
+  });
+
+  it("treats punctuation and identifiers as escaped literal terms", async () => {
+    const { runtime } = await setup({ threshold: 1 });
+    const archived = await runtime.virtualize({
+      toolCallId: "literal-identifiers",
+      toolName: "bash",
+      text: "parse_config maps [legacy_api] to a+b without matching fooXbar; foo.bar is separate.",
+      isError: false,
+    });
+
+    const searched = await runtime.search({ query: "parse_config [legacy_api] a+b foo.bar" });
+    expect(searched.results.map((hit) => hit.observationId)).toEqual([archived.observationId]);
+    await expect(runtime.search({ query: "a*b" })).resolves.toMatchObject({ results: [] });
+  });
+
+  it("splits terms on Unicode whitespace and case-folds astral Unicode literals", async () => {
+    const { runtime } = await setup({ threshold: 1 });
+    const archived = await runtime.virtualize({
+      toolCallId: "unicode-terms",
+      toolName: "read",
+      text: "astral identifier 𐐨\naccented CAFÉ marker",
+      isError: false,
+    });
+
+    const searched = await runtime.search({ query: "𐐀\u2003café" });
+    expect(searched.results.map((hit) => hit.observationId)).toEqual([archived.observationId]);
+    expect(searched.results[0]?.matches.map((match) => match.line)).toEqual([1, 2]);
+  });
+
+  it("uses an artifact ID for a retrievable legacy observation next action", async () => {
+    const { runtime, store } = await setup({ threshold: 1 });
+    const legacy = await store.archive({
+      observationId: "legacy-observation-id",
+      toolName: "read",
+      sessionId: "legacy-session",
+      content: "legacy searchable evidence",
+    });
+
+    const searched = await runtime.search({ query: "searchable legacy" });
+    const hit = searched.results[0];
+    expect(hit).toMatchObject({
+      observationId: "legacy-observation-id",
+      observation: { observationId: "legacy-observation-id" },
+      nextAction: { tool: "context_vault_obs_get", arguments: { id: legacy.artifactId } },
+    });
+    if (hit === undefined) throw new Error("expected legacy search hit");
+    const fetched = await runtime.get(hit.nextAction.arguments);
+    expect(fetched.evidence?.text).toBe("legacy searchable evidence");
+  });
+
+  it("bounds terms and match lines while preserving observation truncation and get handoff", async () => {
+    const { runtime } = await setup({ threshold: 1 });
+    const terms = Array.from({ length: 32 }, (_, index) => `t${index}`);
+    const first = await runtime.virtualize({
+      toolCallId: "bounded-first",
+      toolName: "read",
+      text: `${terms.join(" ")}\n${Array.from({ length: 6 }, (_, index) => `t0 line ${index}`).join("\n")}`,
+      isError: false,
+    });
+    const newest = await runtime.virtualize({
+      toolCallId: "bounded-newest",
+      toolName: "read",
+      text: terms.join(" "),
+      isError: false,
+    });
+
+    const bounded = await runtime.search({ query: terms.join(" "), limit: 1 });
+    expect(bounded).toMatchObject({ matchMode: "terms", truncated: true });
+    expect(bounded.results[0]).toMatchObject({
+      observationId: newest.observationId,
+      observation: { observationId: newest.observationId },
+      matchesTruncated: false,
+      nextAction: { tool: "context_vault_obs_get", arguments: { id: newest.observationId } },
+    });
+    expect(bounded.results[0]?.nextAction.arguments).not.toHaveProperty("query");
+
+    const lineBound = await runtime.search({ query: "t0", limit: 2 });
+    const firstHit = lineBound.results.find((hit) => hit.observationId === first.observationId);
+    expect(firstHit?.matches).toHaveLength(5);
+    expect(firstHit?.matchesTruncated).toBe(true);
+
+    const thirtyThreeTerms = `${terms.join(" ")} t32`;
+    await expect(runtime.search({ query: thirtyThreeTerms })).rejects.toThrow("32 terms");
+    await expect(runtime.search({ query: thirtyThreeTerms, matchMode: "phrase" })).resolves.toMatchObject({
+      matchMode: "phrase",
+    });
+    await expect(runtime.search({ query: "needle", matchMode: "invalid" as never })).rejects.toThrow("matchMode");
+  });
+
   it("archives below-threshold evidence without replacement and returns defensive status", async () => {
     const { runtime } = await setup({ threshold: 100 });
     const result = await runtime.virtualize({ toolCallId: "small", toolName: "read", text: "small", isError: false });

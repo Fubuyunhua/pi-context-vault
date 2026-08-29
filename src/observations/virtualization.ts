@@ -6,6 +6,12 @@ import type { Telemetry } from "../telemetry.js";
 export const MAX_QUERY_LENGTH = 512;
 export const MAX_RETRIEVAL_BYTES = 32 * 1024;
 export const MAX_SEARCH_RESULTS = 20;
+export const MAX_SEARCH_TERMS = 32;
+
+export type ObservationSearchMatchMode = "terms" | "phrase";
+
+const CANONICAL_OBSERVATION_ID_PATTERN = /^obs_[a-f0-9]{24}$/;
+const ARTIFACT_ID_PATTERN = /^[a-f0-9]{64}$/;
 
 export interface ObservationRuntimeStatus {
   projectId: string;
@@ -60,9 +66,21 @@ export interface ObservationGetResult {
   truncated?: boolean;
 }
 
+export interface ObservationSearchHit {
+  observationId: string;
+  observation: ArtifactMetadata;
+  matches: Array<{ line: number; text: string }>;
+  matchesTruncated: boolean;
+  nextAction: {
+    tool: "context_vault_obs_get";
+    arguments: { id: string };
+  };
+}
+
 export interface ObservationSearchResult {
   query: string;
-  results: Array<{ observation: ArtifactMetadata; matches: Array<{ line: number; text: string }> }>;
+  matchMode: ObservationSearchMatchMode;
+  results: ObservationSearchHit[];
   truncated: boolean;
 }
 
@@ -92,8 +110,16 @@ function clipped(value: string, maxBytes: number): string {
   return byteSlice(value, 0, maxBytes).text;
 }
 
+function escapedLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function literalCaseInsensitivePattern(query: string): RegExp {
-  return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "iu");
+  return new RegExp(escapedLiteral(query), "iu");
+}
+
+function literalAnyCaseInsensitivePattern(terms: string[]): RegExp {
+  return new RegExp(terms.map(escapedLiteral).join("|"), "iu");
 }
 
 function matchingExcerpt(line: string, pattern: RegExp, maxBytes: number): string | undefined {
@@ -310,7 +336,7 @@ export class ObservationRuntime {
   }
 
   async get(params: { id: string; query?: string; offset?: number; limit?: number }): Promise<ObservationGetResult> {
-    if (!/^obs_[a-f0-9]{24}$/.test(params.id) && !/^[a-f0-9]{64}$/.test(params.id)) {
+    if (!CANONICAL_OBSERVATION_ID_PATTERN.test(params.id) && !ARTIFACT_ID_PATTERN.test(params.id)) {
       throw new Error("id must be a Context Vault observation or artifact ID");
     }
     const query = validateQuery(params.query);
@@ -320,7 +346,7 @@ export class ObservationRuntime {
     if (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit <= 0)) {
       throw new Error("limit must be a positive integer");
     }
-    const metadata = /^[a-f0-9]{64}$/.test(params.id)
+    const metadata = ARTIFACT_ID_PATTERN.test(params.id)
       ? (await this.#store.listMetadata()).find((entry) => entry.artifactId === params.id)
       : await this.#store.getMetadata(params.id);
     if (metadata === undefined) throw new Error(`Observation not found: ${params.id}`);
@@ -353,9 +379,18 @@ export class ObservationRuntime {
     return { observation: metadata, query, matches: page.matches, truncated: page.truncated };
   }
 
-  async search(params: { query: string; toolName?: string; limit?: number }): Promise<ObservationSearchResult> {
+  async search(params: {
+    query: string;
+    matchMode?: ObservationSearchMatchMode;
+    toolName?: string;
+    limit?: number;
+  }): Promise<ObservationSearchResult> {
     const query = validateQuery(params.query);
     if (query === undefined) throw new Error("query is required");
+    const matchMode = params.matchMode ?? "terms";
+    if (matchMode !== "terms" && matchMode !== "phrase") {
+      throw new Error("matchMode must be one of terms, phrase");
+    }
     if (params.toolName !== undefined && (params.toolName.length === 0 || params.toolName.length > 128)) {
       throw new Error("toolName must contain between 1 and 128 characters");
     }
@@ -363,17 +398,31 @@ export class ObservationRuntime {
       throw new Error("limit must be a positive integer");
     }
     const limit = Math.min(params.limit ?? 10, MAX_SEARCH_RESULTS);
-    const pattern = literalCaseInsensitivePattern(query);
-    const results: Array<{ observation: ArtifactMetadata; matches: Array<{ line: number; text: string }> }> = [];
+    const terms = matchMode === "terms" ? query.split(/\s+/u) : [query];
+    if (matchMode === "terms" && terms.length > MAX_SEARCH_TERMS) {
+      throw new Error(`query must not contain more than ${MAX_SEARCH_TERMS} terms in terms mode`);
+    }
+    const patterns = terms.map(literalCaseInsensitivePattern);
+    const linePattern = literalAnyCaseInsensitivePattern(terms);
+    const results: ObservationSearchHit[] = [];
     const entries = (await this.#store.listMetadata()).reverse();
     for (const metadata of entries) {
       if (params.toolName !== undefined && metadata.toolName !== params.toolName) continue;
       const content = await this.#store.read(metadata.artifactId);
-      const matches = matchingLines(content, pattern, 0, 5, 1024).matches;
-      if (matches.length === 0) continue;
-      if (results.length >= limit) return { query, results, truncated: true };
-      results.push({ observation: metadata, matches });
+      if (matchMode === "terms" && !patterns.every((pattern) => pattern.test(content))) continue;
+      const page = matchingLines(content, linePattern, 0, 5, 1024);
+      if (page.matches.length === 0) continue;
+      if (results.length >= limit) return { query, matchMode, results, truncated: true };
+      const observationId = metadata.observationId;
+      const retrievalId = CANONICAL_OBSERVATION_ID_PATTERN.test(observationId) ? observationId : metadata.artifactId;
+      results.push({
+        observationId,
+        observation: metadata,
+        matches: page.matches,
+        matchesTruncated: page.truncated,
+        nextAction: { tool: "context_vault_obs_get", arguments: { id: retrievalId } },
+      });
     }
-    return { query, results, truncated: false };
+    return { query, matchMode, results, truncated: false };
   }
 }
