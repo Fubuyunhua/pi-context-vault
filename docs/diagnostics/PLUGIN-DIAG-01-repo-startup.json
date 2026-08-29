@@ -1,0 +1,31 @@
+{
+  "generatedAt": "2026-08-29T15:59:36.323Z",
+  "rows": [
+    {
+      "name": "plugin-repo",
+      "indexedFiles": 60,
+      "generationBytes": 355882,
+      "coldMs": 599.53,
+      "warmMs": 528.82,
+      "generation": 1,
+      "freshness": "fresh",
+      "dirtyFiles": 0,
+      "pendingFiles": 0,
+      "coldWorkspaceRevision": "4888a44db845098509b4108f7c53e9b3661e7142a2f8c18f2e759f7845b2c3a6",
+      "warmWorkspaceRevisionStable": true
+    },
+    {
+      "name": "experiment-workspace",
+      "indexedFiles": 3605,
+      "generationBytes": 37471413,
+      "coldMs": 22562.69,
+      "warmMs": 34994.52,
+      "generation": 1,
+      "freshness": "fresh",
+      "dirtyFiles": 0,
+      "pendingFiles": 0,
+      "coldWorkspaceRevision": "d910fa0a7cdc10b707b8b7d5ae89a3559d77ebddb0dc394d514afc925b4b68d3",
+      "warmWorkspaceRevisionStable": true
+    }
+  ]
+}
