@@ -99,7 +99,7 @@ Tool results whose names start with `context_vault_` or `repo_context_` are inte
 | Tool | Purpose |
 | --- | --- |
 | `context_vault_obs_get` | Retrieve bounded evidence from an Observation or artifact ID; an optional query remains a contiguous literal per-line match. |
-| `context_vault_obs_search` | Search sanitized archived Observations. The default `terms` mode requires every Unicode-whitespace-separated literal term anywhere in an Observation (any order, across lines); `phrase` mode requires one contiguous literal per-line match. Results include `observationId` and an executable `context_vault_obs_get` next action whose `arguments.id` is always retrievable. |
+| `context_vault_obs_search` | Search sanitized archived Observations. The default `terms` mode ranks partial matches, normalizes common code-identifier separators (`_`, `-`, `.`, `/`, `\\`), and reports a relevance score; `phrase` mode requires one contiguous literal per-line match. Results include `observationId` and an executable `context_vault_obs_get` next action whose `arguments.id` is always retrievable. |
 | `context_vault_status` | Report Vault-only lifecycle, storage, reduction, warning, and telemetry state. |
 
 ## Command

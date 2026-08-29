@@ -260,7 +260,9 @@ describe("observation-only extension", () => {
     const target = await harness({ archivePolicy: "all", archiveMinBytes: 0, replacementThresholdBytes: 1 });
     const searchTool = target.tools.get("context_vault_obs_search");
     const getTool = target.tools.get("context_vault_obs_get");
-    expect(searchTool?.description).toContain("whitespace-separated literal terms");
+    expect(searchTool?.description).toContain("ranks observations that match at least one");
+    expect(searchTool?.description).toContain("code-identifier separators");
+    expect(searchTool?.description).toContain("relevance score");
     expect(searchTool?.promptSnippet).toContain("Search archived observations");
     expect(getTool?.promptSnippet).toContain("observation or artifact ID");
     expect(searchTool?.promptGuidelines).toEqual([expect.stringContaining("context_vault_obs_search")]);
@@ -287,7 +289,11 @@ describe("observation-only extension", () => {
     );
     expect(searched.isError).toBeUndefined();
     const hit = searched.details.results[0];
-    expect(hit.observationId).toMatch(/^obs_[a-f0-9]{24}$/u);
+    expect(hit).toMatchObject({
+      observationId: expect.stringMatching(/^obs_[a-f0-9]{24}$/u),
+      score: 1,
+      matchedTerms: ["legacy_api", "parse_config"],
+    });
     expect(hit.nextAction).toEqual({
       tool: "context_vault_obs_get",
       arguments: { id: hit.observationId },
