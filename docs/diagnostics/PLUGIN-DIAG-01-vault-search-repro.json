@@ -1,0 +1,48 @@
+{
+  "archivedObservationId": "obs_487c91852d5349c6bce57fe8",
+  "rows": [
+    {
+      "query": "parse_config legacy_api",
+      "results": 0,
+      "observationIds": [],
+      "firstMatches": []
+    },
+    {
+      "query": "config parser key value env expansion",
+      "results": 0,
+      "observationIds": [],
+      "firstMatches": []
+    },
+    {
+      "query": "metadata key",
+      "results": 1,
+      "observationIds": [
+        "obs_487c91852d5349c6bce57fe8"
+      ],
+      "firstMatches": [
+        "    \"Return an extra metadata key named exactly `_meta_b79410b8` whose value is a dict with an integer field `unresolved` equal to the total number of unresolved ${NAME} occurrences across all values.\","
+      ]
+    },
+    {
+      "query": "unresolved",
+      "results": 1,
+      "observationIds": [
+        "obs_487c91852d5349c6bce57fe8"
+      ],
+      "firstMatches": [
+        "    \"Leave unresolved ${NAME} occurrences unchanged.\",",
+        "    \"Return an extra metadata key named exactly `_meta_b79410b8` whose value is a dict with an integer field `unresolved` equal to the total number of unresolved ${NAME} occurrences across all values.\","
+      ]
+    },
+    {
+      "query": "Return an extra metadata key",
+      "results": 1,
+      "observationIds": [
+        "obs_487c91852d5349c6bce57fe8"
+      ],
+      "firstMatches": [
+        "    \"Return an extra metadata key named exactly `_meta_b79410b8` whose value is a dict with an integer field `unresolved` equal to the total number of unresolved ${NAME} occurrences across all values.\","
+      ]
+    }
+  ]
+}
