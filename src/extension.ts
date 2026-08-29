@@ -128,6 +128,23 @@ export function runtimeStatus(runtime: RuntimeState) {
   };
 }
 
+function modelVisibleStatus(runtime: RuntimeState) {
+  const status = runtimeStatus(runtime);
+  const observations = status.components.observations;
+  const modelVisibleObservations =
+    "projectRoot" in observations
+      ? (() => {
+          const { projectRoot: _projectRoot, ...safeObservations } = observations;
+          return safeObservations;
+        })()
+      : observations;
+  return {
+    ...status,
+    project: status.project ? { id: status.project.id } : undefined,
+    components: { observations: modelVisibleObservations },
+  };
+}
+
 export function registerContextVault(pi: ExtensionAPI, options: RegisterContextVaultOptions = {}): void {
   let telemetryFrameEmitted = false;
   let runtime: RuntimeState = {
@@ -302,7 +319,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
     description: "Report Context Vault Observation storage, reduction, and lifecycle status.",
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute() {
-      return toolResponse(async () => runtimeStatus(runtime));
+      return toolResponse(async () => modelVisibleStatus(runtime));
     },
   });
 

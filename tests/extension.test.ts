@@ -27,7 +27,7 @@ interface CapturedTool {
 }
 
 async function harness(config: Record<string, unknown> = {}, options: RegisterContextVaultOptions = {}) {
-  const root = await mkdtemp(join(tmpdir(), "context-vault-extension-"));
+  const root = await mkdtemp(join(tmpdir(), "context-vault-private-home-marker-"));
   roots.push(root);
   const project = join(root, "project");
   const piRoot = join(root, "pi");
@@ -128,6 +128,25 @@ describe("observation-only extension", () => {
     expect(status.details).not.toHaveProperty("repoMap");
     expect(status.details.telemetry).not.toHaveProperty("repoMapQueryCount");
     await target.handlers.get("session_shutdown")?.({}, target.ctx);
+  });
+
+  it("omits private project paths from model-visible status while retaining local diagnostics", async () => {
+    const target = await harness();
+    await target.handlers.get("session_start")?.({}, target.ctx);
+
+    const result = await target.tools
+      .get("context_vault_status")
+      ?.execute("call", {}, undefined, undefined, target.ctx);
+    const modelContent = result.content[0]?.text as string;
+    expect(modelContent).not.toContain("private-home-marker");
+    expect(modelContent).not.toContain(target.project);
+    expect(modelContent).not.toContain(target.piRoot);
+    expect(result.details.project).toEqual({ id: expect.any(String) });
+
+    await target.commands.get("context-vault")?.handler("doctor", target.ctx);
+    const localReport = JSON.parse(target.notifications.at(-1)?.text ?? "null");
+    expect(localReport.project.root).toBe(target.project);
+    expect(localReport.project.stateRoot).toContain(target.piRoot);
   });
 
   it("advertises term search metadata and supports the returned search-to-get handoff", async () => {
