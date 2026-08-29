@@ -41,14 +41,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function toolResponse(operation: () => Promise<unknown>) {
-  return operation()
-    .then((value) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], details: value }))
-    .catch((error) => ({
-      content: [{ type: "text" as const, text: errorMessage(error) }],
-      details: {},
-      isError: true,
-    }));
+async function toolResponse(operation: () => Promise<unknown>) {
+  const value = await operation();
+  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], details: value };
 }
 
 function textContent(event: ToolResultEvent): string | undefined {

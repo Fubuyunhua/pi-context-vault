@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "../src/artifacts/store.js";
 import { REBUILD_MIGRATION_MESSAGE, type RegisterContextVaultOptions, registerContextVault } from "../src/extension.js";
@@ -17,6 +18,7 @@ afterEach(async () => {
 
 interface CapturedTool {
   name: string;
+  label: string;
   description: string;
   promptSnippet?: string;
   promptGuidelines?: string[];
@@ -168,6 +170,111 @@ describe("observation-only extension", () => {
     expect(fetched.isError).toBeUndefined();
     expect(fetched.details.evidence.text).toContain("parse_config");
     expect(fetched.details.evidence.text).toContain("legacy_api");
+  });
+
+  it("throws tool failures so the Pi agent runtime marks failed gets as errors", async () => {
+    const target = await harness();
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const getTool = target.tools.get("context_vault_obs_get");
+    if (!getTool) throw new Error("get tool was not registered");
+
+    await expect(
+      getTool.execute("direct-failure", { id: `obs_${"f".repeat(24)}` }, undefined, undefined, target.ctx),
+    ).rejects.toThrow("Observation not found");
+
+    const model = {
+      id: "wrapped-runtime-test",
+      name: "Wrapped runtime test",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "http://127.0.0.1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 10_000,
+      maxTokens: 1_000,
+    };
+    const modelRuntime = await ModelRuntime.create({
+      authPath: join(target.root, "wrapped-auth.json"),
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    await modelRuntime.setRuntimeApiKey(model.provider, "test-key");
+    const { session } = await createAgentSession({
+      cwd: target.project,
+      agentDir: join(target.root, "wrapped-agent"),
+      model: model as never,
+      modelRuntime,
+      noTools: "builtin",
+      customTools: [getTool],
+      sessionManager: SessionManager.inMemory(target.project),
+    });
+    const responses = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "wrapped-failure",
+            name: "context_vault_obs_get",
+            arguments: { id: `obs_${"f".repeat(24)}` },
+          },
+        ],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse",
+        timestamp: Date.now(),
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    ];
+    session.agent.streamFunction = vi.fn(async () => {
+      const response = responses.shift();
+      if (!response) throw new Error("unexpected model turn");
+      return {
+        async *[Symbol.asyncIterator]() {},
+        result: async () => response,
+      } as never;
+    });
+
+    try {
+      await session.prompt("retrieve missing evidence");
+      const wrappedResult = session.messages.find(
+        (message) => message.role === "toolResult" && message.toolCallId === "wrapped-failure",
+      );
+      expect(wrappedResult).toMatchObject({
+        role: "toolResult",
+        toolName: "context_vault_obs_get",
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("Observation not found") }],
+      });
+    } finally {
+      session.dispose();
+    }
   });
 
   it("ignores all legacy repository keys of arbitrary types and reports one fixed warning", async () => {
