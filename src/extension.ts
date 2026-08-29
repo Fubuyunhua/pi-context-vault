@@ -12,7 +12,7 @@ import {
 } from "./observations/virtualization.js";
 import { type ContextVaultConfig, loadConfigWithDiagnostics } from "./state/config.js";
 import { type ProjectStatePaths, resolveProjectState } from "./state/project-state.js";
-import { Telemetry } from "./telemetry.js";
+import { Telemetry, type TelemetrySnapshot } from "./telemetry.js";
 import { frameTelemetry } from "./telemetry-frame.js";
 
 export const EXTENSION_ID = "context-vault" as const;
@@ -125,6 +125,79 @@ export function runtimeStatus(runtime: RuntimeState) {
     warnings: [...runtime.warnings],
     telemetry: runtime.telemetry.snapshot(),
     failures: runtime.failures.map((failure) => ({ ...failure })),
+  };
+}
+
+const MODEL_INITIALIZATION_ERROR = "Context Vault initialization failed.";
+const MODEL_OBSERVATION_FAILURE = "Context Vault observation processing failed.";
+
+function modelVisibleTelemetry(telemetry: TelemetrySnapshot): TelemetrySnapshot {
+  return {
+    archiveAttemptCount: telemetry.archiveAttemptCount,
+    archiveSuccessCount: telemetry.archiveSuccessCount,
+    archiveFailureCount: telemetry.archiveFailureCount,
+    archiveDeduplicatedCount: telemetry.archiveDeduplicatedCount,
+    archiveDurationMsTotal: telemetry.archiveDurationMsTotal,
+    metadataReadDurationMsTotal: telemetry.metadataReadDurationMsTotal,
+    metadataWriteDurationMsTotal: telemetry.metadataWriteDurationMsTotal,
+    metadataTailSyncCount: telemetry.metadataTailSyncCount,
+    metadataTailBytesRead: telemetry.metadataTailBytesRead,
+    metadataFullRebuildCount: telemetry.metadataFullRebuildCount,
+    metadataFullRebuildDurationMsTotal: telemetry.metadataFullRebuildDurationMsTotal,
+    metadataAppendCount: telemetry.metadataAppendCount,
+    metadataBytesAppended: telemetry.metadataBytesAppended,
+    metadataTombstoneCount: telemetry.metadataTombstoneCount,
+    metadataTornTailRecoveryCount: telemetry.metadataTornTailRecoveryCount,
+    metadataTornBytesDiscarded: telemetry.metadataTornBytesDiscarded,
+    metadataCompactionCount: telemetry.metadataCompactionCount,
+    metadataCompactionFailureCount: telemetry.metadataCompactionFailureCount,
+    metadataCompactionDurationMsTotal: telemetry.metadataCompactionDurationMsTotal,
+    metadataCompactionBytesBefore: telemetry.metadataCompactionBytesBefore,
+    metadataCompactionBytesAfter: telemetry.metadataCompactionBytesAfter,
+    artifactGcFailureCount: telemetry.artifactGcFailureCount,
+    reductionInvocationCount: telemetry.reductionInvocationCount,
+    reductionTriggeredCount: telemetry.reductionTriggeredCount,
+    reducedObservationCount: telemetry.reducedObservationCount,
+    estimatedTokensBeforeTotal: telemetry.estimatedTokensBeforeTotal,
+    estimatedTokensAfterTotal: telemetry.estimatedTokensAfterTotal,
+    targetReachedCount: telemetry.targetReachedCount,
+    reductionDurationMsTotal: telemetry.reductionDurationMsTotal,
+  };
+}
+
+function modelVisibleStatus(runtime: RuntimeState) {
+  const observation = runtime.observations?.status();
+  const initializationFailure = runtime.failures.some((failure) => failure.component === "initialization");
+  return {
+    extension: { id: EXTENSION_ID, version: EXTENSION_VERSION },
+    initialized: runtime.initialized,
+    degraded: runtime.failures.length > 0 || observation?.degraded === true,
+    project: runtime.state ? { id: runtime.state.projectId } : undefined,
+    components: {
+      observations: observation
+        ? {
+            available: true,
+            projectId: observation.projectId,
+            sessionId: observation.sessionId,
+            archived: observation.archived,
+            replaced: observation.replaced,
+            degraded: observation.degraded,
+            failures: observation.failures.map((failure) => ({
+              observationId: failure.observationId,
+              message: MODEL_OBSERVATION_FAILURE,
+            })),
+          }
+        : {
+            available: false,
+            error: initializationFailure ? MODEL_INITIALIZATION_ERROR : undefined,
+          },
+    },
+    warnings: runtime.warnings.map((warning) => warning),
+    telemetry: modelVisibleTelemetry(runtime.telemetry.snapshot()),
+    failures: runtime.failures.map((failure) => ({
+      component: failure.component,
+      error: MODEL_INITIALIZATION_ERROR,
+    })),
   };
 }
 
@@ -302,7 +375,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
     description: "Report Context Vault Observation storage, reduction, and lifecycle status.",
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute() {
-      return toolResponse(async () => runtimeStatus(runtime));
+      return toolResponse(async () => modelVisibleStatus(runtime));
     },
   });
 

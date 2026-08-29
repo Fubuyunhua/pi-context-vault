@@ -9,6 +9,7 @@ import { ArtifactStore } from "../src/artifacts/store.js";
 import { REBUILD_MIGRATION_MESSAGE, type RegisterContextVaultOptions, registerContextVault } from "../src/extension.js";
 import { LEGACY_REPO_CONFIG_WARNING } from "../src/state/config.js";
 import { resolveProjectState } from "../src/state/project-state.js";
+import { extractTelemetryFrame } from "../src/telemetry-frame.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -27,7 +28,7 @@ interface CapturedTool {
 }
 
 async function harness(config: Record<string, unknown> = {}, options: RegisterContextVaultOptions = {}) {
-  const root = await mkdtemp(join(tmpdir(), "context-vault-extension-"));
+  const root = await mkdtemp(join(tmpdir(), "context-vault-private-home-marker-"));
   roots.push(root);
   const project = join(root, "project");
   const piRoot = join(root, "pi");
@@ -103,6 +104,35 @@ function toolEvent(toolName: string, text = "large external evidence") {
   };
 }
 
+function expectRecursivelyPrivate(value: unknown, privateMarkers: string[]): void {
+  if (typeof value === "string") {
+    for (const marker of privateMarkers) expect(value).not.toContain(marker);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) expectRecursivelyPrivate(item, privateMarkers);
+    return;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    expect(["root", "stateRoot", "projectRoot"]).not.toContain(key);
+    expectRecursivelyPrivate(child, privateMarkers);
+  }
+}
+
+function expectModelStatusPrivate(result: any, privateMarkers: string[]): any {
+  expect(result.content).toEqual([{ type: "text", text: expect.any(String) }]);
+  const parsed = JSON.parse(result.content[0].text);
+  expectRecursivelyPrivate(parsed, privateMarkers);
+  expectRecursivelyPrivate(result.details, privateMarkers);
+  for (const marker of privateMarkers) expect(result.content[0].text).not.toContain(marker);
+  return parsed;
+}
+
+async function executeStatus(target: Awaited<ReturnType<typeof harness>>): Promise<any> {
+  return target.tools.get("context_vault_status")?.execute("call", {}, undefined, undefined, target.ctx);
+}
+
 describe("observation-only extension", () => {
   it("registers only Vault lifecycle surfaces and creates no repository state", async () => {
     const target = await harness({ reductionEnabled: false });
@@ -128,6 +158,102 @@ describe("observation-only extension", () => {
     expect(status.details).not.toHaveProperty("repoMap");
     expect(status.details.telemetry).not.toHaveProperty("repoMapQueryCount");
     await target.handlers.get("session_shutdown")?.({}, target.ctx);
+  });
+
+  it("keeps pre-start model status recursively private in content and details", async () => {
+    const target = await harness();
+    const result = await executeStatus(target);
+    const parsed = expectModelStatusPrivate(result, ["private-home-marker", target.project, target.piRoot]);
+    expect(parsed).toMatchObject({ initialized: false, degraded: false });
+    expect(parsed).not.toHaveProperty("project");
+    expect(parsed.components.observations).toEqual({ available: false });
+  });
+
+  it("keeps healthy model status recursively private in content and details", async () => {
+    const target = await harness();
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const result = await executeStatus(target);
+    const parsed = expectModelStatusPrivate(result, ["private-home-marker", target.project, target.piRoot]);
+    expect(parsed.project).toEqual({ id: expect.any(String) });
+    expect(parsed.components.observations).toMatchObject({ available: true, degraded: false, failures: [] });
+  });
+
+  it("replaces initialization errors in model status while retaining raw local diagnostics", async () => {
+    const target = await harness();
+    const configPath = join(target.project, ".pi", "context-vault.json");
+    await writeFile(configPath, "{");
+    await target.handlers.get("session_start")?.({}, target.ctx);
+
+    const result = await executeStatus(target);
+    const parsed = expectModelStatusPrivate(result, ["private-home-marker", target.project, target.piRoot]);
+    expect(parsed.components.observations).toEqual({
+      available: false,
+      error: "Context Vault initialization failed.",
+    });
+    expect(parsed.failures).toEqual([{ component: "initialization", error: "Context Vault initialization failed." }]);
+
+    result.details.components.observations.error = "mutated model error";
+    result.details.failures[0].component = "mutated-component";
+    result.details.failures[0].error = "mutated model failure";
+    await target.commands.get("context-vault")?.handler("status", target.ctx);
+    const localStatus = JSON.parse(target.notifications.at(-1)?.text ?? "null");
+    expect(localStatus.components.observations.error).toContain(configPath);
+    expect(localStatus.failures[0].component).toBe("initialization");
+    expect(localStatus.failures[0].error).toContain(configPath);
+    const repeated = await executeStatus(target);
+    expect(repeated.details.components.observations.error).toBe("Context Vault initialization failed.");
+    expect(repeated.details.failures[0].error).toBe("Context Vault initialization failed.");
+  });
+
+  it("sanitizes degraded Observation failures and isolates model detail mutations", async () => {
+    const target = await harness({ archivePolicy: "all", archiveMinBytes: 0 });
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const rawFailure = `${target.piRoot}/private-observation-error`;
+    vi.spyOn(ArtifactStore.prototype, "archive").mockRejectedValueOnce(new Error(rawFailure));
+    await target.handlers.get("tool_result")?.(toolEvent("bash"), target.ctx);
+
+    const result = await executeStatus(target);
+    const parsed = expectModelStatusPrivate(result, ["private-home-marker", target.project, target.piRoot, rawFailure]);
+    expect(parsed.components.observations).toMatchObject({
+      available: true,
+      degraded: true,
+      failures: [
+        {
+          observationId: expect.stringMatching(/^obs_[a-f0-9]{24}$/u),
+          message: "Context Vault observation processing failed.",
+        },
+      ],
+    });
+
+    result.details.extension.id = "mutated-extension";
+    result.details.project.id = "mutated-project";
+    result.details.components.observations.failures[0].observationId = "mutated-observation";
+    result.details.components.observations.failures[0].message = "mutated-message";
+    result.details.components.observations.failures.push({ observationId: "extra", message: "extra" });
+    result.details.warnings.push("mutated-warning");
+    result.details.telemetry.archiveFailureCount = 999;
+
+    const repeated = await executeStatus(target);
+    expect(repeated.details.extension.id).toBe("context-vault");
+    expect(repeated.details.project.id).not.toBe("mutated-project");
+    expect(repeated.details.components.observations.failures).toEqual([
+      {
+        observationId: expect.stringMatching(/^obs_[a-f0-9]{24}$/u),
+        message: "Context Vault observation processing failed.",
+      },
+    ]);
+    expect(repeated.details.warnings).toEqual([]);
+    expect(repeated.details.telemetry.archiveFailureCount).toBe(1);
+
+    await target.commands.get("context-vault")?.handler("status", target.ctx);
+    const localStatus = JSON.parse(target.notifications.at(-1)?.text ?? "null");
+    expect(localStatus.extension.id).toBe("context-vault");
+    expect(localStatus.project.id).not.toBe("mutated-project");
+    expect(localStatus.warnings).toEqual([]);
+    expect(localStatus.telemetry.archiveFailureCount).toBe(1);
+    expect(localStatus.components.observations.failures).toEqual([
+      { observationId: expect.stringMatching(/^obs_[a-f0-9]{24}$/u), message: rawFailure },
+    ]);
   });
 
   it("advertises term search metadata and supports the returned search-to-get handoff", async () => {
@@ -608,15 +734,46 @@ describe("observation-only extension", () => {
     expect(target.notifications.at(-1)?.type).toBe("info");
   });
 
-  it("emits one Vault-only telemetry frame in headless status-json/shutdown", async () => {
-    const target = await harness();
-    const headless = { ...target.ctx, hasUI: false };
+  it("retains raw paths and failures in local status, doctor, status-json, and shutdown telemetry", async () => {
+    const target = await harness({ archivePolicy: "all", archiveMinBytes: 0 });
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const rawFailure = `${target.piRoot}/operator-observation-error`;
+    const archive = vi.spyOn(ArtifactStore.prototype, "archive").mockRejectedValueOnce(new Error(rawFailure));
+    await target.handlers.get("tool_result")?.(toolEvent("bash"), target.ctx);
+
+    await target.commands.get("context-vault")?.handler("status", target.ctx);
+    const localStatus = JSON.parse(target.notifications.at(-1)?.text ?? "null");
+    expect(localStatus.project.root).toBe(target.project);
+    expect(localStatus.project.stateRoot).toContain(target.piRoot);
+    expect(localStatus.components.observations.projectRoot).toBe(target.project);
+    expect(localStatus.components.observations.failures[0].message).toBe(rawFailure);
+
+    await target.commands.get("context-vault")?.handler("doctor", target.ctx);
+    const doctor = JSON.parse(target.notifications.at(-1)?.text ?? "null");
+    expect(doctor.project.root).toBe(target.project);
+    expect(doctor.project.stateRoot).toContain(target.piRoot);
+    expect(doctor.components.observations.failures[0].message).toBe(rawFailure);
+
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    await target.handlers.get("session_start")?.({}, headless);
+    const headless = { ...target.ctx, hasUI: false };
     await target.commands.get("context-vault")?.handler("status-json", headless);
-    await target.handlers.get("session_shutdown")?.({}, headless);
-    const frames = log.mock.calls.flat().filter((value) => String(value).includes("@@CONTEXT_VAULT_TELEMETRY_V1@@"));
-    expect(frames).toHaveLength(1);
-    expect(String(frames[0])).not.toContain("repoMap");
+    const statusJson = extractTelemetryFrame(String(log.mock.calls[0]?.[0])) as any;
+    expect(statusJson.project.root).toBe(target.project);
+    expect(statusJson.project.stateRoot).toContain(target.piRoot);
+    expect(statusJson.components.observations.failures[0].message).toBe(rawFailure);
+
+    const shutdownTarget = await harness({ archivePolicy: "all", archiveMinBytes: 0 });
+    const shutdownHeadless = { ...shutdownTarget.ctx, hasUI: false };
+    await shutdownTarget.handlers.get("session_start")?.({}, shutdownHeadless);
+    const shutdownFailure = `${shutdownTarget.piRoot}/shutdown-observation-error`;
+    archive.mockRejectedValueOnce(new Error(shutdownFailure));
+    await shutdownTarget.handlers.get("tool_result")?.(toolEvent("bash"), shutdownHeadless);
+    log.mockClear();
+    await shutdownTarget.handlers.get("session_shutdown")?.({}, shutdownHeadless);
+    expect(log.mock.calls).toHaveLength(1);
+    const shutdownFrame = extractTelemetryFrame(String(log.mock.calls[0]?.[0])) as any;
+    expect(shutdownFrame.project.root).toBe(shutdownTarget.project);
+    expect(shutdownFrame.project.stateRoot).toContain(shutdownTarget.piRoot);
+    expect(shutdownFrame.components.observations.failures[0].message).toBe(shutdownFailure);
   });
 });
