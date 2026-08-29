@@ -96,6 +96,49 @@ describe("observation virtualization", () => {
     expect(matching.truncated).toBe(false);
   });
 
+  it("collapses duplicate artifacts before applying the result limit", async () => {
+    const { runtime, store } = await setup({ threshold: 1 });
+    const unique = await runtime.virtualize({
+      toolCallId: "unique-older",
+      toolName: "bash",
+      text: "shared-search-marker unique-diagnostic-evidence",
+      isError: false,
+    });
+    const duplicates = [];
+    for (let index = 0; index < 20; index += 1) {
+      duplicates.push(
+        await runtime.virtualize({
+          toolCallId: `duplicate-${index}`,
+          toolName: "bash",
+          text: "shared-search-marker repeated-diagnostic-evidence",
+          isError: false,
+        }),
+      );
+    }
+    const read = vi.spyOn(store, "read");
+
+    const searched = await runtime.search({ query: "shared-search-marker", limit: 10 });
+
+    expect(searched).toMatchObject({ truncated: false });
+    expect(searched.results).toHaveLength(2);
+    expect(new Set(searched.results.map((hit) => hit.observation.artifactId))).toHaveLength(2);
+    expect(searched.results.map((hit) => hit.observationId)).toContain(unique.observationId);
+    expect(searched.results[0]).toMatchObject({
+      observationId: duplicates.at(-1)?.observationId,
+      occurrenceCount: 20,
+      recentObservationIds: duplicates
+        .slice(-5)
+        .reverse()
+        .map((result) => result.observationId),
+    });
+    expect(searched.results[1]).toMatchObject({
+      observationId: unique.observationId,
+      occurrenceCount: 1,
+      recentObservationIds: [unique.observationId],
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("aligns byte retrieval to UTF-8 boundaries and reports requested and actual ranges", async () => {
     const { runtime } = await setup({ threshold: 1 });
     const archived = await runtime.virtualize({

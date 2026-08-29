@@ -344,7 +344,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   pi.registerTool({
     name: "context_vault_obs_search",
     label: "Search Observations",
-    description: `Search sanitized archived observations. Default terms mode ranks observations that match at least one of up to ${MAX_SEARCH_TERMS} Unicode-whitespace-separated terms, normalizing common code-identifier separators; phrase mode requires a contiguous literal match within one line. Results include a relevance score and at most five matching lines per observation.`,
+    description: `Search sanitized archived observations. Default terms mode ranks observations that match at least one of up to ${MAX_SEARCH_TERMS} Unicode-whitespace-separated terms, normalizing common code-identifier separators; phrase mode requires a contiguous literal match within one line. Identical artifacts collapse to the newest Observation with an occurrence count and recent Observation IDs. Results include a relevance score and at most five matching lines per artifact.`,
     promptSnippet: "Search archived observations by ranked code-aware terms or a contiguous literal phrase",
     promptGuidelines: [
       "Use context_vault_obs_search to find archived evidence, then execute its returned nextAction by calling context_vault_obs_get with nextAction.arguments.id for more bounded evidence; phrase mode is only for contiguous literal matching.",
