@@ -220,29 +220,87 @@ describe("observation virtualization", () => {
     expect(Buffer.byteLength(searched.results[0]?.matches[0]?.text ?? "", "utf8")).toBeLessThanOrEqual(1024);
   });
 
-  it("searches natural keyword queries with cross-line AND matching in any order", async () => {
+  it("ranks partial keyword matches and normalizes code identifiers", async () => {
     const { runtime } = await setup({ threshold: 1 });
     const archived = await runtime.virtualize({
       toolCallId: "issue-53-fixture",
       toolName: "read",
       text: [
-        "The parse_config helper reads each config parser key.",
-        "It preserves value identifiers while applying env expansion.",
-        "Compatibility remains available through legacy_api.",
+        'benchmark: "legacylib-parse-config"',
+        "Expand values from the environment while leaving unresolved variables unchanged.",
+        "Return an extra metadata key with the unresolved count.",
       ].join("\n"),
+      isError: false,
+    });
+    const recentNoise = await runtime.virtualize({
+      toolCallId: "issue-53-recent-noise",
+      toolName: "read",
+      text: "A recent note mentions config but contains none of the archived behavior.",
       isError: false,
     });
 
     for (const query of [
+      "parse_config",
       "parse_config legacy_api",
-      "legacy_api parse_config",
-      "config parser key value env expansion",
+      "parse_config env expansion unresolved variable",
+      "config metadata unresolved",
+      "_unresolved",
     ]) {
       const searched = await runtime.search({ query });
       expect(searched).toMatchObject({ matchMode: "terms", truncated: false });
-      expect(searched.results.map((hit) => hit.observationId)).toEqual([archived.observationId]);
+      expect(searched.results[0]).toMatchObject({
+        observationId: archived.observationId,
+        score: expect.any(Number),
+        matchedTerms: expect.any(Array),
+      });
+      expect(searched.results[0]?.score).toBeGreaterThan(0);
     }
-    await expect(runtime.search({ query: "parse_config missing" })).resolves.toMatchObject({ results: [] });
+
+    const partial = await runtime.search({ query: "parse_config legacy_api" });
+    expect(partial.results).toHaveLength(1);
+    expect(partial.results[0]).toMatchObject({
+      observationId: archived.observationId,
+      score: 0.5,
+      matchedTerms: ["parse_config"],
+      matches: [{ line: 1, text: expect.stringContaining("legacylib-parse-config") }],
+    });
+    expect(partial.results.map((hit) => hit.observationId)).not.toContain(recentNoise.observationId);
+    await expect(runtime.search({ query: "missing absent" })).resolves.toMatchObject({ results: [] });
+  });
+
+  it("keeps compound identifiers whole and handles separator-only terms literally", async () => {
+    const { runtime } = await setup({ threshold: 1 });
+    const falsePositive = await runtime.virtualize({
+      toolCallId: "identifier-components-only",
+      toolName: "read",
+      text: "legacylib mentions isolated api and py tokens; a token then b token",
+      isError: false,
+    });
+    const compound = await runtime.virtualize({
+      toolCallId: "identifier-compound",
+      toolName: "read",
+      text: "legacy-api.py calls a-b and preserves ___ plus +++ markers",
+      isError: false,
+    });
+
+    for (const query of ["legacy_api.py", "a_b"]) {
+      const searched = await runtime.search({ query });
+      expect(searched.results).toEqual([
+        expect.objectContaining({
+          observationId: compound.observationId,
+          score: 1,
+          matchedTerms: [query],
+          matches: expect.arrayContaining([expect.objectContaining({ line: 1 })]),
+        }),
+      ]);
+      expect(searched.results.map((hit) => hit.observationId)).not.toContain(falsePositive.observationId);
+    }
+
+    for (const query of ["___", "+++"]) {
+      const searched = await runtime.search({ query });
+      expect(searched.results.map((hit) => hit.observationId)).toEqual([compound.observationId]);
+      expect(searched.results[0]).toMatchObject({ score: 1, matchedTerms: [query] });
+    }
   });
 
   it("keeps phrase mode and get(query) on contiguous literal per-line matching", async () => {

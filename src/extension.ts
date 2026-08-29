@@ -344,8 +344,8 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   pi.registerTool({
     name: "context_vault_obs_search",
     label: "Search Observations",
-    description: `Search sanitized archived observations. Default terms mode requires all (up to ${MAX_SEARCH_TERMS}) Unicode-whitespace-separated literal terms anywhere in an observation, in any order and across lines; phrase mode requires a contiguous literal match within one line. Returns at most five matching lines per observation.`,
-    promptSnippet: "Search archived observations by literal terms or a contiguous literal phrase",
+    description: `Search sanitized archived observations. Default terms mode ranks observations that match at least one of up to ${MAX_SEARCH_TERMS} Unicode-whitespace-separated terms, normalizing common code-identifier separators; phrase mode requires a contiguous literal match within one line. Results include a relevance score and at most five matching lines per observation.`,
+    promptSnippet: "Search archived observations by ranked code-aware terms or a contiguous literal phrase",
     promptGuidelines: [
       "Use context_vault_obs_search to find archived evidence, then execute its returned nextAction by calling context_vault_obs_get with nextAction.arguments.id for more bounded evidence; phrase mode is only for contiguous literal matching.",
     ],
@@ -356,7 +356,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
           Type.Union([Type.Literal("terms"), Type.Literal("phrase")], {
             default: "terms",
             description:
-              "terms requires every literal term; phrase requires a contiguous literal match within one line",
+              "terms ranks partial matches with code-identifier normalization; phrase requires a contiguous literal match within one line",
           }),
         ),
         toolName: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),

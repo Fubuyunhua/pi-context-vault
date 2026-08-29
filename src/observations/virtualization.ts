@@ -69,6 +69,8 @@ export interface ObservationGetResult {
 export interface ObservationSearchHit {
   observationId: string;
   observation: ArtifactMetadata;
+  score: number;
+  matchedTerms: string[];
   matches: Array<{ line: number; text: string }>;
   matchesTruncated: boolean;
   nextAction: {
@@ -120,6 +122,52 @@ function literalCaseInsensitivePattern(query: string): RegExp {
 
 function literalAnyCaseInsensitivePattern(terms: string[]): RegExp {
   return new RegExp(terms.map(escapedLiteral).join("|"), "iu");
+}
+
+const IDENTIFIER_SEPARATOR_PATTERN = /[_./\\\p{Pd}]+/gu;
+
+interface SearchTerm {
+  raw: string;
+  normalized: string;
+  collapsed: string;
+}
+
+interface SearchText {
+  normalized: string;
+  collapsed: string;
+}
+
+function normalizedSearchText(value: string): SearchText {
+  const normalized = value.toLocaleLowerCase("en-US");
+  return { normalized, collapsed: normalized.replace(IDENTIFIER_SEPARATOR_PATTERN, "") };
+}
+
+function searchTerms(query: string): SearchTerm[] {
+  const unique = new Map<string, SearchTerm>();
+  for (const raw of query.split(/\s+/u)) {
+    const normalized = normalizedSearchText(raw).normalized;
+    if (unique.has(normalized)) continue;
+    unique.set(normalized, {
+      raw,
+      normalized,
+      collapsed: normalized.replace(IDENTIFIER_SEPARATOR_PATTERN, ""),
+    });
+  }
+  return [...unique.values()];
+}
+
+function termMatches(text: SearchText, term: SearchTerm): boolean {
+  if (term.collapsed.length === 0) return text.normalized.includes(term.normalized);
+  return text.collapsed.includes(term.collapsed);
+}
+
+function separatorNormalizedPattern(terms: SearchTerm[]): RegExp {
+  const separator = String.raw`[_./\\\p{Pd}]*`;
+  const sources = terms.map((term) => {
+    if (term.collapsed.length === 0) return escapedLiteral(term.normalized);
+    return Array.from(term.collapsed, escapedLiteral).join(separator);
+  });
+  return new RegExp(sources.join("|"), "iu");
 }
 
 function matchingExcerpt(line: string, pattern: RegExp, maxBytes: number): string | undefined {
@@ -398,31 +446,50 @@ export class ObservationRuntime {
       throw new Error("limit must be a positive integer");
     }
     const limit = Math.min(params.limit ?? 10, MAX_SEARCH_RESULTS);
-    const terms = matchMode === "terms" ? query.split(/\s+/u) : [query];
-    if (matchMode === "terms" && terms.length > MAX_SEARCH_TERMS) {
+    if (matchMode === "terms" && query.split(/\s+/u).length > MAX_SEARCH_TERMS) {
       throw new Error(`query must not contain more than ${MAX_SEARCH_TERMS} terms in terms mode`);
     }
-    const patterns = terms.map(literalCaseInsensitivePattern);
-    const linePattern = literalAnyCaseInsensitivePattern(terms);
-    const results: ObservationSearchHit[] = [];
+    const terms = matchMode === "terms" ? searchTerms(query) : [];
+    const linePattern =
+      matchMode === "terms" ? separatorNormalizedPattern(terms) : literalAnyCaseInsensitivePattern([query]);
+    const ranked: Array<{ hit: ObservationSearchHit; relevance: number; recency: number }> = [];
     const entries = (await this.#store.listMetadata()).reverse();
-    for (const metadata of entries) {
+    for (const [recency, metadata] of entries.entries()) {
       if (params.toolName !== undefined && metadata.toolName !== params.toolName) continue;
       const content = await this.#store.read(metadata.artifactId);
-      if (matchMode === "terms" && !patterns.every((pattern) => pattern.test(content))) continue;
+      const normalizedContent = matchMode === "terms" ? normalizedSearchText(content) : undefined;
+      const matchedTerms =
+        matchMode === "terms" && normalizedContent !== undefined
+          ? terms.filter((term) => termMatches(normalizedContent, term)).map((term) => term.raw)
+          : literalCaseInsensitivePattern(query).test(content)
+            ? [query]
+            : [];
+      const relevance = matchMode === "terms" ? matchedTerms.length / terms.length : matchedTerms.length;
+      if (matchedTerms.length === 0) continue;
       const page = matchingLines(content, linePattern, 0, 5, 1024);
       if (page.matches.length === 0) continue;
-      if (results.length >= limit) return { query, matchMode, results, truncated: true };
       const observationId = metadata.observationId;
       const retrievalId = CANONICAL_OBSERVATION_ID_PATTERN.test(observationId) ? observationId : metadata.artifactId;
-      results.push({
-        observationId,
-        observation: metadata,
-        matches: page.matches,
-        matchesTruncated: page.truncated,
-        nextAction: { tool: "context_vault_obs_get", arguments: { id: retrievalId } },
+      ranked.push({
+        hit: {
+          observationId,
+          observation: metadata,
+          score: relevance,
+          matchedTerms,
+          matches: page.matches,
+          matchesTruncated: page.truncated,
+          nextAction: { tool: "context_vault_obs_get", arguments: { id: retrievalId } },
+        },
+        relevance,
+        recency,
       });
     }
-    return { query, matchMode, results, truncated: false };
+    ranked.sort((left, right) => right.relevance - left.relevance || left.recency - right.recency);
+    return {
+      query,
+      matchMode,
+      results: ranked.slice(0, limit).map((candidate) => candidate.hit),
+      truncated: ranked.length > limit,
+    };
   }
 }
