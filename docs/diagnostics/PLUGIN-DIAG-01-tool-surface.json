@@ -1,0 +1,151 @@
+{
+  "generatedAt": "2026-08-29T15:36:53.975Z",
+  "vault": {
+    "toolCount": 3,
+    "tools": [
+      {
+        "name": "context_vault_obs_get",
+        "description": "Retrieve bounded evidence from an archived Context Vault observation.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 283,
+        "deprecated": false
+      },
+      {
+        "name": "context_vault_obs_search",
+        "description": "Search sanitized archived observations and return bounded evidence lines.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 249,
+        "deprecated": false
+      },
+      {
+        "name": "context_vault_status",
+        "description": "Report Context Vault Observation storage, reduction, and lifecycle status.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 62,
+        "deprecated": false
+      }
+    ],
+    "duplicateToolNames": [],
+    "commandCount": 1,
+    "commands": [
+      "context-vault"
+    ],
+    "eventHandlerCount": 4,
+    "events": [
+      "session_start",
+      "tool_result",
+      "context",
+      "session_shutdown"
+    ]
+  },
+  "repo": {
+    "toolCount": 3,
+    "tools": [
+      {
+        "name": "repo_context_search",
+        "description": "Search the live revision-aware repository index with explicit freshness evidence.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 190,
+        "deprecated": false
+      },
+      {
+        "name": "context_vault_repo_map",
+        "description": "Deprecated alias for repo_context_search.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 190,
+        "deprecated": true
+      },
+      {
+        "name": "repo_context_status",
+        "description": "Report repository index lifecycle, freshness, state, and bounded telemetry.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 62,
+        "deprecated": false
+      }
+    ],
+    "duplicateToolNames": [],
+    "commandCount": 1,
+    "commands": [
+      "repo-context"
+    ],
+    "eventHandlerCount": 2,
+    "events": [
+      "session_start",
+      "session_shutdown"
+    ]
+  },
+  "both": {
+    "toolCount": 6,
+    "tools": [
+      {
+        "name": "context_vault_obs_get",
+        "description": "Retrieve bounded evidence from an archived Context Vault observation.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 283,
+        "deprecated": false
+      },
+      {
+        "name": "context_vault_obs_search",
+        "description": "Search sanitized archived observations and return bounded evidence lines.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 249,
+        "deprecated": false
+      },
+      {
+        "name": "context_vault_status",
+        "description": "Report Context Vault Observation storage, reduction, and lifecycle status.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 62,
+        "deprecated": false
+      },
+      {
+        "name": "repo_context_search",
+        "description": "Search the live revision-aware repository index with explicit freshness evidence.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 190,
+        "deprecated": false
+      },
+      {
+        "name": "context_vault_repo_map",
+        "description": "Deprecated alias for repo_context_search.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 190,
+        "deprecated": true
+      },
+      {
+        "name": "repo_context_status",
+        "description": "Report repository index lifecycle, freshness, state, and bounded telemetry.",
+        "hasPromptSnippet": false,
+        "promptGuidelineCount": 0,
+        "schemaBytes": 62,
+        "deprecated": false
+      }
+    ],
+    "duplicateToolNames": [],
+    "commandCount": 2,
+    "commands": [
+      "context-vault",
+      "repo-context"
+    ],
+    "eventHandlerCount": 6,
+    "events": [
+      "session_start",
+      "tool_result",
+      "context",
+      "session_shutdown",
+      "session_start",
+      "session_shutdown"
+    ]
+  }
+}

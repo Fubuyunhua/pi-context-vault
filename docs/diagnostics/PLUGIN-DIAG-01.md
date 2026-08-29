@@ -13,7 +13,8 @@
 2. **Repo Context 的 6 个 read-error 测试依赖 `chmod(0o000)`**，在 Windows 和 root Linux 容器中都不能可靠制造读取失败。
 3. **Repo Context file-lock heartbeat 测试存在固定毫秒阈值脆弱性**：Windows 上稳定失败，Linux 容器通过。
 4. **5.6-sol 四臂结果有 5/40 provider transport failures**，且所有结果的 `arm` 元数据都错误记录为 `none`。`sphinx-10435` 的 both-only FAIL 是 TLS 握手失败，并非插件交互回归。
-5. **Repo Context 新安装存在 6 个 npm audit 项**：4 moderate、2 high，主要来自 `java-parser -> chevrotain/lodash/lodash-es`。
+5. **Repo Context 生产依赖存在 6 个 npm audit 项**：`npm audit --omit=dev` 仍为 4 moderate、2 high，主要来自 `java-parser -> chevrotain/lodash/lodash-es`；Context Vault 生产审计为 0。
+6. **四臂 harness 的 `.pi` 控制配置污染 Agent diff**：插件配置被 `git add .` 计入修改，并且 both 仍写入 v0.3 已废弃的 `repoMapEnabled`。本地 runner 已改为 `.git/info/exclude` 隔离控制文件并删除旧键。
 
 ## 测试结果
 
@@ -141,10 +142,29 @@ Sol/medium 40 runs 的 provider transport errors：
 - Sphinx HTML signature 查询的前列被 `sphinx/search/ja.py` 和多个 locale `.po` 文件占据，相关实现未进 top-10；
 - 精确的 LaTeX writer 与 `sphinx.util.inspect` 查询可把正确文件排到 1–2，说明主要问题是 broad-query ranking/path priors，而不是索引完全不可用。
 
+## 工具面诊断
+
+确定性加载结果：Vault 3 tools、Repo Context 3 tools、双装 6 tools，无工具名冲突。但所有 6 个工具都没有 `promptSnippet` 或 `promptGuidelines`；Repo Context 还默认激活与 canonical search schema 完全重复的 deprecated `context_vault_repo_map`。
+
+既有非基础设施 runs 中，repo-only 使用 canonical search 6/9，both 仅 1/9；这不是因果证明，但与工具面缺少引导、双装工具选择增多构成需要验证的采用信号。
+
+## 评测 harness 修正
+
+继续诊断发现：
+
+- Observation search ID 应从 `results[].observation.observationId` 读取；
+- `arm` 必须记录 `plugins` 而不是默认 `none`；
+- TLS/certificate/WebSocket transport failures 必须标为基础设施错误；
+- `.pi/context-vault.json` 与 `.pi/repo-context.json` 必须排除在 Agent diff 之外；
+- Context Vault v0.3 已是 Observation-only，不应再写 `repoMapEnabled`。
+
+上述修正已在本地 benchmark harness 完成并通过 typecheck/验收测试。
+
 ## GitHub Issues
 
 - Context Vault multi-keyword search / search→get handoff: [pi-context-vault#53](https://github.com/Fubuyunhua/pi-context-vault/issues/53)
 - Repo Context ranking noise: [pi-repo-context#6](https://github.com/Fubuyunhua/pi-repo-context/issues/6)
+- Repo Context tool guidance/deprecated alias: [pi-repo-context#7](https://github.com/Fubuyunhua/pi-repo-context/issues/7)
 - Repo Context portable read-error fixtures: [pi-repo-context#3](https://github.com/Fubuyunhua/pi-repo-context/issues/3)
 - Repo Context file-lock timing stability: [pi-repo-context#4](https://github.com/Fubuyunhua/pi-repo-context/issues/4)
 - Repo Context dependency audit: [pi-repo-context#5](https://github.com/Fubuyunhua/pi-repo-context/issues/5)
@@ -155,6 +175,7 @@ Sol/medium 40 runs 的 provider transport errors：
 - `docs/diagnostics/PLUGIN-DIAG-01-vault-search-repro.json`
 - `docs/diagnostics/PLUGIN-DIAG-01-vault-query-replay.json`
 - `docs/diagnostics/PLUGIN-DIAG-01-repo-adoption.json`
+- `docs/diagnostics/PLUGIN-DIAG-01-tool-surface.json`
 - EXP-MEM-02 `_work/*/result.json`
 - 5.6-sol 四臂 `results-*.json` / `transcript-*.json`
 - 两个插件本地及 Linux-root 容器测试输出
