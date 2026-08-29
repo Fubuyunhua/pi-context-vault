@@ -93,8 +93,8 @@ pi -e ./extensions/index.ts
 
 | Tool | 用途 |
 | --- | --- |
-| `context_vault_obs_get` | 从一个 Observation receipt 恢复有界证据。 |
-| `context_vault_obs_search` | 搜索已清理的归档 Observation。 |
+| `context_vault_obs_get` | 通过 Observation 或 artifact ID 恢复有界证据；可选 query 仍按单行内连续字面短语匹配。 |
+| `context_vault_obs_search` | 搜索已清理的归档 Observation。默认 `terms` 模式按 Unicode 空白拆词，要求每个字面 term 都出现在同一 Observation 的任意位置（可乱序、可跨行）；`phrase` 模式只匹配单行内连续字面短语。结果包含 `observationId` 以及可直接执行的 `context_vault_obs_get` next action，其 `arguments.id` 始终可用于检索。 |
 | `context_vault_status` | 返回 Vault-only 生命周期、存储、reduction、warning 和 telemetry。 |
 
 ## Command

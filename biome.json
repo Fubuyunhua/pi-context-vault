@@ -8,6 +8,7 @@
       "!.pi",
       "!.pi-context-vault",
       "!docs/reports",
+      "!docs/diagnostics/*.json",
       "!docs/specs/0017-repository-context-planning-contract.md",
       "!src/repo-context",
       "!tests/repo-context-contract.test.ts",
