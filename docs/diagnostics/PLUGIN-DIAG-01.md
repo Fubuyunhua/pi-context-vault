@@ -148,6 +148,12 @@ Sol/medium 40 runs 的 provider transport errors：
 
 既有非基础设施 runs 中，repo-only 使用 canonical search 6/9，both 仅 1/9；这不是因果证明，但与工具面缺少引导、双装工具选择增多构成需要验证的采用信号。
 
+## Vault quota 可观测性
+
+配置 `projectQuotaBytes=2,048` 后归档 10 个约 4KB 的唯一结果，实际状态达到 46,037 bytes（22.5× quota），仍 archived/replaced=10/10、degraded=false、warnings=[]，status 也不显示 quota。当前 quota/retention 仅由手工 GC 消费。
+
+建议明确“自动硬边界”或“手工 GC target”契约，并至少在 status 暴露 used/target/over-budget。
+
 ## Vault search 规模性能
 
 确定性 100/500/1000 Observation benchmark 显示每次 search 都逐条读取 artifact，延迟近似线性；1,000 条时 miss/最旧命中/最新命中均约 1.17–1.24 秒。最新命中同样扫描全库，因为结果未达到默认 limit=10。
@@ -188,6 +194,7 @@ Sol/medium 40 runs 的 provider transport errors：
 - Context Vault wrapped tool error semantics: [pi-context-vault#54](https://github.com/Fubuyunhua/pi-context-vault/issues/54)
 - Context Vault search full-scan performance: [pi-context-vault#55](https://github.com/Fubuyunhua/pi-context-vault/issues/55)
 - Context Vault status path privacy: [pi-context-vault#56](https://github.com/Fubuyunhua/pi-context-vault/issues/56)
+- Context Vault quota enforcement/visibility: [pi-context-vault#57](https://github.com/Fubuyunhua/pi-context-vault/issues/57)
 - Repo Context ranking noise: [pi-repo-context#6](https://github.com/Fubuyunhua/pi-repo-context/issues/6)
 - Repo Context tool guidance/deprecated alias: [pi-repo-context#7](https://github.com/Fubuyunhua/pi-repo-context/issues/7)
 - Repo Context wrapped tool error semantics: [pi-repo-context#8](https://github.com/Fubuyunhua/pi-repo-context/issues/8)
@@ -207,6 +214,7 @@ Sol/medium 40 runs 的 provider transport errors：
 - `docs/diagnostics/PLUGIN-DIAG-01-vault-search-scale.json`
 - `docs/diagnostics/PLUGIN-DIAG-01-status-paths.json`
 - `docs/diagnostics/PLUGIN-DIAG-01-repo-startup.json`
+- `docs/diagnostics/PLUGIN-DIAG-01-vault-quota.json`
 - EXP-MEM-02 `_work/*/result.json`
 - 5.6-sol 四臂 `results-*.json` / `transcript-*.json`
 - 两个插件本地及 Linux-root 容器测试输出
