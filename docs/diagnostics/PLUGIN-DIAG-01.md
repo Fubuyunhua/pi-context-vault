@@ -154,6 +154,10 @@ Sol/medium 40 runs 的 provider transport errors：
 
 建议明确“自动硬边界”或“手工 GC target”契约，并至少在 status 暴露 used/target/over-budget。
 
+## Vault search 重复结果挤占
+
+归档 1 条较早的独特证据，再归档 20 个内容完全相同的 Observation；limit=10 搜索返回 10 个不同 Observation ID，但 artifactId 只有 1 个，较早的不同证据被完全挤出且 truncated=true。建议按 artifact/content hash 聚合，返回 occurrence count 和最近 ID，再对独特证据应用 limit。
+
 ## Vault search 规模性能
 
 确定性 100/500/1000 Observation benchmark 显示每次 search 都逐条读取 artifact，延迟近似线性；1,000 条时 miss/最旧命中/最新命中均约 1.17–1.24 秒。最新命中同样扫描全库，因为结果未达到默认 limit=10。
@@ -195,6 +199,7 @@ Sol/medium 40 runs 的 provider transport errors：
 - Context Vault search full-scan performance: [pi-context-vault#55](https://github.com/Fubuyunhua/pi-context-vault/issues/55)
 - Context Vault status path privacy: [pi-context-vault#56](https://github.com/Fubuyunhua/pi-context-vault/issues/56)
 - Context Vault quota enforcement/visibility: [pi-context-vault#57](https://github.com/Fubuyunhua/pi-context-vault/issues/57)
+- Context Vault duplicate search crowding: [pi-context-vault#58](https://github.com/Fubuyunhua/pi-context-vault/issues/58)
 - Repo Context ranking noise: [pi-repo-context#6](https://github.com/Fubuyunhua/pi-repo-context/issues/6)
 - Repo Context tool guidance/deprecated alias: [pi-repo-context#7](https://github.com/Fubuyunhua/pi-repo-context/issues/7)
 - Repo Context wrapped tool error semantics: [pi-repo-context#8](https://github.com/Fubuyunhua/pi-repo-context/issues/8)
@@ -215,6 +220,7 @@ Sol/medium 40 runs 的 provider transport errors：
 - `docs/diagnostics/PLUGIN-DIAG-01-status-paths.json`
 - `docs/diagnostics/PLUGIN-DIAG-01-repo-startup.json`
 - `docs/diagnostics/PLUGIN-DIAG-01-vault-quota.json`
+- `docs/diagnostics/PLUGIN-DIAG-01-vault-search-duplicates.json`
 - EXP-MEM-02 `_work/*/result.json`
 - 5.6-sol 四臂 `results-*.json` / `transcript-*.json`
 - 两个插件本地及 Linux-root 容器测试输出
