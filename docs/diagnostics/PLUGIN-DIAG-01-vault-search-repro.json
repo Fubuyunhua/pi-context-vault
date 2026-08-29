@@ -44,5 +44,12 @@
         "    \"Return an extra metadata key named exactly `_meta_b79410b8` whose value is a dict with an integer field `unresolved` equal to the total number of unresolved ${NAME} occurrences across all values.\","
       ]
     }
-  ]
+  ],
+  "searchToGet": {
+    "hitId": "obs_487c91852d5349c6bce57fe8",
+    "getResolvedSameObservation": true,
+    "getContainsRandomizedContract": true,
+    "getContainsFullBehaviorArray": true,
+    "getTruncated": false
+  }
 }

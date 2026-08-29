@@ -1,0 +1,571 @@
+{
+  "generatedAt": "2026-08-29T15:29:53.274Z",
+  "summary": {
+    "repoctx": {
+      "searches": 7,
+      "runsWithSearch": 6,
+      "top1UsedLater": 3,
+      "anyTop5UsedLater": 3,
+      "searchesLeadingToEditedHit": 5,
+      "averageOutputBytes": 2433,
+      "averageResultCount": 10
+    },
+    "both": {
+      "searches": 1,
+      "runsWithSearch": 1,
+      "top1UsedLater": 1,
+      "anyTop5UsedLater": 1,
+      "searchesLeadingToEditedHit": 1,
+      "averageOutputBytes": 2408,
+      "averageResultCount": 10
+    }
+  },
+  "rows": [
+    {
+      "group": "repoctx",
+      "task": "django__django-12209",
+      "passed": false,
+      "query": "Django model save force_insert pk default adding _state implementation tests UUID primary key default explicit pk",
+      "outputBytes": 2450,
+      "resultCount": 10,
+      "top1": "tests/auth_tests/models/uuid_pk.py",
+      "top5": [
+        "tests/auth_tests/models/uuid_pk.py",
+        "docs/topics/auth/default.txt",
+        "tests/model_formsets/test_uuid.py",
+        "tests/model_forms/tests.py",
+        "tests/migrations/test_state.py"
+      ],
+      "resultPaths": [
+        "tests/auth_tests/models/uuid_pk.py",
+        "docs/topics/auth/default.txt",
+        "tests/model_formsets/test_uuid.py",
+        "tests/model_forms/tests.py",
+        "tests/migrations/test_state.py",
+        "django/forms/models.py",
+        "tests/force_insert_update/tests.py",
+        "docs/topics/forms/modelforms.txt",
+        "tests/model_fields/test_uuid.py",
+        "django/db/models/base.py"
+      ],
+      "top1UsedLater": false,
+      "anyTop5UsedLater": false,
+      "usedPaths": [
+        "tests/force_insert_update/tests.py",
+        "django/db/models/base.py"
+      ],
+      "editedFiles": [
+        ".pi/repo-context.json",
+        "django/db/models/base.py",
+        "tests/basic/tests.py"
+      ],
+      "editedHits": [
+        "django/db/models/base.py"
+      ],
+      "laterToolCalls": [
+        "bash",
+        "read",
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "read",
+        "edit",
+        "edit",
+        "read",
+        "bash",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "edit",
+        "bash",
+        "bash",
+        "bash",
+        "read",
+        "bash"
+      ]
+    },
+    {
+      "group": "repoctx",
+      "task": "django__django-12406",
+      "passed": false,
+      "query": "ModelChoiceField RadioSelect blank option empty_label foreign key formfield blank=False tests",
+      "outputBytes": 2473,
+      "resultCount": 10,
+      "top1": "tests/model_forms/tests.py",
+      "top5": [
+        "tests/model_forms/tests.py",
+        "tests/model_forms/test_modelchoicefield.py",
+        "tests/forms_tests/tests/tests.py",
+        "tests/modeladmin/tests.py",
+        "django/contrib/admin/options.py"
+      ],
+      "resultPaths": [
+        "tests/model_forms/tests.py",
+        "tests/model_forms/test_modelchoicefield.py",
+        "tests/forms_tests/tests/tests.py",
+        "tests/modeladmin/tests.py",
+        "django/contrib/admin/options.py",
+        "tests/admin_widgets/tests.py",
+        "django/forms/models.py",
+        "tests/auth_tests/models/with_foreign_key.py",
+        "django/contrib/admin/templates/admin/widgets/foreign_key_raw_id.html",
+        "tests/model_formsets/tests.py"
+      ],
+      "top1UsedLater": true,
+      "anyTop5UsedLater": true,
+      "usedPaths": [
+        "tests/model_forms/tests.py",
+        "tests/model_forms/test_modelchoicefield.py",
+        "django/forms/models.py"
+      ],
+      "editedFiles": [
+        ".pi/repo-context.json",
+        "django/db/models/fields/related.py",
+        "django/forms/models.py",
+        "tests/model_forms/tests.py"
+      ],
+      "editedHits": [
+        "tests/model_forms/tests.py",
+        "django/forms/models.py"
+      ],
+      "laterToolCalls": [
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "bash",
+        "read",
+        "read",
+        "edit",
+        "edit",
+        "edit",
+        "bash",
+        "bash",
+        "bash"
+      ]
+    },
+    {
+      "group": "repoctx",
+      "task": "django__django-12774",
+      "passed": false,
+      "query": "QuerySet.in_bulk implementation and tests for unique constraints field_name",
+      "outputBytes": 2474,
+      "resultCount": 10,
+      "top1": "django/contrib/admin/static/admin/js/vendor/xregexp/xregexp.js",
+      "top5": [
+        "django/contrib/admin/static/admin/js/vendor/xregexp/xregexp.js",
+        "django/contrib/admin/static/admin/js/vendor/xregexp/xregexp.min.js",
+        "docs/ref/models/querysets.txt",
+        "tests/model_forms/tests.py",
+        "docs/releases/1.7.txt"
+      ],
+      "resultPaths": [
+        "django/contrib/admin/static/admin/js/vendor/xregexp/xregexp.js",
+        "django/contrib/admin/static/admin/js/vendor/xregexp/xregexp.min.js",
+        "docs/ref/models/querysets.txt",
+        "tests/model_forms/tests.py",
+        "docs/releases/1.7.txt",
+        "tests/queries/tests.py",
+        "tests/template_tests/syntax_tests/test_extends.py",
+        "tests/admin_changelist/tests.py",
+        "tests/constraints/tests.py",
+        "django/db/models/query.py"
+      ],
+      "top1UsedLater": false,
+      "anyTop5UsedLater": false,
+      "usedPaths": [
+        "django/db/models/query.py"
+      ],
+      "editedFiles": [
+        ".pi/repo-context.json",
+        "django/db/models/query.py",
+        "tests/lookup/models.py",
+        "tests/lookup/tests.py"
+      ],
+      "editedHits": [
+        "django/db/models/query.py"
+      ],
+      "laterToolCalls": [
+        "bash",
+        "bash",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "read",
+        "read",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "edit",
+        "edit",
+        "edit",
+        "bash",
+        "bash",
+        "read",
+        "edit",
+        "bash",
+        "bash"
+      ]
+    },
+    {
+      "group": "repoctx",
+      "task": "sphinx-doc__sphinx-10435",
+      "passed": true,
+      "query": "LaTeX writer inline code syntax highlighting sphinxcode sphinxupquote code role tests test_build_latex",
+      "outputBytes": 2375,
+      "resultCount": 10,
+      "top1": "tests/test_build_latex.py",
+      "top5": [
+        "tests/test_build_latex.py",
+        "sphinx/writers/latex.py",
+        "doc/latex.rst",
+        "tests/test_build_html.py",
+        "tests/test_markup.py"
+      ],
+      "resultPaths": [
+        "tests/test_build_latex.py",
+        "sphinx/writers/latex.py",
+        "doc/latex.rst",
+        "tests/test_build_html.py",
+        "tests/test_markup.py",
+        "tests/test_directive_code.py",
+        "tests/test_writer_latex.py",
+        "sphinx/builders/latex/__init__.py",
+        "CHANGES",
+        "tests/test_transforms_post_transforms_code.py"
+      ],
+      "top1UsedLater": true,
+      "anyTop5UsedLater": true,
+      "usedPaths": [
+        "tests/test_build_latex.py",
+        "sphinx/writers/latex.py"
+      ],
+      "editedFiles": [
+        ".pi/repo-context.json",
+        "sphinx/writers/latex.py",
+        "tests/test_build_latex.py",
+        "tox.ini"
+      ],
+      "editedHits": [
+        "tests/test_build_latex.py",
+        "sphinx/writers/latex.py"
+      ],
+      "laterToolCalls": [
+        "bash",
+        "bash",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "read",
+        "read",
+        "bash",
+        "bash",
+        "read",
+        "bash",
+        "edit",
+        "edit",
+        "bash",
+        "bash"
+      ]
+    },
+    {
+      "group": "repoctx",
+      "task": "sphinx-doc__sphinx-8265",
+      "passed": false,
+      "query": "HTML rendering Python signatures default argument tuples parameter list add_lines color=(1, 1, 1)",
+      "outputBytes": 2491,
+      "resultCount": 10,
+      "top1": "sphinx/search/ja.py",
+      "top5": [
+        "sphinx/search/ja.py",
+        "sphinx/locale/bg/LC_MESSAGES/sphinx.po",
+        "sphinx/locale/pt/LC_MESSAGES/sphinx.po",
+        "sphinx/locale/te/LC_MESSAGES/sphinx.po",
+        "sphinx/locale/ur/LC_MESSAGES/sphinx.po"
+      ],
+      "resultPaths": [
+        "sphinx/search/ja.py",
+        "sphinx/locale/bg/LC_MESSAGES/sphinx.po",
+        "sphinx/locale/pt/LC_MESSAGES/sphinx.po",
+        "sphinx/locale/te/LC_MESSAGES/sphinx.po",
+        "sphinx/locale/ur/LC_MESSAGES/sphinx.po",
+        "sphinx/locale/hi_IN/LC_MESSAGES/sphinx.po",
+        "sphinx/locale/sr@latin/LC_MESSAGES/sphinx.po",
+        "sphinx/locale/sr_RS/LC_MESSAGES/sphinx.po",
+        "sphinx/locale/ta/LC_MESSAGES/sphinx.po",
+        "sphinx/locale/sphinx.pot"
+      ],
+      "top1UsedLater": false,
+      "anyTop5UsedLater": false,
+      "usedPaths": [],
+      "editedFiles": [
+        ".pi/repo-context.json",
+        "setup.py",
+        "sphinx/pycode/ast.py",
+        "tests/test_domain_py.py",
+        "tests/test_pycode_ast.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ],
+      "editedHits": [],
+      "laterToolCalls": [
+        "repo_context_search",
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "bash",
+        "bash",
+        "read",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "bash",
+        "bash",
+        "read",
+        "edit",
+        "edit",
+        "edit",
+        "bash",
+        "bash",
+        "edit",
+        "bash",
+        "bash"
+      ]
+    },
+    {
+      "group": "repoctx",
+      "task": "sphinx-doc__sphinx-8265",
+      "passed": false,
+      "query": "tests HTML function signature default values tuple parentheses sphinx",
+      "outputBytes": 2351,
+      "resultCount": 10,
+      "top1": "sphinx/texinputs/sphinx.sty",
+      "top5": [
+        "sphinx/texinputs/sphinx.sty",
+        "sphinx/writers/latex.py",
+        "tests/test_build_html.py",
+        "doc/latex.rst",
+        "tests/test_domain_cpp.py"
+      ],
+      "resultPaths": [
+        "sphinx/texinputs/sphinx.sty",
+        "sphinx/writers/latex.py",
+        "tests/test_build_html.py",
+        "doc/latex.rst",
+        "tests/test_domain_cpp.py",
+        "sphinx/writers/html.py",
+        "tests/test_config.py",
+        "sphinx/builders/html/__init__.py",
+        "tests/test_build_latex.py",
+        "sphinx/themes/basic/static/jquery-3.5.1.js"
+      ],
+      "top1UsedLater": false,
+      "anyTop5UsedLater": false,
+      "usedPaths": [
+        "sphinx/writers/html.py"
+      ],
+      "editedFiles": [
+        ".pi/repo-context.json",
+        "setup.py",
+        "sphinx/pycode/ast.py",
+        "tests/test_domain_py.py",
+        "tests/test_pycode_ast.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ],
+      "editedHits": [],
+      "laterToolCalls": [
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "bash",
+        "bash",
+        "read",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "bash",
+        "bash",
+        "read",
+        "edit",
+        "edit",
+        "edit",
+        "bash",
+        "bash",
+        "edit",
+        "bash",
+        "bash"
+      ]
+    },
+    {
+      "group": "repoctx",
+      "task": "sphinx-doc__sphinx-9281",
+      "passed": true,
+      "query": "Python function signature default values formatting enum autodoc signature stringify annotation default value",
+      "outputBytes": 2418,
+      "resultCount": 10,
+      "top1": "sphinx/ext/autodoc/__init__.py",
+      "top5": [
+        "sphinx/ext/autodoc/__init__.py",
+        "tests/test_ext_autodoc.py",
+        "doc/usage/extensions/autodoc.rst",
+        "sphinx/ext/autodoc/preserve_defaults.py",
+        "sphinx/domains/python.py"
+      ],
+      "resultPaths": [
+        "sphinx/ext/autodoc/__init__.py",
+        "tests/test_ext_autodoc.py",
+        "doc/usage/extensions/autodoc.rst",
+        "sphinx/ext/autodoc/preserve_defaults.py",
+        "sphinx/domains/python.py",
+        "sphinx/util/inspect.py",
+        "tests/test_ext_autodoc_configs.py",
+        "sphinx/ext/napoleon/docstring.py",
+        "tests/test_config.py",
+        "tests/test_util_inspect.py"
+      ],
+      "top1UsedLater": true,
+      "anyTop5UsedLater": true,
+      "usedPaths": [
+        "sphinx/ext/autodoc/__init__.py",
+        "sphinx/util/inspect.py",
+        "tests/test_util_inspect.py"
+      ],
+      "editedFiles": [
+        ".pi/repo-context.json",
+        "setup.py",
+        "sphinx/util/inspect.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ],
+      "editedHits": [
+        "sphinx/util/inspect.py",
+        "tests/test_util_inspect.py"
+      ],
+      "laterToolCalls": [
+        "bash",
+        "bash",
+        "read",
+        "bash",
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "bash",
+        "read",
+        "read",
+        "edit",
+        "edit",
+        "bash",
+        "edit",
+        "bash",
+        "bash"
+      ]
+    },
+    {
+      "group": "both",
+      "task": "sphinx-doc__sphinx-9281",
+      "passed": true,
+      "query": "Python autodoc signature default value enum formatting stringify signature inspect default",
+      "outputBytes": 2408,
+      "resultCount": 10,
+      "top1": "sphinx/util/inspect.py",
+      "top5": [
+        "sphinx/util/inspect.py",
+        "tests/test_util_inspect.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "sphinx/ext/autodoc/preserve_defaults.py",
+        "tests/test_ext_autodoc.py"
+      ],
+      "resultPaths": [
+        "sphinx/util/inspect.py",
+        "tests/test_util_inspect.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "sphinx/ext/autodoc/preserve_defaults.py",
+        "tests/test_ext_autodoc.py",
+        "doc/usage/extensions/autodoc.rst",
+        "sphinx/domains/python.py",
+        "tests/test_ext_autodoc_configs.py",
+        "sphinx/ext/napoleon/docstring.py",
+        "doc/extdev/deprecated.rst"
+      ],
+      "top1UsedLater": true,
+      "anyTop5UsedLater": true,
+      "usedPaths": [
+        "sphinx/util/inspect.py",
+        "tests/test_util_inspect.py"
+      ],
+      "editedFiles": [
+        ".pi/context-vault.json",
+        ".pi/repo-context.json",
+        "setup.py",
+        "sphinx/util/inspect.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ],
+      "editedHits": [
+        "sphinx/util/inspect.py",
+        "tests/test_util_inspect.py"
+      ],
+      "laterToolCalls": [
+        "bash",
+        "bash",
+        "read",
+        "read",
+        "bash",
+        "read",
+        "read",
+        "read",
+        "edit",
+        "edit",
+        "bash",
+        "bash"
+      ]
+    }
+  ]
+}

@@ -70,6 +70,10 @@ const pattern = literalCaseInsensitivePattern(query);
 
 模型自然地使用关键词列表，但 API 实际要求连续短语，且工具描述没有声明 literal 语义，也没有 `promptSnippet` / `promptGuidelines` 指示 search 后调用 get。
 
+后续隔离验证：使用可命中的单词 `unresolved` 后，search 返回正确 Observation ID；随后 get 能取回同一 Observation，完整包含随机 `_meta_b79410b8` 契约与完整 behavior 数组，且未截断。这把故障限定在 search query 语义/工具引导层，而不是存储或 get 层。
+
+同时发现 benchmark 的 ID 解析路径错误：真实结构是 `details.results[].observation.observationId`，旧 runner 只检查顶层 `observationId/id`。不过将 24-run 的 39 条原始 query 对实际 fixture 做 literal 回放后，真实命中仍为 **0/39**，所以 search 根因不受该指标 bug 影响。
+
 建议：
 
 1. 默认使用 tokenized AND/OR 检索或增加明确的 phrase 模式；
@@ -127,9 +131,20 @@ Sol/medium 40 runs 的 provider transport errors：
 5. P1：处理 java-parser 依赖审计项
 6. P2：上述修复后只跑 8 个假设驱动模型实验，不立即重跑 40/80 runs
 
+## Repo Context 搜索采用取证
+
+从既有 transcript 恢复 8 次 `repo_context_search`：平均返回 10 项、约 2.4KB；top-1 后续被引用 4/8，top-5 被引用 4/8，最终修改文件出现在任意返回位置 6/8。
+
+明确噪声案例：
+
+- `QuerySet.in_bulk` 查询把 vendored `xregexp.js` / `.min.js` 排在前两位，实际 `django/db/models/query.py` 位于第 10；
+- Sphinx HTML signature 查询的前列被 `sphinx/search/ja.py` 和多个 locale `.po` 文件占据，相关实现未进 top-10；
+- 精确的 LaTeX writer 与 `sphinx.util.inspect` 查询可把正确文件排到 1–2，说明主要问题是 broad-query ranking/path priors，而不是索引完全不可用。
+
 ## GitHub Issues
 
 - Context Vault multi-keyword search / search→get handoff: [pi-context-vault#53](https://github.com/Fubuyunhua/pi-context-vault/issues/53)
+- Repo Context ranking noise: [pi-repo-context#6](https://github.com/Fubuyunhua/pi-repo-context/issues/6)
 - Repo Context portable read-error fixtures: [pi-repo-context#3](https://github.com/Fubuyunhua/pi-repo-context/issues/3)
 - Repo Context file-lock timing stability: [pi-repo-context#4](https://github.com/Fubuyunhua/pi-repo-context/issues/4)
 - Repo Context dependency audit: [pi-repo-context#5](https://github.com/Fubuyunhua/pi-repo-context/issues/5)
@@ -137,7 +152,9 @@ Sol/medium 40 runs 的 provider transport errors：
 ## 证据来源
 
 - `docs/diagnostics/PLUGIN-DIAG-01-evidence.json`
-- `diagnostics/out/vault-search-repro.json`
+- `docs/diagnostics/PLUGIN-DIAG-01-vault-search-repro.json`
+- `docs/diagnostics/PLUGIN-DIAG-01-vault-query-replay.json`
+- `docs/diagnostics/PLUGIN-DIAG-01-repo-adoption.json`
 - EXP-MEM-02 `_work/*/result.json`
 - 5.6-sol 四臂 `results-*.json` / `transcript-*.json`
 - 两个插件本地及 Linux-root 容器测试输出
