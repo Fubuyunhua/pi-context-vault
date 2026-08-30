@@ -678,13 +678,16 @@ describe("observation virtualization", () => {
     const archived = await runtime.virtualize({
       toolCallId: "unicode-phrase-fold",
       toolName: "read",
-      text: "ſay the phrase marker",
+      text: [...Array.from({ length: 5 }, (_, index) => `ſay decoy ${index}`), "say actual terms match"].join("\n"),
       isError: false,
     });
-    await expect(runtime.search({ query: "say", matchMode: "terms" })).resolves.toMatchObject({ results: [] });
-    await expect(runtime.search({ query: "say", matchMode: "phrase" })).resolves.toMatchObject({
-      results: [{ observationId: archived.observationId }],
+    await expect(runtime.search({ query: "say", matchMode: "terms" })).resolves.toMatchObject({
+      results: [{ observationId: archived.observationId, matches: [{ line: 6, text: "say actual terms match" }] }],
     });
+    const phrase = await runtime.search({ query: "say", matchMode: "phrase" });
+    expect(phrase.results[0]).toMatchObject({ observationId: archived.observationId });
+    expect(phrase.results[0]?.matches[0]).toEqual({ line: 1, text: "ſay decoy 0" });
+    expect(phrase.results[0]?.matches).toHaveLength(5);
   });
 
   it("treats punctuation and identifiers as escaped literal terms", async () => {
