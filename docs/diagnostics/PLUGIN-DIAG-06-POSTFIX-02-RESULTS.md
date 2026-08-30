@@ -54,7 +54,7 @@ This is strong treatment-specific evidence but only two independent repeats; it 
 
 A deeper replay found one occurrence of the contract still present in the first Vault receipt preview. Therefore the 4/4 search→get sequence was real, but this v1 task does **not** establish that get was strictly necessary to see the contract. The supported interpretation is the joint effect of receipt virtualization and the observed retrieval behavior, not retrieval-only causality.
 
-A zero-model v2 gate moved the contract beyond the receipt preview. That gate exposed a separate deterministic handoff problem: search finds the deep contract, but executing its returned `{id}` next action fetches only bytes 0–8192 and misses the matched evidence. An explicit query-targeted get succeeds. This is tracked as Context Vault #69; no post-hoc model runs were added.
+A zero-model v2 gate moved the contract beyond the receipt preview. That gate exposed a separate deterministic handoff problem: search finds the deep contract, but executing its returned `{id}` next action fetches only bytes 0–8192 and misses the matched evidence. An explicit query-targeted get succeeds. This was tracked as Context Vault #69 and fixed on main `357274d`; the post-fix zero-model v2 gate passes with a match-centered get offset. No post-hoc model runs were added.
 
 ## Repo Context behavior
 
@@ -106,4 +106,4 @@ Aggregate averages mix very different strata and should not replace the task-lev
 4. BOTH inherited the Vault pressure benefit and did not show a dual-install regression in this matrix.
 5. These results justify a larger context-pressure replication, not a claim that Vault or BOTH broadly improves arbitrary coding tasks.
 
-The post-run v2 deterministic gate identified Context Vault #69 (deep search hit → returned get action misses the evidence). No adaptive model runs should be added to POSTFIX-02.
+The post-run v2 deterministic gate identified Context Vault #69 (deep search hit → returned get action missed the evidence); the focused post-fix gate now passes. No adaptive model runs should be added to POSTFIX-02.

@@ -108,11 +108,23 @@ The planned 1MB gate could not complete because no-match secret redaction is qua
 
 A 1MB archive exceeded both 300s and 600s attempts. Tracked as Context Vault #70. The 1MB/duplicate Phase A gate remains blocked until this is fixed.
 
-## Search→get handoff blocker
+## Search→get handoff follow-up
 
-A strengthened pressure gate placed the contract beyond the 4KB receipt preview. Search found the deep marker, but its returned `{id}` action fetched bytes 0–8192 and missed the evidence; adding a query made get succeed. Tracked as Context Vault #69.
+A strengthened pressure gate placed the contract beyond the 4KB receipt preview. Initially, search found the deep marker but its returned `{id}` action fetched bytes 0–8192 and missed the evidence. Context Vault #69 fixed this on main `357274d` by adding a match-centered offset.
 
-This also narrows POSTFIX-02 v1 interpretation: v1 demonstrates the Vault treatment (virtualization plus actual retrieval behavior), but not retrieval-only necessity because one contract occurrence remained in the receipt preview.
+Post-fix deterministic verification:
+
+```text
+nextAction offset:       14,605
+get byte range:          14,605–18,761
+get contains marker:     true
+receipt contains marker: false
+pressure v2 gate:        accepted
+```
+
+The v2 preflight now has zero contract occurrences in Vault session receipts and the exact returned search action retrieves the contract. No model runs were added.
+
+POSTFIX-02 v1 interpretation remains narrower: v1 demonstrates the Vault treatment, but not retrieval-only necessity because one contract occurrence remained in its receipt preview.
 
 ## Current status
 
@@ -122,17 +134,16 @@ Passed:
 - Repo/BOTH first-search startup and exact tool surface;
 - 100/1,000/5,000 Vault archive/search scale;
 - Vault redaction correctness, 64KB deduplication, and context reduction;
-- dual shutdown without duplicate tools or process hang after explicit lifecycle shutdown.
+- dual shutdown without duplicate tools or process hang after explicit lifecycle shutdown;
+- retrieval-required pressure v2 and exact deep search→get handoff after Context Vault #69.
 
 Open deterministic defects:
 
-- Context Vault #69: deep search result returns a get action that misses the matched page;
 - Context Vault #70: quadratic long-line secret redaction;
 - Repo Context #17: first stale incremental search misses exact pending-file evidence.
 
 Remaining gates:
 
 - rerun 1MB unique/duplicate Vault archive after #70;
-- rerun retrieval-required pressure v2 after #69;
 - rerun 5,000-file/100-change first query after #17;
 - add a separate forced-crash/restart state recovery test.
