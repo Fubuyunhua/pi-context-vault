@@ -1,0 +1,14 @@
+{
+  "generatedAt": "2026-08-30T01:10:36.282Z",
+  "quotaBytes": 2048,
+  "stateBytes": 46037,
+  "exceedsQuota": true,
+  "ratio": 22.5,
+  "archived": 10,
+  "replaced": 10,
+  "degraded": true,
+  "warnings": [
+    "Context Vault artifact storage exceeds the manual GC target; run /context-vault gc."
+  ],
+  "statusExposesQuota": true
+}

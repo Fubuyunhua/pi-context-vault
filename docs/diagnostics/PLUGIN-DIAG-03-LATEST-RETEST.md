@@ -26,7 +26,9 @@
 
 唯一历史 miss：`legacy_api.py original implementation`（D_WRONG_PASSIVE）。
 
-原自动 quota diagnostic 首次失败是 harness 使用已被 #56 正确删除的 `status.project.stateRoot`。修复 harness 为从其自有 `agentDir + project.id` 推导路径后，隔离重跑通过；产品行为仍为 2KB quota 下增长至 46KB 且不告警，因此 #57 保持 open。
+原自动 quota diagnostic 首次失败是 harness 使用已被 #56 正确删除的 `status.project.stateRoot`。修复 harness 为从其自有 `agentDir + project.id` 推导路径后，隔离重跑通过。
+
+后续 #57 修复已合并到 `4e35be1d95fca5da1a9e9af8c499734c2f1fb04d`。针对性验证通过 typecheck 和 7 个 quota/storage tests；同样的 2KB target / 46KB used 场景现在返回 `degraded=true`、明确 `/context-vault gc` warning，并在 status 暴露 target/usage。契约明确为可观测的手工 GC target，而不是自动硬限制。#57 已关闭。
 
 Search 规模性能仍近似线性：1,000 Observations 的 miss/oldest/newest 约 1.15秒，#55 保持 open。
 
@@ -65,7 +67,7 @@ Search 规模性能仍近似线性：1,000 Observations 的 miss/oldest/newest �
 - #54 closed：Pi tool error contract
 - #55 open：Observation search full scan 性能
 - #56 closed：model-visible path privacy
-- #57 open：quota enforcement/visibility
+- #57 closed：quota manual-target visibility；针对性回归通过
 - #58 closed：duplicate search crowding
 
 ### Repo Context
@@ -78,6 +80,6 @@ Search 规模性能仍近似线性：1,000 Observations 的 miss/oldest/newest �
 ## 当前模型实验门控
 
 - Repo Context：`modelRetestReady=true`
-- Context Vault：`modelRetestReady=false`，等待 #55；#57 不属于当前模型实验 critical gate
+- Context Vault：`modelRetestReady=false`，仅等待 #55
 
 因此暂不自动调用付费模型。
