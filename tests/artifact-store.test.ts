@@ -313,6 +313,77 @@ describe("artifact store", () => {
     expect(await store.getMetadata("write-failure")).toEqual(archived.metadata);
   });
 
+  it("falls back to evidence on ordinary derived-index load I/O failures", async () => {
+    const root = await tempRoot();
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    const first = new ArtifactStore({ artifactsRoot, metadataRoot });
+    const archived = await first.archive({
+      observationId: "load-io-fallback",
+      toolName: "read",
+      sessionId: "session",
+      content: "ordinary load failure evidence",
+    });
+    await first.searchArtifacts([{ value: "ordinary", collapseIdentifierSeparators: false }]);
+
+    let failLoad = true;
+    const telemetry = new Telemetry();
+    const restarted = new ArtifactStore({
+      artifactsRoot,
+      metadataRoot,
+      telemetry,
+      faultHook: (point) => {
+        if (point === "before-search-index-load" && failLoad) {
+          failLoad = false;
+          throw Object.assign(new Error("operator-only derived index EIO"), { code: "EIO" });
+        }
+      },
+    });
+    const batch = await restarted.searchArtifacts([{ value: "failure", collapseIdentifierSeparators: false }]);
+    expect(batch.contentByArtifact.get(archived.artifactId)).toContain("load failure evidence");
+    expect(telemetry.snapshot().observationSearchIndexLoadFailureCount).toBe(1);
+    expect(restarted.operatorDiagnostics()).toEqual(["operator-only derived index EIO"]);
+  });
+
+  it("rejects unknown snapshot and entry fields", async () => {
+    const root = await tempRoot();
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    const indexPath = join(metadataRoot, "observation-search-index-v1.json");
+    const first = new ArtifactStore({ artifactsRoot, metadataRoot });
+    await first.archive({
+      observationId: "unknown-fields",
+      toolName: "read",
+      sessionId: "session",
+      content: "unknown fields evidence",
+    });
+    await first.searchArtifacts([{ value: "unknown", collapseIdentifierSeparators: false }]);
+
+    const topLevel = JSON.parse(await readFile(indexPath, "utf8")) as Record<string, unknown>;
+    topLevel.unexpected = true;
+    await writeFile(indexPath, JSON.stringify(topLevel));
+    const topTelemetry = new Telemetry();
+    await new ArtifactStore({ artifactsRoot, metadataRoot, telemetry: topTelemetry }).searchArtifacts([
+      { value: "missing-top", collapseIdentifierSeparators: false },
+    ]);
+    expect(topTelemetry.snapshot().observationSearchIndexLoadFailureCount).toBeGreaterThanOrEqual(1);
+
+    const entryLevel = JSON.parse(await readFile(indexPath, "utf8")) as Record<string, unknown> & {
+      entries: Array<Record<string, unknown>>;
+    };
+    const entry = entryLevel.entries[0];
+    if (entry === undefined) throw new Error("expected derived index entry");
+    entry.unexpected = true;
+    const { checksum: _checksum, ...payload } = entryLevel;
+    entryLevel.checksum = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+    await writeFile(indexPath, JSON.stringify(entryLevel));
+    const entryTelemetry = new Telemetry();
+    await new ArtifactStore({ artifactsRoot, metadataRoot, telemetry: entryTelemetry }).searchArtifacts([
+      { value: "missing-entry", collapseIdentifierSeparators: false },
+    ]);
+    expect(entryTelemetry.snapshot().observationSearchIndexLoadFailureCount).toBeGreaterThanOrEqual(1);
+  });
+
   it("rejects noncanonical Bloom encodings and rewrites them from evidence", async () => {
     const root = await tempRoot();
     const artifactsRoot = join(root, "artifacts");

@@ -681,6 +681,7 @@ describe("observation virtualization", () => {
       text: "ſay the phrase marker",
       isError: false,
     });
+    await expect(runtime.search({ query: "say", matchMode: "terms" })).resolves.toMatchObject({ results: [] });
     await expect(runtime.search({ query: "say", matchMode: "phrase" })).resolves.toMatchObject({
       results: [{ observationId: archived.observationId }],
     });

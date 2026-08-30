@@ -31,6 +31,7 @@ export type ArtifactStoreFaultPoint =
   | "after-gc-unlink"
   | "before-compaction-replace"
   | "after-compaction-replace"
+  | "before-search-index-load"
   | "before-search-index-publication";
 
 export interface ArtifactStoreOptions {
@@ -517,12 +518,29 @@ function artifactSearchSnapshotChecksum(entries: SerializedArtifactSearchEntry[]
   return createHash("sha256").update(artifactSearchSnapshotPayload(entries), "utf8").digest("hex");
 }
 
+function hasExactKeys(value: object, expected: readonly string[]): boolean {
+  const keys = Object.keys(value).sort();
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
+}
+
 function parseArtifactSearchSnapshot(
   source: string,
   maximumEntries: number,
 ): { entries: Map<string, ArtifactSearchEntry>; needsRewrite: boolean } {
   const value = JSON.parse(source) as Partial<ArtifactSearchIndexSnapshot>;
   if (
+    value === null ||
+    typeof value !== "object" ||
+    !hasExactKeys(value, [
+      "algorithm",
+      "bloomBytes",
+      "checksum",
+      "entries",
+      "gramLength",
+      "hashCount",
+      "maxEntries",
+      "schemaVersion",
+    ]) ||
     value.schemaVersion !== 1 ||
     value.algorithm !== SEARCH_INDEX_ALGORITHM ||
     value.gramLength !== SEARCH_GRAM_LENGTH ||
@@ -542,6 +560,7 @@ function parseArtifactSearchSnapshot(
     if (
       candidate === null ||
       typeof candidate !== "object" ||
+      !hasExactKeys(candidate, ["artifactId", "bloom"]) ||
       !/^[a-f0-9]{64}$/.test(candidate.artifactId) ||
       typeof candidate.bloom !== "string" ||
       !/^[A-Za-z0-9+/]+={0,2}$/.test(candidate.bloom)
@@ -1196,11 +1215,13 @@ export class ArtifactStore {
   > {
     let source: string | undefined;
     try {
+      await this.#faultHook?.("before-search-index-load");
       source = await this.#readRegularFileBounded(this.#searchIndexPath, MAX_SEARCH_INDEX_BYTES);
     } catch (error) {
       this.#telemetry?.recordObservationSearchIndexLoadFailure();
       this.#recordOperatorDiagnostic(error);
-      throw error;
+      if (isUnsafeStateError(error)) throw error;
+      return { entries: new Map(), needsRewrite: true };
     }
     if (source === undefined) return undefined;
     try {
