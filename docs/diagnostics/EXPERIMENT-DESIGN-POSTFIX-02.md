@@ -169,7 +169,7 @@ Same workspace/container across phase sessions, separate sessions, sealed tools,
 
 ## Current blockers
 
-- [pi-repo-context#15](https://github.com/Fubuyunhua/pi-repo-context/issues/15): cold first search is warming-empty and models do not retry.
-- [pi-context-vault#66](https://github.com/Fubuyunhua/pi-context-vault/issues/66): Observation search previews need a total byte budget.
+- Repo Context #15 is now closed at `d058a69`. Deterministic acceptance passed: 326 tests, package smoke, and 6/6 non-empty cold first searches in 28–37ms with 715–797-byte payloads.
+- [pi-context-vault#66](https://github.com/Fubuyunhua/pi-context-vault/issues/66) remains open: Observation search previews need a total byte budget.
 
-Until both pass deterministic acceptance, run Phase A only and make no further model calls.
+Until #66 passes deterministic acceptance, run Phase A only and make no further model calls.

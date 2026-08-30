@@ -72,6 +72,8 @@ All calls returned `lifecycle=warming`, `generation=0`, and `results=[]`. The mo
 
 Created: [pi-repo-context#15](https://github.com/Fubuyunhua/pi-repo-context/issues/15).
 
+Post-experiment update: #15 was fixed at `d058a69`. Deterministic acceptance now returns non-empty cold first-search evidence in 6/6 surrogate runs within 28–37ms. This does not retroactively change the 24-run results, which used the pre-fix implementation.
+
 Context Vault:
 
 ```text
