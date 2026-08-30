@@ -84,6 +84,8 @@ compactions across all arms:      0
 
 Vault state averaged roughly 137KB/run in vault-only and 95KB/run in both. These tasks did not create context-window pressure, so this experiment does not measure compaction benefit. The absence of `obs_get` means successful Vault-arm outcomes cannot be attributed to full Observation retrieval.
 
+The 8.8–19.0KB search previews have no aggregate total-byte contract and may weaken the intended search→get handoff. Created: [pi-context-vault#66](https://github.com/Fubuyunhua/pi-context-vault/issues/66).
+
 ## Issue #55 performance acceptance
 
 Latest deterministic benchmark after the persistent bounded index fix:
