@@ -68,6 +68,31 @@ function assignmentCompatibilityCorpus(): string[] {
   return corpus;
 }
 
+function urlCompatibilityCorpus(): string[] {
+  const boundaryPrefixes = ["", " ", "_", "1", "-", ".", "+", "a-", "🙂", "x_"];
+  const schemes = ["http", "HTTPS", "git+ssh", "custom.a-b", "z9", "-http", "1http"];
+  const authorities = [
+    "user:password@example.test/path",
+    "user:p:a:s:s@example.test/path",
+    "user:@example.test/path",
+    ":password@example.test/path",
+    "user:password/path@example.test",
+    "user:password example.test",
+    "user:password@example.test http://second:secret@host/path",
+    "user:sk-abcdefghijklmnop@example.test/path",
+  ];
+  const suffixes = ["", "\nstatus=healthy", ";next=value"];
+  const corpus: string[] = [];
+  for (const boundary of boundaryPrefixes) {
+    for (const scheme of schemes) {
+      for (const authority of authorities) {
+        for (const suffix of suffixes) corpus.push(`${boundary}${scheme}://${authority}${suffix}`);
+      }
+    }
+  }
+  return corpus;
+}
+
 describe("redaction compatibility", () => {
   it("matches the legacy assignment grammar and counts across deterministic boundary prefixes", () => {
     const corpus = assignmentCompatibilityCorpus();
@@ -84,6 +109,12 @@ describe("redaction compatibility", () => {
       });
     },
   );
+
+  it("matches legacy URL credential behavior across boundaries, schemes, authorities, and malformed forms", () => {
+    const corpus = urlCompatibilityCorpus();
+    expect(corpus.length).toBe(1_680);
+    for (const input of corpus) expect(redactSecrets(input)).toEqual(legacyRedactSecrets(input));
+  });
 
   it("preserves complete and mixed private-key block behavior", () => {
     const input = [

@@ -29,6 +29,15 @@ function isKeyCharacter(character: string): boolean {
   return isAsciiAlphaNumeric(character) || character === "_" || character === "-";
 }
 
+function isAsciiLetter(character: string): boolean {
+  const code = character.charCodeAt(0);
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isSchemeCharacter(character: string): boolean {
+  return isAsciiAlphaNumeric(character) || character === "+" || character === "." || character === "-";
+}
+
 function isWordCharacter(character: string | undefined): boolean {
   return character !== undefined && (isAsciiAlphaNumeric(character) || character === "_");
 }
@@ -56,30 +65,43 @@ function assignmentKeyBefore(input: string, separatorIndex: number): AssignmentK
   };
 }
 
-/**
- * Return every start within an ASCII assignment key accepted by the legacy
- * secret-key grammar. Retaining the less-greedy starts is required because
- * the unquoted legacy regex retries a terminal suffix when a greedy namespace
- * extension does not begin at a word boundary (for example `_foo-token`).
- */
-function secretKeyStarts(key: string): number[] {
-  const starts = new Set<number>();
+function secretTerminalStarts(key: string): number[] {
+  const starts: number[] = [];
   const firstPossibleTerminal = Math.max(0, key.length - MAX_SECRET_KEY_TERMINAL_LENGTH);
   for (let terminalStart = firstPossibleTerminal; terminalStart < key.length; terminalStart += 1) {
-    if (!SECRET_KEY_EXACT.test(key.slice(terminalStart))) continue;
+    if (SECRET_KEY_EXACT.test(key.slice(terminalStart))) starts.push(terminalStart);
+  }
+  return starts;
+}
 
+function hasQuotedSecretKey(key: string): boolean {
+  return secretTerminalStarts(key).length > 0;
+}
+
+/**
+ * Return the earliest word-boundary start accepted by the unquoted legacy
+ * grammar without retaining every namespace segment. Less-greedy terminal
+ * starts remain eligible when a greedy extension starts after `_`.
+ */
+function unquotedSecretKeyStart(input: string, assignment: AssignmentKey): number | undefined {
+  let earliest: number | undefined;
+  for (const terminalStart of secretTerminalStarts(assignment.key)) {
     let start = terminalStart;
-    starts.add(start);
-    while (start > 0 && (key[start - 1] === "_" || key[start - 1] === "-")) {
+    while (true) {
+      const absoluteStart = assignment.keyStart + start;
+      if (!isWordCharacter(input[absoluteStart - 1]) && (earliest === undefined || absoluteStart < earliest)) {
+        earliest = absoluteStart;
+      }
+      if (start === 0 || (assignment.key[start - 1] !== "_" && assignment.key[start - 1] !== "-")) break;
+
       const segmentEnd = start - 1;
       let segmentStart = segmentEnd;
-      while (segmentStart > 0 && isAsciiAlphaNumeric(key[segmentStart - 1] as string)) segmentStart -= 1;
+      while (segmentStart > 0 && isAsciiAlphaNumeric(assignment.key[segmentStart - 1] as string)) segmentStart -= 1;
       if (segmentStart === segmentEnd) break;
       start = segmentStart;
-      starts.add(start);
     }
   }
-  return [...starts].sort((left, right) => left - right);
+  return earliest;
 }
 
 function privateKeyTypeAt(input: string, markerIndex: number, prefix: string): PrivateKeyType | undefined {
@@ -159,7 +181,7 @@ function replaceQuotedAssignments(input: string): { content: string; count: numb
     }
 
     const assignment = assignmentKeyBefore(input, cursor);
-    if (assignment === undefined || secretKeyStarts(assignment.key).length === 0) {
+    if (assignment === undefined || !hasQuotedSecretKey(assignment.key)) {
       cursor += 1;
       continue;
     }
@@ -196,6 +218,72 @@ function replaceQuotedAssignments(input: string): { content: string; count: numb
   return { content: output.join(""), count };
 }
 
+function replaceUrlCredentials(input: string): { content: string; count: number } {
+  const output: string[] = [];
+  let outputStart = 0;
+  let count = 0;
+  let cursor = 0;
+
+  while (cursor < input.length) {
+    const separatorIndex = input.indexOf("://", cursor);
+    if (separatorIndex < 0) break;
+
+    let schemeStart = separatorIndex;
+    while (schemeStart > 0 && isSchemeCharacter(input[schemeStart - 1] as string)) schemeStart -= 1;
+    let validScheme = false;
+    for (let start = schemeStart; start < separatorIndex; start += 1) {
+      if (isAsciiLetter(input[start] as string) && !isWordCharacter(input[start - 1])) {
+        validScheme = true;
+        break;
+      }
+    }
+    if (!validScheme) {
+      cursor = separatorIndex + 3;
+      continue;
+    }
+
+    const usernameStart = separatorIndex + 3;
+    let usernameEnd = usernameStart;
+    while (
+      usernameEnd < input.length &&
+      !WHITESPACE.test(input[usernameEnd] as string) &&
+      input[usernameEnd] !== "/" &&
+      input[usernameEnd] !== ":" &&
+      input[usernameEnd] !== "@"
+    ) {
+      usernameEnd += 1;
+    }
+    if (usernameEnd === usernameStart || input[usernameEnd] !== ":") {
+      cursor = separatorIndex + 3;
+      continue;
+    }
+
+    const passwordStart = usernameEnd + 1;
+    let passwordEnd = passwordStart;
+    while (
+      passwordEnd < input.length &&
+      !WHITESPACE.test(input[passwordEnd] as string) &&
+      input[passwordEnd] !== "/" &&
+      input[passwordEnd] !== "@"
+    ) {
+      passwordEnd += 1;
+    }
+    if (passwordEnd === passwordStart || input[passwordEnd] !== "@") {
+      cursor = separatorIndex + 3;
+      continue;
+    }
+
+    output.push(input.slice(outputStart, passwordStart), REDACTED);
+    outputStart = passwordEnd;
+    count += 1;
+    cursor = passwordEnd + 1;
+  }
+
+  if (count === 0) return { content: input, count: 0 };
+  output.push(input.slice(outputStart));
+  return { content: output.join(""), count };
+}
+
 function replaceUnquotedAssignments(input: string): { content: string; count: number } {
   const output: string[] = [];
   let outputStart = 0;
@@ -210,12 +298,10 @@ function replaceUnquotedAssignments(input: string): { content: string; count: nu
     }
 
     const assignment = assignmentKeyBefore(input, cursor);
-    let secretStart: number | undefined;
-    if (assignment !== undefined && assignment.trailingQuote === undefined) {
-      secretStart = secretKeyStarts(assignment.key)
-        .map((relativeStart) => assignment.keyStart + relativeStart)
-        .find((start) => !isWordCharacter(input[start - 1]));
-    }
+    const secretStart =
+      assignment?.trailingQuote === undefined && assignment !== undefined
+        ? unquotedSecretKeyStart(input, assignment)
+        : undefined;
     if (secretStart === undefined) {
       cursor += 1;
       continue;
@@ -278,10 +364,10 @@ export function redactSecrets(input: string): RedactionResult {
   redactionCount += unquotedAssignments.count;
 
   replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, () => REDACTED);
-  replace(
-    /(\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:)[^\s/@]+(@)/gi,
-    (_match, prefix, suffix) => `${prefix}${REDACTED}${suffix}`,
-  );
+
+  const urlCredentials = replaceUrlCredentials(content);
+  content = urlCredentials.content;
+  redactionCount += urlCredentials.count;
 
   return { content, redactionCount };
 }

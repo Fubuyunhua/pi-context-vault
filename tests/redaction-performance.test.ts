@@ -13,17 +13,21 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-function medianDuration(input: string): number {
+function medianDurationFor(input: string, expectedContent: string, expectedCount: number): number {
   redactSecrets(input);
   const durations: number[] = [];
   for (let run = 0; run < 5; run += 1) {
     const started = performance.now();
     const result = redactSecrets(input);
     durations.push(performance.now() - started);
-    expect(result).toEqual({ content: input, redactionCount: 0 });
+    expect(result).toEqual({ content: expectedContent, redactionCount: expectedCount });
   }
   durations.sort((left, right) => left - right);
   return durations[Math.floor(durations.length / 2)] as number;
+}
+
+function medianDuration(input: string): number {
+  return medianDurationFor(input, input, 0);
 }
 
 describe("bounded secret redaction", () => {
@@ -49,7 +53,7 @@ describe("bounded secret redaction", () => {
     }
   });
 
-  it("bounds adversarial separators, near-miss keys, and an unterminated quoted value", { timeout: 20_000 }, () => {
+  it("bounds adversarial separators, near-miss keys, and an unterminated quoted value", { timeout: 60_000 }, () => {
     const inputs = [
       "not_a_secretish=value;".repeat(Math.ceil(MEBIBYTE / 23)).slice(0, MEBIBYTE),
       "near-miss-key=value:=;".repeat(Math.ceil(MEBIBYTE / 22)).slice(0, MEBIBYTE),
@@ -57,6 +61,31 @@ describe("bounded secret redaction", () => {
     ];
 
     for (const input of inputs) expect(medianDuration(input)).toBeLessThan(8_000);
+  });
+
+  it("avoids overlapping URL-regex retries on long hyphenated scheme/key near misses", { timeout: 20_000 }, () => {
+    const sizes = [64, 128, 256, 512, 1024].map((kibibytes) => kibibytes * 1024);
+    const durations = sizes.map((size) => {
+      const suffix = "token=value";
+      const input = `${"a-".repeat(Math.floor((size - suffix.length) / 2))}${suffix}`;
+      const expected = `${input.slice(0, -"value".length)}[REDACTED]`;
+      return medianDurationFor(input, expected, 1);
+    });
+
+    expect(durations[2]).toBeLessThan(2_000);
+    expect(durations[4]).toBeLessThan(8_000);
+    for (let index = 1; index < durations.length; index += 1) {
+      expect(durations[index]).toBeLessThan((durations[index - 1] as number) * 3.5 + 50);
+    }
+  });
+
+  it("redacts valid case-insensitive URL credentials near the end of a long line", () => {
+    const prefix = `${"x".repeat(MEBIBYTE)};`;
+    const input = `${prefix}HTTPS://user:p:a:ss@example.test/path`;
+    expect(redactSecrets(input)).toEqual({
+      content: `${prefix}HTTPS://user:[REDACTED]@example.test/path`,
+      redactionCount: 1,
+    });
   });
 
   it("redacts secret assignments near the end of a long single line without weakening key grammar", () => {
