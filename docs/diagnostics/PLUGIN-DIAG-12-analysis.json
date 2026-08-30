@@ -1,0 +1,1757 @@
+{
+  "generatedAt": "2026-08-30T21:21:14.239Z",
+  "design": {
+    "tasks": 3,
+    "repeats": 2,
+    "arms": 4,
+    "evaluableRuns": 24,
+    "preResultInfrastructureReplacements": 4
+  },
+  "armSummary": {
+    "none": {
+      "runs": 6,
+      "passed": 4,
+      "passRate": 0.6666666666666666,
+      "averageDurationMs": 150203,
+      "tokenTotals": {
+        "input": 193906,
+        "output": 23547,
+        "cacheRead": 891904,
+        "cacheWrite": 0,
+        "total": 1109357
+      },
+      "averageTokens": 184892.83333333334,
+      "compactions": 0,
+      "toolCalls": {
+        "bash": 75,
+        "read": 44,
+        "edit": 21
+      },
+      "averageVaultStateBytes": 0,
+      "averageRepoStateBytes": 0
+    },
+    "vault": {
+      "runs": 6,
+      "passed": 6,
+      "passRate": 1,
+      "averageDurationMs": 99487.66666666667,
+      "tokenTotals": {
+        "input": 227531,
+        "output": 17840,
+        "cacheRead": 862720,
+        "cacheWrite": 0,
+        "total": 1108091
+      },
+      "averageTokens": 184681.83333333334,
+      "compactions": 0,
+      "toolCalls": {
+        "bash": 58,
+        "read": 43,
+        "edit": 19,
+        "context_vault_obs_search": 3,
+        "context_vault_obs_get": 3
+      },
+      "averageVaultStateBytes": 345177.3333333333,
+      "averageRepoStateBytes": 0
+    },
+    "repoctx": {
+      "runs": 6,
+      "passed": 4,
+      "passRate": 0.6666666666666666,
+      "averageDurationMs": 116848.16666666667,
+      "tokenTotals": {
+        "input": 167232,
+        "output": 20957,
+        "cacheRead": 1046528,
+        "cacheWrite": 0,
+        "total": 1234717
+      },
+      "averageTokens": 205786.16666666666,
+      "compactions": 0,
+      "toolCalls": {
+        "repo_context_search": 7,
+        "bash": 54,
+        "read": 44,
+        "edit": 19
+      },
+      "averageVaultStateBytes": 0,
+      "averageRepoStateBytes": 14891030.666666666
+    },
+    "both": {
+      "runs": 6,
+      "passed": 6,
+      "passRate": 1,
+      "averageDurationMs": 111273,
+      "tokenTotals": {
+        "input": 231982,
+        "output": 18730,
+        "cacheRead": 1285120,
+        "cacheWrite": 0,
+        "total": 1535832
+      },
+      "averageTokens": 255972,
+      "compactions": 0,
+      "toolCalls": {
+        "repo_context_search": 7,
+        "bash": 45,
+        "read": 47,
+        "edit": 24,
+        "write": 1,
+        "context_vault_obs_search": 3,
+        "context_vault_obs_get": 2
+      },
+      "averageVaultStateBytes": 349324.6666666667,
+      "averageRepoStateBytes": 14891274.833333334
+    }
+  },
+  "taskSummary": {
+    "local-control": {
+      "none": [
+        true,
+        true
+      ],
+      "vault": [
+        true,
+        true
+      ],
+      "repoctx": [
+        true,
+        true
+      ],
+      "both": [
+        true,
+        true
+      ]
+    },
+    "repo-localization": {
+      "none": [
+        true,
+        true
+      ],
+      "vault": [
+        true,
+        true
+      ],
+      "repoctx": [
+        true,
+        true
+      ],
+      "both": [
+        true,
+        true
+      ]
+    },
+    "context-pressure-v2": {
+      "none": [
+        false,
+        false
+      ],
+      "vault": [
+        true,
+        true
+      ],
+      "repoctx": [
+        false,
+        false
+      ],
+      "both": [
+        true,
+        true
+      ]
+    }
+  },
+  "toolSummary": {
+    "repo_context_search": {
+      "calls": 14,
+      "nonempty": 10,
+      "warming": 4,
+      "averageOutputBytes": 2563,
+      "editedHit": 10,
+      "containsPressureContract": 0
+    },
+    "context_vault_obs_search": {
+      "calls": 6,
+      "nonempty": 6,
+      "warming": 0,
+      "averageOutputBytes": 5358,
+      "editedHit": 0,
+      "containsPressureContract": 4
+    },
+    "context_vault_obs_get": {
+      "calls": 5,
+      "nonempty": 0,
+      "warming": 0,
+      "averageOutputBytes": 16698,
+      "editedHit": 0,
+      "containsPressureContract": 3
+    }
+  },
+  "rows": [
+    {
+      "taskRole": "local-control",
+      "task": "django__django-12262",
+      "repeat": 1,
+      "arm": "none",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 54890,
+      "tokens": {
+        "input": 28560,
+        "output": 2053,
+        "cacheRead": 57344,
+        "cacheWrite": 0,
+        "total": 87957
+      },
+      "cacheHitRate": 66.75,
+      "toolCalls": {
+        "total": 17,
+        "byTool": {
+          "bash": 9,
+          "read": 5,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "editedFiles": [
+        "django/template/library.py",
+        "tests/template_tests/templatetags/inclusion.py",
+        "tests/template_tests/test_custom.py"
+      ]
+    },
+    {
+      "taskRole": "local-control",
+      "task": "django__django-12262",
+      "repeat": 1,
+      "arm": "vault",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 99878,
+      "tokens": {
+        "input": 21949,
+        "output": 2459,
+        "cacheRead": 87040,
+        "cacheWrite": 0,
+        "total": 111448
+      },
+      "cacheHitRate": 79.86,
+      "toolCalls": {
+        "total": 18,
+        "byTool": {
+          "bash": 9,
+          "read": 6,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 18,
+          "originalBytes": 47950,
+          "sanitizedBytes": 47935,
+          "redactionCount": 1
+        },
+        "artifactsBytes": 47935,
+        "mapBytes": 0,
+        "stateBytes": 58697
+      },
+      "repoContext": null,
+      "editedFiles": [
+        "django/template/library.py",
+        "tests/template_tests/templatetags/inclusion.py",
+        "tests/template_tests/test_custom.py"
+      ]
+    },
+    {
+      "taskRole": "local-control",
+      "task": "django__django-12262",
+      "repeat": 1,
+      "arm": "repoctx",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 57742,
+      "tokens": {
+        "input": 20096,
+        "output": 1389,
+        "cacheRead": 64000,
+        "cacheWrite": 0,
+        "total": 85485
+      },
+      "cacheHitRate": 76.1,
+      "toolCalls": {
+        "total": 15,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 7,
+          "read": 5,
+          "edit": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 4907,
+        "warnings": 3,
+        "freshness": "unsupported",
+        "generation": 3,
+        "pendingFiles": 0,
+        "dirtyFiles": 2,
+        "mapBytes": 29848216,
+        "stateBytes": 29848216
+      },
+      "editedFiles": [
+        "django/template/library.py",
+        "tests/template_tests/test_custom.py"
+      ]
+    },
+    {
+      "taskRole": "local-control",
+      "task": "django__django-12262",
+      "repeat": 1,
+      "arm": "both",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 132530,
+      "tokens": {
+        "input": 23341,
+        "output": 2617,
+        "cacheRead": 145920,
+        "cacheWrite": 0,
+        "total": 171878
+      },
+      "cacheHitRate": 86.21,
+      "toolCalls": {
+        "total": 21,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 10,
+          "read": 5,
+          "edit": 5
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 20,
+          "originalBytes": 52688,
+          "sanitizedBytes": 52673,
+          "redactionCount": 1
+        },
+        "artifactsBytes": 52590,
+        "mapBytes": 0,
+        "stateBytes": 64526
+      },
+      "repoContext": {
+        "files": 4907,
+        "warnings": 3,
+        "freshness": "unsupported",
+        "generation": 6,
+        "pendingFiles": 0,
+        "dirtyFiles": 3,
+        "mapBytes": 29849178,
+        "stateBytes": 29849178
+      },
+      "editedFiles": [
+        "django/template/library.py",
+        "tests/template_tests/templatetags/inclusion.py",
+        "tests/template_tests/test_custom.py"
+      ]
+    },
+    {
+      "taskRole": "local-control",
+      "task": "django__django-12262",
+      "repeat": 2,
+      "arm": "none",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 170066,
+      "tokens": {
+        "input": 28040,
+        "output": 1935,
+        "cacheRead": 63488,
+        "cacheWrite": 0,
+        "total": 93463
+      },
+      "cacheHitRate": 69.36,
+      "toolCalls": {
+        "total": 15,
+        "byTool": {
+          "bash": 7,
+          "read": 5,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "editedFiles": [
+        "django/template/library.py",
+        "tests/template_tests/templatetags/inclusion.py",
+        "tests/template_tests/test_custom.py"
+      ]
+    },
+    {
+      "taskRole": "local-control",
+      "task": "django__django-12262",
+      "repeat": 2,
+      "arm": "vault",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 82137,
+      "tokens": {
+        "input": 18138,
+        "output": 2052,
+        "cacheRead": 59392,
+        "cacheWrite": 0,
+        "total": 79582
+      },
+      "cacheHitRate": 76.61,
+      "toolCalls": {
+        "total": 16,
+        "byTool": {
+          "bash": 9,
+          "read": 4,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 16,
+          "originalBytes": 34446,
+          "sanitizedBytes": 34431,
+          "redactionCount": 1
+        },
+        "artifactsBytes": 34431,
+        "mapBytes": 0,
+        "stateBytes": 44013
+      },
+      "repoContext": null,
+      "editedFiles": [
+        "django/template/library.py",
+        "tests/template_tests/templatetags/inclusion.py",
+        "tests/template_tests/test_custom.py"
+      ]
+    },
+    {
+      "taskRole": "local-control",
+      "task": "django__django-12262",
+      "repeat": 2,
+      "arm": "repoctx",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 81996,
+      "tokens": {
+        "input": 21753,
+        "output": 1489,
+        "cacheRead": 78336,
+        "cacheWrite": 0,
+        "total": 101578
+      },
+      "cacheHitRate": 78.27,
+      "toolCalls": {
+        "total": 18,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 10,
+          "read": 5,
+          "edit": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 4907,
+        "warnings": 3,
+        "freshness": "unsupported",
+        "generation": 3,
+        "pendingFiles": 0,
+        "dirtyFiles": 2,
+        "mapBytes": 29848216,
+        "stateBytes": 29848216
+      },
+      "editedFiles": [
+        "django/template/library.py",
+        "tests/template_tests/test_custom.py"
+      ]
+    },
+    {
+      "taskRole": "local-control",
+      "task": "django__django-12262",
+      "repeat": 2,
+      "arm": "both",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 55287,
+      "tokens": {
+        "input": 20136,
+        "output": 1310,
+        "cacheRead": 82432,
+        "cacheWrite": 0,
+        "total": 103878
+      },
+      "cacheHitRate": 80.37,
+      "toolCalls": {
+        "total": 15,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 6,
+          "read": 6,
+          "edit": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 14,
+          "originalBytes": 41625,
+          "sanitizedBytes": 41610,
+          "redactionCount": 1
+        },
+        "artifactsBytes": 41610,
+        "mapBytes": 0,
+        "stateBytes": 50024
+      },
+      "repoContext": {
+        "files": 4907,
+        "warnings": 3,
+        "freshness": "unsupported",
+        "generation": 3,
+        "pendingFiles": 0,
+        "dirtyFiles": 2,
+        "mapBytes": 29848216,
+        "stateBytes": 29848216
+      },
+      "editedFiles": [
+        "django/template/library.py",
+        "tests/template_tests/test_custom.py"
+      ]
+    },
+    {
+      "taskRole": "repo-localization",
+      "task": "sphinx-doc__sphinx-8035",
+      "repeat": 1,
+      "arm": "none",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 160586,
+      "tokens": {
+        "input": 36405,
+        "output": 5945,
+        "cacheRead": 209920,
+        "cacheWrite": 0,
+        "total": 252270
+      },
+      "cacheHitRate": 85.22,
+      "toolCalls": {
+        "total": 31,
+        "byTool": {
+          "bash": 12,
+          "read": 14,
+          "edit": 5
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "editedFiles": [
+        "CHANGES",
+        "doc/usage/extensions/autodoc.rst",
+        "setup.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "tests/test_ext_autodoc_private_members.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "taskRole": "repo-localization",
+      "task": "sphinx-doc__sphinx-8035",
+      "repeat": 1,
+      "arm": "vault",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 180724,
+      "tokens": {
+        "input": 71976,
+        "output": 6547,
+        "cacheRead": 346112,
+        "cacheWrite": 0,
+        "total": 424635
+      },
+      "cacheHitRate": 82.78,
+      "toolCalls": {
+        "total": 40,
+        "byTool": {
+          "bash": 20,
+          "read": 13,
+          "edit": 7
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 40,
+          "originalBytes": 102760,
+          "sanitizedBytes": 102760,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 102691,
+        "mapBytes": 0,
+        "stateBytes": 126385
+      },
+      "repoContext": null,
+      "editedFiles": [
+        "CHANGES",
+        "doc/usage/extensions/autodoc.rst",
+        "setup.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "tests/test_ext_autodoc_private_members.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "taskRole": "repo-localization",
+      "task": "sphinx-doc__sphinx-8035",
+      "repeat": 1,
+      "arm": "repoctx",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 212757,
+      "tokens": {
+        "input": 46755,
+        "output": 6344,
+        "cacheRead": 478720,
+        "cacheWrite": 0,
+        "total": 531819
+      },
+      "cacheHitRate": 91.1,
+      "toolCalls": {
+        "total": 31,
+        "byTool": {
+          "repo_context_search": 1,
+          "read": 14,
+          "bash": 9,
+          "edit": 7
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 1241,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 6,
+        "pendingFiles": 0,
+        "dirtyFiles": 6,
+        "mapBytes": 8620414,
+        "stateBytes": 8620414
+      },
+      "editedFiles": [
+        "CHANGES",
+        "doc/usage/extensions/autodoc.rst",
+        "setup.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "tests/roots/test-ext-autodoc/target/private.py",
+        "tests/test_ext_autodoc_private_members.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "taskRole": "repo-localization",
+      "task": "sphinx-doc__sphinx-8035",
+      "repeat": 1,
+      "arm": "both",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 230562,
+      "tokens": {
+        "input": 76352,
+        "output": 7173,
+        "cacheRead": 447488,
+        "cacheWrite": 0,
+        "total": 531013
+      },
+      "cacheHitRate": 85.42,
+      "toolCalls": {
+        "total": 38,
+        "byTool": {
+          "repo_context_search": 2,
+          "read": 16,
+          "bash": 11,
+          "edit": 8,
+          "write": 1
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 36,
+          "originalBytes": 92104,
+          "sanitizedBytes": 92104,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 91959,
+        "mapBytes": 0,
+        "stateBytes": 113300
+      },
+      "repoContext": {
+        "files": 1241,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 8,
+        "pendingFiles": 0,
+        "dirtyFiles": 6,
+        "mapBytes": 8620877,
+        "stateBytes": 8620877
+      },
+      "editedFiles": [
+        "CHANGES",
+        "doc/usage/extensions/autodoc.rst",
+        "setup.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "tests/roots/test-ext-autodoc/target/private_selection.py",
+        "tests/test_ext_autodoc_private_members.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "taskRole": "repo-localization",
+      "task": "sphinx-doc__sphinx-8035",
+      "repeat": 2,
+      "arm": "none",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 196213,
+      "tokens": {
+        "input": 43612,
+        "output": 5666,
+        "cacheRead": 359424,
+        "cacheWrite": 0,
+        "total": 408702
+      },
+      "cacheHitRate": 89.18,
+      "toolCalls": {
+        "total": 35,
+        "byTool": {
+          "bash": 16,
+          "read": 12,
+          "edit": 7
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "editedFiles": [
+        "CHANGES",
+        "doc/usage/extensions/autodoc.rst",
+        "setup.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "tests/roots/test-ext-autodoc/target/private.py",
+        "tests/test_ext_autodoc_private_members.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "taskRole": "repo-localization",
+      "task": "sphinx-doc__sphinx-8035",
+      "repeat": 2,
+      "arm": "vault",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 153203,
+      "tokens": {
+        "input": 76204,
+        "output": 4680,
+        "cacheRead": 281088,
+        "cacheWrite": 0,
+        "total": 361972
+      },
+      "cacheHitRate": 78.67,
+      "toolCalls": {
+        "total": 30,
+        "byTool": {
+          "bash": 11,
+          "read": 14,
+          "context_vault_obs_search": 1,
+          "edit": 4
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 29,
+          "originalBytes": 99092,
+          "sanitizedBytes": 99092,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 99092,
+        "mapBytes": 0,
+        "stateBytes": 147620
+      },
+      "repoContext": null,
+      "editedFiles": [
+        "CHANGES",
+        "doc/usage/extensions/autodoc.rst",
+        "setup.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "tests/test_ext_autodoc_private_members.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "taskRole": "repo-localization",
+      "task": "sphinx-doc__sphinx-8035",
+      "repeat": 2,
+      "arm": "repoctx",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 195719,
+      "tokens": {
+        "input": 47956,
+        "output": 5956,
+        "cacheRead": 334848,
+        "cacheWrite": 0,
+        "total": 388760
+      },
+      "cacheHitRate": 87.47,
+      "toolCalls": {
+        "total": 29,
+        "byTool": {
+          "repo_context_search": 2,
+          "read": 12,
+          "bash": 9,
+          "edit": 6
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 1241,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 6,
+        "pendingFiles": 0,
+        "dirtyFiles": 6,
+        "mapBytes": 8620419,
+        "stateBytes": 8620419
+      },
+      "editedFiles": [
+        "CHANGES",
+        "doc/usage/extensions/autodoc.rst",
+        "setup.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "tests/test_ext_autodoc_private_members.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "taskRole": "repo-localization",
+      "task": "sphinx-doc__sphinx-8035",
+      "repeat": 2,
+      "arm": "both",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 164278,
+      "tokens": {
+        "input": 50932,
+        "output": 5793,
+        "cacheRead": 477696,
+        "cacheWrite": 0,
+        "total": 534421
+      },
+      "cacheHitRate": 90.37,
+      "toolCalls": {
+        "total": 34,
+        "byTool": {
+          "repo_context_search": 1,
+          "read": 14,
+          "bash": 11,
+          "context_vault_obs_search": 1,
+          "edit": 7
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 32,
+          "originalBytes": 122603,
+          "sanitizedBytes": 122603,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 122603,
+        "mapBytes": 0,
+        "stateBytes": 189834
+      },
+      "repoContext": {
+        "files": 1241,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 6,
+        "pendingFiles": 0,
+        "dirtyFiles": 6,
+        "mapBytes": 8620308,
+        "stateBytes": 8620308
+      },
+      "editedFiles": [
+        "CHANGES",
+        "doc/usage/extensions/autodoc.rst",
+        "setup.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "tests/roots/test-ext-autodoc/target/private.py",
+        "tests/test_ext_autodoc_private_members.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "task": "sphinx-doc__sphinx-10466",
+      "repeat": 1,
+      "arm": "none",
+      "passed": false,
+      "finalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 154275,
+      "tokens": {
+        "input": 33056,
+        "output": 3903,
+        "cacheRead": 86016,
+        "cacheWrite": 0,
+        "total": 122975
+      },
+      "cacheHitRate": 72.24,
+      "toolCalls": {
+        "total": 20,
+        "byTool": {
+          "bash": 16,
+          "read": 3,
+          "edit": 1
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "pressurePrelude": {
+        "chunks": 12,
+        "originalBytes": 786432,
+        "modelVisibleBytes": 786432,
+        "replacedResults": 0
+      },
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "task": "sphinx-doc__sphinx-10466",
+      "repeat": 1,
+      "arm": "vault",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 40064,
+      "tokens": {
+        "input": 21040,
+        "output": 1173,
+        "cacheRead": 58880,
+        "cacheWrite": 0,
+        "total": 81093
+      },
+      "cacheHitRate": 73.67,
+      "toolCalls": {
+        "total": 13,
+        "byTool": {
+          "context_vault_obs_search": 1,
+          "context_vault_obs_get": 2,
+          "read": 3,
+          "bash": 6,
+          "edit": 1
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 22,
+          "originalBytes": 800259,
+          "sanitizedBytes": 800259,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 800259,
+        "mapBytes": 0,
+        "stateBytes": 846828
+      },
+      "repoContext": null,
+      "pressurePrelude": {
+        "chunks": 12,
+        "originalBytes": 786432,
+        "modelVisibleBytes": 49152,
+        "replacedResults": 12
+      },
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "task": "sphinx-doc__sphinx-10466",
+      "repeat": 1,
+      "arm": "repoctx",
+      "passed": false,
+      "finalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 80669,
+      "tokens": {
+        "input": 12981,
+        "output": 2999,
+        "cacheRead": 41984,
+        "cacheWrite": 0,
+        "total": 57964
+      },
+      "cacheHitRate": 76.38,
+      "toolCalls": {
+        "total": 15,
+        "byTool": {
+          "repo_context_search": 1,
+          "read": 4,
+          "bash": 9,
+          "edit": 1
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 1379,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 2,
+        "pendingFiles": 0,
+        "dirtyFiles": 1,
+        "mapBytes": 6204480,
+        "stateBytes": 6204480
+      },
+      "pressurePrelude": {
+        "chunks": 12,
+        "originalBytes": 786432,
+        "modelVisibleBytes": 786432,
+        "replacedResults": 0
+      },
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "task": "sphinx-doc__sphinx-10466",
+      "repeat": 1,
+      "arm": "both",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 28286,
+      "tokens": {
+        "input": 35954,
+        "output": 757,
+        "cacheRead": 40448,
+        "cacheWrite": 0,
+        "total": 77159
+      },
+      "cacheHitRate": 52.94,
+      "toolCalls": {
+        "total": 9,
+        "byTool": {
+          "context_vault_obs_search": 1,
+          "repo_context_search": 1,
+          "context_vault_obs_get": 1,
+          "read": 3,
+          "edit": 1,
+          "bash": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 18,
+          "originalBytes": 788075,
+          "sanitizedBytes": 788075,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 788075,
+        "mapBytes": 0,
+        "stateBytes": 832296
+      },
+      "repoContext": {
+        "files": 1379,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 2,
+        "pendingFiles": 0,
+        "dirtyFiles": 1,
+        "mapBytes": 6204526,
+        "stateBytes": 6204526
+      },
+      "pressurePrelude": {
+        "chunks": 12,
+        "originalBytes": 786432,
+        "modelVisibleBytes": 49152,
+        "replacedResults": 12
+      },
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "task": "sphinx-doc__sphinx-10466",
+      "repeat": 2,
+      "arm": "none",
+      "passed": false,
+      "finalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 165188,
+      "tokens": {
+        "input": 24233,
+        "output": 4045,
+        "cacheRead": 115712,
+        "cacheWrite": 0,
+        "total": 143990
+      },
+      "cacheHitRate": 82.68,
+      "toolCalls": {
+        "total": 22,
+        "byTool": {
+          "bash": 15,
+          "read": 5,
+          "edit": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "pressurePrelude": {
+        "chunks": 12,
+        "originalBytes": 786432,
+        "modelVisibleBytes": 786432,
+        "replacedResults": 0
+      },
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "task": "sphinx-doc__sphinx-10466",
+      "repeat": 2,
+      "arm": "vault",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 40920,
+      "tokens": {
+        "input": 18224,
+        "output": 929,
+        "cacheRead": 30208,
+        "cacheWrite": 0,
+        "total": 49361
+      },
+      "cacheHitRate": 62.37,
+      "toolCalls": {
+        "total": 9,
+        "byTool": {
+          "context_vault_obs_search": 1,
+          "bash": 3,
+          "context_vault_obs_get": 1,
+          "read": 3,
+          "edit": 1
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 19,
+          "originalBytes": 799884,
+          "sanitizedBytes": 799884,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 799884,
+        "mapBytes": 0,
+        "stateBytes": 847521
+      },
+      "repoContext": null,
+      "pressurePrelude": {
+        "chunks": 12,
+        "originalBytes": 786432,
+        "modelVisibleBytes": 49152,
+        "replacedResults": 12
+      },
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "task": "sphinx-doc__sphinx-10466",
+      "repeat": 2,
+      "arm": "repoctx",
+      "passed": false,
+      "finalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 72206,
+      "tokens": {
+        "input": 17691,
+        "output": 2780,
+        "cacheRead": 48640,
+        "cacheWrite": 0,
+        "total": 69111
+      },
+      "cacheHitRate": 73.33,
+      "toolCalls": {
+        "total": 16,
+        "byTool": {
+          "repo_context_search": 1,
+          "read": 4,
+          "bash": 10,
+          "edit": 1
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 1379,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 2,
+        "pendingFiles": 0,
+        "dirtyFiles": 1,
+        "mapBytes": 6204439,
+        "stateBytes": 6204439
+      },
+      "pressurePrelude": {
+        "chunks": 12,
+        "originalBytes": 786432,
+        "modelVisibleBytes": 786432,
+        "replacedResults": 0
+      },
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "task": "sphinx-doc__sphinx-10466",
+      "repeat": 2,
+      "arm": "both",
+      "passed": true,
+      "finalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 56695,
+      "tokens": {
+        "input": 25267,
+        "output": 1080,
+        "cacheRead": 91136,
+        "cacheWrite": 0,
+        "total": 117483
+      },
+      "cacheHitRate": 78.29,
+      "toolCalls": {
+        "total": 12,
+        "byTool": {
+          "context_vault_obs_search": 1,
+          "repo_context_search": 1,
+          "bash": 5,
+          "context_vault_obs_get": 1,
+          "read": 3,
+          "edit": 1
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 21,
+          "originalBytes": 799986,
+          "sanitizedBytes": 799986,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 799986,
+        "mapBytes": 0,
+        "stateBytes": 845968
+      },
+      "repoContext": {
+        "files": 1379,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 2,
+        "pendingFiles": 0,
+        "dirtyFiles": 1,
+        "mapBytes": 6204544,
+        "stateBytes": 6204544
+      },
+      "pressurePrelude": {
+        "chunks": 12,
+        "originalBytes": 786432,
+        "modelVisibleBytes": 49152,
+        "replacedResults": 12
+      },
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    }
+  ],
+  "toolRows": [
+    {
+      "taskRole": "local-control",
+      "repeat": 1,
+      "arm": "repoctx",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "simple_tag received unexpected keyword argument parse_bits keyword-only defaults",
+      "outputBytes": 525,
+      "lifecycle": "warming",
+      "resultCount": 0,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "local-control",
+      "repeat": 1,
+      "arm": "both",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "simple_tag received unexpected keyword argument parse_bits keyword-only defaults inclusion_tag",
+      "outputBytes": 539,
+      "lifecycle": "warming",
+      "resultCount": 0,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "local-control",
+      "repeat": 2,
+      "arm": "repoctx",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "received unexpected keyword argument simple_tag parse_bits keyword-only defaults",
+      "outputBytes": 525,
+      "lifecycle": "warming",
+      "resultCount": 0,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "local-control",
+      "repeat": 2,
+      "arm": "both",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "TemplateSyntaxError received unexpected keyword argument simple_tag parse_bits keyword-only defaults",
+      "outputBytes": 545,
+      "lifecycle": "warming",
+      "resultCount": 0,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "repo-localization",
+      "repeat": 1,
+      "arm": "repoctx",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "autodoc private-members option members parsing tests",
+      "outputBytes": 3512,
+      "lifecycle": "ready",
+      "resultCount": 10,
+      "top1": "tests/test_ext_autodoc_private_members.py",
+      "top5": [
+        "tests/test_ext_autodoc_private_members.py",
+        "doc/usage/extensions/autodoc.rst",
+        "tests/test_ext_autodoc.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "sphinx/ext/autodoc/directive.py"
+      ],
+      "editedHits": [
+        "tests/test_ext_autodoc_private_members.py",
+        "doc/usage/extensions/autodoc.rst",
+        "sphinx/ext/autodoc/__init__.py",
+        "CHANGES"
+      ],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "repo-localization",
+      "repeat": 1,
+      "arm": "both",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "autodoc private-members option members parsing tests",
+      "outputBytes": 3512,
+      "lifecycle": "ready",
+      "resultCount": 10,
+      "top1": "tests/test_ext_autodoc_private_members.py",
+      "top5": [
+        "tests/test_ext_autodoc_private_members.py",
+        "doc/usage/extensions/autodoc.rst",
+        "tests/test_ext_autodoc.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "sphinx/ext/autodoc/directive.py"
+      ],
+      "editedHits": [
+        "tests/test_ext_autodoc_private_members.py",
+        "doc/usage/extensions/autodoc.rst",
+        "sphinx/ext/autodoc/__init__.py",
+        "CHANGES"
+      ],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "repo-localization",
+      "repeat": 1,
+      "arm": "both",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "private_members option_spec bool_option members_option filter_members sphinx/ext/autodoc/__init__.py",
+      "outputBytes": 3707,
+      "lifecycle": "ready",
+      "resultCount": 10,
+      "top1": "sphinx/ext/autodoc/__init__.py",
+      "top5": [
+        "sphinx/ext/autodoc/__init__.py",
+        "sphinx/ext/autosummary/__init__.py",
+        "sphinx/ext/autodoc/directive.py",
+        "tests/test_ext_autodoc.py",
+        "sphinx/directives/__init__.py"
+      ],
+      "editedHits": [
+        "sphinx/ext/autodoc/__init__.py"
+      ],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "repo-localization",
+      "repeat": 2,
+      "arm": "vault",
+      "passed": true,
+      "tool": "context_vault_obs_search",
+      "query": "Sphinx autodoc specific private-members members_option filter_members",
+      "outputBytes": 7904,
+      "resultCount": 5,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "repo-localization",
+      "repeat": 2,
+      "arm": "repoctx",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "autodoc private-members option members option parsing tests",
+      "outputBytes": 3519,
+      "lifecycle": "ready",
+      "resultCount": 10,
+      "top1": "tests/test_ext_autodoc_private_members.py",
+      "top5": [
+        "tests/test_ext_autodoc_private_members.py",
+        "doc/usage/extensions/autodoc.rst",
+        "tests/test_ext_autodoc.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "sphinx/ext/autodoc/directive.py"
+      ],
+      "editedHits": [
+        "tests/test_ext_autodoc_private_members.py",
+        "doc/usage/extensions/autodoc.rst",
+        "sphinx/ext/autodoc/__init__.py",
+        "CHANGES"
+      ],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "repo-localization",
+      "repeat": 2,
+      "arm": "repoctx",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "private_members options.private_members filter_members option_spec private-members bool_option",
+      "outputBytes": 3620,
+      "lifecycle": "ready",
+      "resultCount": 10,
+      "top1": "sphinx/ext/autodoc/__init__.py",
+      "top5": [
+        "sphinx/ext/autodoc/__init__.py",
+        "sphinx/ext/autodoc/directive.py",
+        "tests/test_ext_autodoc.py",
+        "tests/test_ext_autodoc_private_members.py",
+        "sphinx/ext/apidoc.py"
+      ],
+      "editedHits": [
+        "sphinx/ext/autodoc/__init__.py",
+        "tests/test_ext_autodoc_private_members.py",
+        "doc/usage/extensions/autodoc.rst",
+        "CHANGES"
+      ],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "repo-localization",
+      "repeat": 2,
+      "arm": "both",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "autodoc private-members option members parsing tests",
+      "outputBytes": 3512,
+      "lifecycle": "ready",
+      "resultCount": 10,
+      "top1": "tests/test_ext_autodoc_private_members.py",
+      "top5": [
+        "tests/test_ext_autodoc_private_members.py",
+        "doc/usage/extensions/autodoc.rst",
+        "tests/test_ext_autodoc.py",
+        "sphinx/ext/autodoc/__init__.py",
+        "sphinx/ext/autodoc/directive.py"
+      ],
+      "editedHits": [
+        "tests/test_ext_autodoc_private_members.py",
+        "doc/usage/extensions/autodoc.rst",
+        "sphinx/ext/autodoc/__init__.py",
+        "CHANGES"
+      ],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "repo-localization",
+      "repeat": 2,
+      "arm": "both",
+      "passed": true,
+      "tool": "context_vault_obs_search",
+      "query": "merge_private_members_option private-members members_option",
+      "outputBytes": 11994,
+      "resultCount": 9,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 1,
+      "arm": "vault",
+      "passed": true,
+      "tool": "context_vault_obs_search",
+      "query": "pressurelib summarize pressure_log authoritative behavior contract parser.py",
+      "outputBytes": 2728,
+      "resultCount": 1,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": true
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 1,
+      "arm": "vault",
+      "passed": true,
+      "tool": "context_vault_obs_get",
+      "outputBytes": 8920,
+      "resultCount": 0,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 1,
+      "arm": "vault",
+      "passed": true,
+      "tool": "context_vault_obs_get",
+      "query": "PRESSURE_CONTRACT_v1",
+      "outputBytes": 2747,
+      "resultCount": 0,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": true
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 1,
+      "arm": "repoctx",
+      "passed": false,
+      "tool": "repo_context_search",
+      "query": "pressurelib summarize parser.py pressure_log diagnostic authoritative behavior contract tests",
+      "outputBytes": 3099,
+      "lifecycle": "ready",
+      "resultCount": 10,
+      "top1": "pressurelib/parser.py",
+      "top5": [
+        "pressurelib/parser.py",
+        "tests/test_pressure_visible.py",
+        "pressurelib/__init__.py",
+        "sphinx/pycode/parser.py",
+        "tests/test_pycode_parser.py"
+      ],
+      "editedHits": [
+        "pressurelib/parser.py"
+      ],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 1,
+      "arm": "both",
+      "passed": true,
+      "tool": "context_vault_obs_search",
+      "query": "pressure_log pressurelib summarize authoritative behavior contract parser.py",
+      "outputBytes": 2728,
+      "resultCount": 1,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": true
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 1,
+      "arm": "both",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "pressurelib summarize parser.py tests pressure_log",
+      "outputBytes": 3073,
+      "lifecycle": "ready",
+      "resultCount": 10,
+      "top1": "pressurelib/parser.py",
+      "top5": [
+        "pressurelib/parser.py",
+        "tests/test_pressure_visible.py",
+        "pressurelib/__init__.py",
+        "tests/test_pycode_parser.py",
+        "sphinx/pycode/parser.py"
+      ],
+      "editedHits": [
+        "pressurelib/parser.py"
+      ],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 1,
+      "arm": "both",
+      "passed": true,
+      "tool": "context_vault_obs_get",
+      "outputBytes": 33499,
+      "resultCount": 0,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": true
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 2,
+      "arm": "vault",
+      "passed": true,
+      "tool": "context_vault_obs_search",
+      "query": "pressure_log pressurelib summarize authoritative behavior contract",
+      "outputBytes": 4068,
+      "resultCount": 2,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": true
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 2,
+      "arm": "vault",
+      "passed": true,
+      "tool": "context_vault_obs_get",
+      "outputBytes": 4824,
+      "resultCount": 0,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 2,
+      "arm": "repoctx",
+      "passed": false,
+      "tool": "repo_context_search",
+      "query": "pressurelib summarize pressure_log authoritative behavior contract archival receipts Observation",
+      "outputBytes": 3086,
+      "lifecycle": "ready",
+      "resultCount": 10,
+      "top1": "pressurelib/parser.py",
+      "top5": [
+        "pressurelib/parser.py",
+        "pressurelib/__init__.py",
+        "tests/test_pressure_visible.py",
+        "sphinx/util/logging.py",
+        "doc/extdev/logging.rst"
+      ],
+      "editedHits": [
+        "pressurelib/parser.py"
+      ],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 2,
+      "arm": "both",
+      "passed": true,
+      "tool": "context_vault_obs_search",
+      "query": "pressure_log pressurelib summarize authoritative behavior contract parser.py",
+      "outputBytes": 2728,
+      "resultCount": 1,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": true
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 2,
+      "arm": "both",
+      "passed": true,
+      "tool": "repo_context_search",
+      "query": "pressurelib summarize parser.py tests",
+      "outputBytes": 3108,
+      "lifecycle": "ready",
+      "resultCount": 10,
+      "top1": "pressurelib/parser.py",
+      "top5": [
+        "pressurelib/parser.py",
+        "pressurelib/__init__.py",
+        "sphinx/pycode/parser.py",
+        "tests/test_pycode_parser.py",
+        "tests/test_pressure_visible.py"
+      ],
+      "editedHits": [
+        "pressurelib/parser.py"
+      ],
+      "containsPressureContract": false
+    },
+    {
+      "taskRole": "context-pressure-v2",
+      "repeat": 2,
+      "arm": "both",
+      "passed": true,
+      "tool": "context_vault_obs_get",
+      "outputBytes": 33499,
+      "resultCount": 0,
+      "top5": [],
+      "editedHits": [],
+      "containsPressureContract": true
+    }
+  ]
+}

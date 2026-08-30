@@ -1,0 +1,80 @@
+{
+  "generatedAt": "2026-08-30T21:24:03.973Z",
+  "task": "django__django-12262",
+  "repositoryFiles": 4885,
+  "runs": 4,
+  "empty": 4,
+  "warming": 4,
+  "retries": 0,
+  "durationMs": {
+    "min": 5027,
+    "max": 16191,
+    "average": 8737
+  },
+  "rows": [
+    {
+      "repeat": 1,
+      "arm": "repoctx",
+      "query": "simple_tag received unexpected keyword argument parse_bits keyword-only defaults",
+      "durationMs": 5439,
+      "lifecycle": "warming",
+      "freshness": "stale",
+      "results": 0,
+      "fallbackEvidence": [
+        {
+          "kind": "warming",
+          "excerpt": "No lexical match found within the bounded warming scan."
+        }
+      ],
+      "retried": false
+    },
+    {
+      "repeat": 1,
+      "arm": "both",
+      "query": "simple_tag received unexpected keyword argument parse_bits keyword-only defaults inclusion_tag",
+      "durationMs": 8289,
+      "lifecycle": "warming",
+      "freshness": "stale",
+      "results": 0,
+      "fallbackEvidence": [
+        {
+          "kind": "warming",
+          "excerpt": "No lexical match found within the bounded warming scan."
+        }
+      ],
+      "retried": false
+    },
+    {
+      "repeat": 2,
+      "arm": "repoctx",
+      "query": "received unexpected keyword argument simple_tag parse_bits keyword-only defaults",
+      "durationMs": 5027,
+      "lifecycle": "warming",
+      "freshness": "stale",
+      "results": 0,
+      "fallbackEvidence": [
+        {
+          "kind": "warming",
+          "excerpt": "No lexical match found within the bounded warming scan."
+        }
+      ],
+      "retried": false
+    },
+    {
+      "repeat": 2,
+      "arm": "both",
+      "query": "TemplateSyntaxError received unexpected keyword argument simple_tag parse_bits keyword-only defaults",
+      "durationMs": 16191,
+      "lifecycle": "warming",
+      "freshness": "stale",
+      "results": 0,
+      "fallbackEvidence": [
+        {
+          "kind": "warming",
+          "excerpt": "No lexical match found within the bounded warming scan."
+        }
+      ],
+      "retried": false
+    }
+  ]
+}
