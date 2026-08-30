@@ -1,0 +1,70 @@
+{
+  "generatedAt": "2026-08-30T11:18:04.153Z",
+  "sizes": [
+    {
+      "name": "unique-1024",
+      "elapsedMs": 52.37,
+      "cpuMs": 31,
+      "rssAfterGc": 71507968,
+      "heapUsedAfterGc": 1809790,
+      "maxRssKb": 69852,
+      "value": {
+        "observationId": "obs_af6dd31b71046a1eb6fb57b8",
+        "receiptBytes": 512,
+        "stateGrowthBytes": 1507
+      }
+    },
+    {
+      "name": "unique-16384",
+      "elapsedMs": 311.02,
+      "cpuMs": 281,
+      "rssAfterGc": 84873216,
+      "heapUsedAfterGc": 1949886,
+      "maxRssKb": 82884,
+      "value": {
+        "observationId": "obs_58b656399351346ec9f352a7",
+        "receiptBytes": 512,
+        "stateGrowthBytes": 16871
+      }
+    },
+    {
+      "name": "unique-65536",
+      "elapsedMs": 4186.19,
+      "cpuMs": 4124,
+      "rssAfterGc": 105521152,
+      "heapUsedAfterGc": 2259004,
+      "maxRssKb": 103528,
+      "value": {
+        "observationId": "obs_3a7058097a218c9de5decc14",
+        "receiptBytes": 512,
+        "stateGrowthBytes": 66023
+      }
+    }
+  ],
+  "duplicate": {
+    "firstMs": 4196.63,
+    "secondMs": 4182.63,
+    "firstArtifactId": "46a71f1a7950f1c760c412b4df100129875119d1628ae1766568dbf018a3b8e9",
+    "secondArtifactId": "46a71f1a7950f1c760c412b4df100129875119d1628ae1766568dbf018a3b8e9",
+    "firstStateGrowthBytes": 66038,
+    "secondStateGrowthBytes": 487,
+    "deduplicated": true
+  },
+  "redaction": {
+    "count": 1,
+    "persistedContainsSecret": false,
+    "persistedContainsMarker": true
+  },
+  "reduction": {
+    "elapsedMs": 24.61,
+    "cpuMs": 31,
+    "rssAfterGc": 111640576,
+    "maxRssKb": 109024,
+    "triggered": true,
+    "targetReached": true,
+    "reducedCount": 10,
+    "tokensBefore": 263966,
+    "tokensAfter": 47336
+  },
+  "finalStateBytes": 943757
+}

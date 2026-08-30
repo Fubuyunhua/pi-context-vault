@@ -1,0 +1,77 @@
+{
+  "generatedAt": "2026-08-30T11:19:10.167Z",
+  "count": 100,
+  "stateBytes": 429478,
+  "archive": {
+    "name": "archive",
+    "elapsedMs": 3307.68,
+    "cpuUserMs": 906,
+    "cpuSystemMs": 922,
+    "rssBefore": 60850176,
+    "rssAfter": 80551936,
+    "rssAfterGc": 79974400,
+    "heapUsedAfterGc": 4757395,
+    "maxRssKb": 78672,
+    "value": {
+      "projectId": "project",
+      "projectRoot": "C:\\Users\\caiwei\\AppData\\Local\\Temp\\phase-a-vault-100-BcbnQN",
+      "sessionId": "scale",
+      "archived": 100,
+      "replaced": 100,
+      "degraded": false,
+      "failures": []
+    }
+  },
+  "searches": [
+    {
+      "name": "search-miss",
+      "elapsedMs": 34.19,
+      "cpuUserMs": 47,
+      "cpuSystemMs": 0,
+      "rssBefore": 79990784,
+      "rssAfter": 83275776,
+      "rssAfterGc": 83275776,
+      "heapUsedAfterGc": 4107079,
+      "maxRssKb": 81328,
+      "value": {
+        "results": 0,
+        "serializedBytes": 231,
+        "containsQuery": true
+      }
+    },
+    {
+      "name": "search-oldest",
+      "elapsedMs": 18.38,
+      "cpuUserMs": 16,
+      "cpuSystemMs": 0,
+      "rssBefore": 83283968,
+      "rssAfter": 83468288,
+      "rssAfterGc": 83472384,
+      "heapUsedAfterGc": 3403324,
+      "maxRssKb": 81516,
+      "value": {
+        "results": 1,
+        "serializedBytes": 1357,
+        "topObservationId": "obs_ed2d25d19e63d210535bd759",
+        "containsQuery": true
+      }
+    },
+    {
+      "name": "search-newest",
+      "elapsedMs": 15.86,
+      "cpuUserMs": 0,
+      "cpuSystemMs": 0,
+      "rssBefore": 83472384,
+      "rssAfter": 84090880,
+      "rssAfterGc": 84094976,
+      "heapUsedAfterGc": 3212014,
+      "maxRssKb": 82124,
+      "value": {
+        "results": 1,
+        "serializedBytes": 1362,
+        "topObservationId": "obs_0a322b4d36654b1c33443e7d",
+        "containsQuery": true
+      }
+    }
+  ]
+}

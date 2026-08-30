@@ -1,0 +1,47 @@
+{
+  "generatedAt": "2026-08-30T11:22:58.400Z",
+  "arm": "vault",
+  "fixtureFiles": 1000,
+  "startup": {
+    "name": "startup",
+    "elapsedMs": 214.9,
+    "cpuMs": 234,
+    "rssBefore": 204496896,
+    "rssAfter": 208494592,
+    "rssAfterGc": 209027072,
+    "heapUsedAfterGc": 29249859,
+    "maxRssKb": 208432
+  },
+  "firstSearch": {
+    "name": "firstSearch",
+    "elapsedMs": 0.17,
+    "cpuMs": 0,
+    "rssBefore": 209039360,
+    "rssAfter": 209043456,
+    "rssAfterGc": 209051648,
+    "heapUsedAfterGc": 29249859,
+    "maxRssKb": 208432
+  },
+  "ready": {
+    "name": "ready",
+    "elapsedMs": 0.23,
+    "cpuMs": 0,
+    "rssBefore": 209051648,
+    "rssAfter": 209059840,
+    "rssAfterGc": 209059840,
+    "heapUsedAfterGc": 29249859,
+    "maxRssKb": 208432
+  },
+  "toolNames": [
+    "context_vault_obs_get",
+    "context_vault_obs_search",
+    "context_vault_status"
+  ],
+  "duplicateTools": [],
+  "agentStateBytes": 399,
+  "afterDispose": {
+    "rss": 209596416,
+    "heapUsed": 22018445,
+    "maxRssKb": 208432
+  }
+}

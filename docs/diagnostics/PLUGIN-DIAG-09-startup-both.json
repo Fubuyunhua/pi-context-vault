@@ -1,0 +1,340 @@
+{
+  "generatedAt": "2026-08-30T11:23:22.665Z",
+  "arm": "both",
+  "fixtureFiles": 1000,
+  "startup": {
+    "name": "startup",
+    "elapsedMs": 220.36,
+    "cpuMs": 266,
+    "rssBefore": 256036864,
+    "rssAfter": 261165056,
+    "rssAfterGc": 261910528,
+    "heapUsedAfterGc": 41194540,
+    "maxRssKb": 261668
+  },
+  "firstSearch": {
+    "name": "firstSearch",
+    "elapsedMs": 2300.33,
+    "cpuMs": 3969,
+    "rssBefore": 261926912,
+    "rssAfter": 374947840,
+    "rssAfterGc": 373334016,
+    "heapUsedAfterGc": 82427775,
+    "maxRssKb": 366160,
+    "value": {
+      "type": "repo_context_search_result",
+      "trust": "untrusted-derived-navigation-data",
+      "query": "startupSymbol999",
+      "lifecycle": "ready",
+      "freshness": "fresh",
+      "generation": 1,
+      "gitHead": "718d79c197dd8741b0465682792eb522c23a7b90",
+      "workspaceRevision": "e713a7b33e0adafa9c1525cb3aca12addf88e77cddcf0d5759cd282a74c9c90e",
+      "pendingFiles": [],
+      "results": [
+        {
+          "path": "src/file-0999.ts",
+          "score": 27.924106144289997,
+          "kind": "semantic",
+          "matchedSymbols": [
+            "startupSymbol999"
+          ],
+          "matchReasons": [
+            "exact symbol: startupSymbol999",
+            "exact export: startupSymbol999",
+            "matched terms: startupsymbol999"
+          ],
+          "symbols": [
+            {
+              "name": "startupSymbol999",
+              "kind": "variable",
+              "signature": "const startupSymbol999",
+              "exported": true,
+              "line": 1
+            }
+          ],
+          "dependencies": []
+        },
+        {
+          "path": "src/file-0199.ts",
+          "score": 7.074819416463215,
+          "kind": "semantic",
+          "matchedSymbols": [],
+          "matchReasons": [
+            "matched terms: startupsymbol999"
+          ],
+          "symbols": [
+            {
+              "name": "startupSymbol199",
+              "kind": "variable",
+              "signature": "const startupSymbol199",
+              "exported": true,
+              "line": 1
+            }
+          ],
+          "dependencies": []
+        },
+        {
+          "path": "src/file-0299.ts",
+          "score": 7.074819416463215,
+          "kind": "semantic",
+          "matchedSymbols": [],
+          "matchReasons": [
+            "matched terms: startupsymbol999"
+          ],
+          "symbols": [
+            {
+              "name": "startupSymbol299",
+              "kind": "variable",
+              "signature": "const startupSymbol299",
+              "exported": true,
+              "line": 1
+            }
+          ],
+          "dependencies": []
+        },
+        {
+          "path": "src/file-0399.ts",
+          "score": 7.074819416463215,
+          "kind": "semantic",
+          "matchedSymbols": [],
+          "matchReasons": [
+            "matched terms: startupsymbol999"
+          ],
+          "symbols": [
+            {
+              "name": "startupSymbol399",
+              "kind": "variable",
+              "signature": "const startupSymbol399",
+              "exported": true,
+              "line": 1
+            }
+          ],
+          "dependencies": []
+        },
+        {
+          "path": "src/file-0499.ts",
+          "score": 7.074819416463215,
+          "kind": "semantic",
+          "matchedSymbols": [],
+          "matchReasons": [
+            "matched terms: startupsymbol999"
+          ],
+          "symbols": [
+            {
+              "name": "startupSymbol499",
+              "kind": "variable",
+              "signature": "const startupSymbol499",
+              "exported": true,
+              "line": 1
+            }
+          ],
+          "dependencies": []
+        },
+        {
+          "path": "src/file-0599.ts",
+          "score": 7.074819416463215,
+          "kind": "semantic",
+          "matchedSymbols": [],
+          "matchReasons": [
+            "matched terms: startupsymbol999"
+          ],
+          "symbols": [
+            {
+              "name": "startupSymbol599",
+              "kind": "variable",
+              "signature": "const startupSymbol599",
+              "exported": true,
+              "line": 1
+            }
+          ],
+          "dependencies": []
+        },
+        {
+          "path": "src/file-0699.ts",
+          "score": 7.074819416463215,
+          "kind": "semantic",
+          "matchedSymbols": [],
+          "matchReasons": [
+            "matched terms: startupsymbol999"
+          ],
+          "symbols": [
+            {
+              "name": "startupSymbol699",
+              "kind": "variable",
+              "signature": "const startupSymbol699",
+              "exported": true,
+              "line": 1
+            }
+          ],
+          "dependencies": []
+        },
+        {
+          "path": "src/file-0799.ts",
+          "score": 7.074819416463215,
+          "kind": "semantic",
+          "matchedSymbols": [],
+          "matchReasons": [
+            "matched terms: startupsymbol999"
+          ],
+          "symbols": [
+            {
+              "name": "startupSymbol799",
+              "kind": "variable",
+              "signature": "const startupSymbol799",
+              "exported": true,
+              "line": 1
+            }
+          ],
+          "dependencies": []
+        },
+        {
+          "path": "src/file-0899.ts",
+          "score": 7.074819416463215,
+          "kind": "semantic",
+          "matchedSymbols": [],
+          "matchReasons": [
+            "matched terms: startupsymbol999"
+          ],
+          "symbols": [
+            {
+              "name": "startupSymbol899",
+              "kind": "variable",
+              "signature": "const startupSymbol899",
+              "exported": true,
+              "line": 1
+            }
+          ],
+          "dependencies": []
+        },
+        {
+          "path": "src/file-0909.ts",
+          "score": 7.074819416463215,
+          "kind": "semantic",
+          "matchedSymbols": [],
+          "matchReasons": [
+            "matched terms: startupsymbol999"
+          ],
+          "symbols": [
+            {
+              "name": "startupSymbol909",
+              "kind": "variable",
+              "signature": "const startupSymbol909",
+              "exported": true,
+              "line": 1
+            }
+          ],
+          "dependencies": []
+        }
+      ],
+      "fallbackEvidence": [],
+      "truncatedFields": []
+    }
+  },
+  "ready": {
+    "name": "ready",
+    "elapsedMs": 1.86,
+    "cpuMs": 16,
+    "rssBefore": 373334016,
+    "rssAfter": 373383168,
+    "rssAfterGc": 373383168,
+    "heapUsedAfterGc": 82427775,
+    "maxRssKb": 366160,
+    "value": {
+      "extension": {
+        "id": "repo-context",
+        "version": "0.1.0"
+      },
+      "initialized": true,
+      "lifecycle": "ready",
+      "enabled": true,
+      "available": true,
+      "degraded": false,
+      "components": {
+        "repoMap": {
+          "available": true,
+          "lifecycle": "ready",
+          "freshness": "fresh",
+          "generation": 1,
+          "gitHead": "718d79c197dd8741b0465682792eb522c23a7b90",
+          "workspaceRevision": "e713a7b33e0adafa9c1525cb3aca12addf88e77cddcf0d5759cd282a74c9c90e",
+          "pendingCount": 0,
+          "pendingFiles": [],
+          "omittedPendingFiles": 0,
+          "dirtyCount": 0,
+          "dirtyFiles": [],
+          "omittedDirtyFiles": 0,
+          "maintenance": {
+            "activeGeneration": 1,
+            "deletedGenerations": [],
+            "bytesFreed": 0,
+            "remainingGenerations": 1,
+            "remainingBytes": 456167,
+            "quotaSatisfied": true
+          }
+        }
+      },
+      "telemetry": {
+        "initializationAttemptCount": 1,
+        "warmupTimeoutCount": 1,
+        "searchAttemptCount": 1,
+        "indexedResultReturnCount": 1,
+        "warmingEmptyReturnCount": 0,
+        "lexicalFallbackAttemptCount": 1,
+        "lexicalFallbackUsedCount": 0,
+        "lexicalFallbackNoMatchCount": 0,
+        "lexicalFallbackCappedCount": 0,
+        "lexicalFallbackTimeoutCount": 0,
+        "lexicalFallbackCancelledCount": 1,
+        "lexicalFallbackDurationMsTotal": 935,
+        "lexicalFallbackFilesScanned": 932,
+        "lexicalFallbackBytesScanned": 32365,
+        "lexicalFallbackMatchesReturned": 0,
+        "hydrationCount": 1,
+        "hydrationDurationMsTotal": 10.372800000001007,
+        "hydratedFastReuseCount": 0,
+        "fullBuildCount": 1,
+        "fullBuildDurationMsTotal": 620.5485000000008,
+        "repoMapQueryCount": 1,
+        "repoMapQueryDurationMsTotal": 295.57910000000084,
+        "ensureFreshCount": 1,
+        "ensureFreshDurationMsTotal": 222.92849999999999,
+        "filesReindexed": 0,
+        "gitHeadCount": 3,
+        "gitHeadDurationMsTotal": 102.33009999999922,
+        "gitDirtyCount": 3,
+        "gitDirtyDurationMsTotal": 487.89520000000084,
+        "gitDiffCount": 0,
+        "gitDiffDurationMsTotal": 0,
+        "searchIndexBuildCount": 1,
+        "searchIndexBuildDurationMsTotal": 53.6257999999998,
+        "generationWriteCount": 1,
+        "generationWriteDurationMsTotal": 47.77989999999954,
+        "generationCreatedCount": 1,
+        "generationBytesWritten": 456167,
+        "repoMapTotalBytes": 456167,
+        "generationPruneCount": 1,
+        "generationPruneDurationMsTotal": 9.927400000000489,
+        "generationPrunedFiles": 0,
+        "generationPrunedBytes": 0,
+        "maintenanceFailureCount": 0
+      },
+      "failures": []
+    }
+  },
+  "toolNames": [
+    "context_vault_obs_get",
+    "context_vault_obs_search",
+    "context_vault_repo_map",
+    "context_vault_status",
+    "repo_context_search",
+    "repo_context_status"
+  ],
+  "duplicateTools": [],
+  "agentStateBytes": 456611,
+  "afterDispose": {
+    "rss": 342986752,
+    "heapUsed": 57740274,
+    "maxRssKb": 366160
+  }
+}

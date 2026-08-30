@@ -1,0 +1,43 @@
+{
+  "generatedAt": "2026-08-30T11:22:49.096Z",
+  "arm": "none",
+  "fixtureFiles": 1000,
+  "startup": {
+    "name": "startup",
+    "elapsedMs": 45.97,
+    "cpuMs": 47,
+    "rssBefore": 200744960,
+    "rssAfter": 201248768,
+    "rssAfterGc": 201281536,
+    "heapUsedAfterGc": 26995355,
+    "maxRssKb": 205512
+  },
+  "firstSearch": {
+    "name": "firstSearch",
+    "elapsedMs": 0.19,
+    "cpuMs": 0,
+    "rssBefore": 201293824,
+    "rssAfter": 201293824,
+    "rssAfterGc": 201330688,
+    "heapUsedAfterGc": 26995355,
+    "maxRssKb": 205512
+  },
+  "ready": {
+    "name": "ready",
+    "elapsedMs": 0.23,
+    "cpuMs": 0,
+    "rssBefore": 201330688,
+    "rssAfter": 201330688,
+    "rssAfterGc": 201338880,
+    "heapUsedAfterGc": 26995355,
+    "maxRssKb": 205512
+  },
+  "toolNames": [],
+  "duplicateTools": [],
+  "agentStateBytes": 4,
+  "afterDispose": {
+    "rss": 201392128,
+    "heapUsed": 20283530,
+    "maxRssKb": 205512
+  }
+}
