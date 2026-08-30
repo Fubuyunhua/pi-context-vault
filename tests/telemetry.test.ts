@@ -23,6 +23,13 @@ describe("Vault-only telemetry", () => {
     telemetry.recordMetadataTailSync(5);
     telemetry.recordMetadataAppend(6, 1);
     telemetry.recordArtifactGcFailure();
+    telemetry.recordObservationSearch({
+      durationMs: 8,
+      candidates: 3,
+      artifactReads: 2,
+      unavailable: 1,
+      hydrationReads: 4,
+    });
     telemetry.recordReduction({
       durationMs: 7,
       triggered: true,
@@ -45,6 +52,12 @@ describe("Vault-only telemetry", () => {
       metadataBytesAppended: 6,
       metadataTombstoneCount: 1,
       artifactGcFailureCount: 1,
+      observationSearchCount: 1,
+      observationSearchCandidateCount: 3,
+      observationSearchArtifactReadCount: 2,
+      observationSearchUnavailableCount: 1,
+      observationSearchHydrationReadCount: 4,
+      observationSearchDurationMsTotal: 8,
       reductionInvocationCount: 1,
       reductionTriggeredCount: 1,
       reducedObservationCount: 2,

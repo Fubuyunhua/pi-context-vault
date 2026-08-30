@@ -166,9 +166,9 @@ describe("artifact store", () => {
       sessionId: "session",
       content: "shared indexed evidence",
     });
-    expect(await store.findSearchCandidates([{ value: "indexed", collapseIdentifierSeparators: false }])).toEqual(
-      new Set([shared.artifactId]),
-    );
+    expect(
+      (await store.searchArtifacts([{ value: "indexed", collapseIdentifierSeparators: false }])).candidateArtifactIds,
+    ).toEqual(new Set([shared.artifactId]));
 
     const updated = await store.archive({
       observationId: "search-1",
@@ -176,24 +176,115 @@ describe("artifact store", () => {
       sessionId: "session",
       content: "replacement searchable evidence",
     });
-    expect(await store.findSearchCandidates([{ value: "shared", collapseIdentifierSeparators: false }])).toEqual(
-      new Set([shared.artifactId]),
-    );
-    expect(await store.findSearchCandidates([{ value: "replacement", collapseIdentifierSeparators: false }])).toEqual(
-      new Set([updated.artifactId]),
-    );
+    expect(
+      (await store.searchArtifacts([{ value: "shared", collapseIdentifierSeparators: false }])).candidateArtifactIds,
+    ).toEqual(new Set([shared.artifactId]));
+    expect(
+      (await store.searchArtifacts([{ value: "replacement", collapseIdentifierSeparators: false }]))
+        .candidateArtifactIds,
+    ).toEqual(new Set([updated.artifactId]));
 
     await store.garbageCollect({
       retentionDays: 0,
       quotaBytes: 0,
       referencedArtifactIds: new Set([updated.artifactId]),
     });
-    expect(await store.findSearchCandidates([{ value: "shared", collapseIdentifierSeparators: false }])).toEqual(
-      new Set(),
-    );
-    expect(await store.findSearchCandidates([{ value: "replacement", collapseIdentifierSeparators: false }])).toEqual(
-      new Set([updated.artifactId]),
-    );
+    expect(
+      (await store.searchArtifacts([{ value: "shared", collapseIdentifierSeparators: false }])).candidateArtifactIds,
+    ).toEqual(new Set());
+    expect(
+      (await store.searchArtifacts([{ value: "replacement", collapseIdentifierSeparators: false }]))
+        .candidateArtifactIds,
+    ).toEqual(new Set([updated.artifactId]));
+  });
+
+  it("enforces the configured global derived-index entry bound", async () => {
+    const root = await tempRoot();
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    const store = new ArtifactStore({ artifactsRoot, metadataRoot, searchIndexMaxEntries: 2 });
+    const artifacts = [];
+    for (let index = 0; index < 3; index += 1) {
+      artifacts.push(
+        await store.archive({
+          observationId: `bounded-${index}`,
+          toolName: "read",
+          sessionId: "session",
+          content: `bounded evidence ${index}`,
+        }),
+      );
+    }
+    await store.searchArtifacts([{ value: "missing-bound-query", collapseIdentifierSeparators: false }]);
+    const persisted = JSON.parse(await readFile(join(metadataRoot, "observation-search-index-v1.json"), "utf8")) as {
+      schemaVersion: number;
+      algorithm: string;
+      checksum: string;
+      artifacts: Array<{ artifactId: string; bloom: string }>;
+    };
+    expect(persisted).toMatchObject({
+      schemaVersion: 1,
+      algorithm: "cv-search-bloom-v1",
+      checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(persisted.artifacts).toHaveLength(2);
+    expect(persisted.artifacts.every((entry) => Buffer.from(entry.bloom, "base64").length === 2_048)).toBe(true);
+
+    const coldReads: string[] = [];
+    const restarted = new ArtifactStore({
+      artifactsRoot,
+      metadataRoot,
+      searchIndexMaxEntries: 2,
+      onArtifactRead: (artifactId) => coldReads.push(artifactId),
+    });
+    const snapshot = await restarted.searchArtifacts([
+      { value: "missing-bound-query", collapseIdentifierSeparators: false },
+    ]);
+    expect(coldReads).toEqual([artifacts[0]?.artifactId]);
+    expect(snapshot.candidateArtifactIds).toEqual(new Set([artifacts[0]?.artifactId]));
+  });
+
+  it("publishes on flush and repairs stale snapshots while ignoring crash temp files", async () => {
+    const root = await tempRoot();
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    const first = new ArtifactStore({ artifactsRoot, metadataRoot });
+    await first.archive({
+      observationId: "flush-old",
+      toolName: "read",
+      sessionId: "session",
+      content: "old flushed evidence",
+    });
+    await first.flushSearchIndex();
+    const indexPath = join(metadataRoot, "observation-search-index-v1.json");
+    await writeFile(`${indexPath}.crash-temp`, "uncommitted derived cache");
+
+    const writer = new ArtifactStore({ artifactsRoot, metadataRoot });
+    const newest = await writer.archive({
+      observationId: "flush-new",
+      toolName: "read",
+      sessionId: "session",
+      content: "new stale-boundary marker",
+    });
+    const reads: string[] = [];
+    const repairing = new ArtifactStore({
+      artifactsRoot,
+      metadataRoot,
+      onArtifactRead: (artifactId) => reads.push(artifactId),
+    });
+    const repaired = await repairing.searchArtifacts([
+      { value: "stale-boundary", collapseIdentifierSeparators: false },
+    ]);
+    expect(repaired.contentByArtifact.get(newest.artifactId)).toContain("stale-boundary");
+    expect(reads).toEqual([newest.artifactId, newest.artifactId]);
+
+    reads.length = 0;
+    const restarted = new ArtifactStore({
+      artifactsRoot,
+      metadataRoot,
+      onArtifactRead: (artifactId) => reads.push(artifactId),
+    });
+    await restarted.searchArtifacts([{ value: "missing-after-repair", collapseIdentifierSeparators: false }]);
+    expect(reads).toEqual([]);
   });
 
   it("collects expired and over-quota artifacts while preserving referenced content", async () => {

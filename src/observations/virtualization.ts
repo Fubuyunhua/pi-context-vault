@@ -87,6 +87,8 @@ export interface ObservationSearchResult {
   matchMode: ObservationSearchMatchMode;
   results: ObservationSearchHit[];
   truncated: boolean;
+  partial: boolean;
+  warnings: string[];
 }
 
 interface Utf8Slice {
@@ -462,15 +464,20 @@ export class ObservationRuntime {
             collapseIdentifierSeparators: term.collapsed.length > 0,
           }))
         : [{ value: query, collapseIdentifierSeparators: false }];
-    const candidateArtifactIds = await this.#store.findSearchCandidates(needles);
+    let searchBatch: Awaited<ReturnType<ArtifactStore["searchArtifacts"]>>;
+    try {
+      searchBatch = await this.#store.searchArtifacts(needles);
+    } catch {
+      throw new Error("Observation search failed.");
+    }
     const ranked: Array<{ hit: ObservationSearchHit; relevance: number; recency: number }> = [];
     const artifacts = new Map<
       string,
       { metadata: ArtifactMetadata; occurrenceCount: number; recentObservationIds: string[] }
     >();
-    const entries = (await this.#store.listMetadata()).reverse();
+    const entries = searchBatch.metadata.reverse();
     for (const metadata of entries) {
-      if (!candidateArtifactIds.has(metadata.artifactId)) continue;
+      if (!searchBatch.candidateArtifactIds.has(metadata.artifactId)) continue;
       if (params.toolName !== undefined && metadata.toolName !== params.toolName) continue;
       const artifact = artifacts.get(metadata.artifactId);
       if (artifact === undefined) {
@@ -488,7 +495,8 @@ export class ObservationRuntime {
     }
     for (const [recency, artifact] of [...artifacts.values()].entries()) {
       const { metadata } = artifact;
-      const content = await this.#store.read(metadata.artifactId);
+      const content = searchBatch.contentByArtifact.get(metadata.artifactId);
+      if (content === undefined) continue;
       const normalizedContent = matchMode === "terms" ? normalizedSearchText(content) : undefined;
       const matchedTerms =
         matchMode === "terms" && normalizedContent !== undefined
@@ -524,6 +532,8 @@ export class ObservationRuntime {
       matchMode,
       results: ranked.slice(0, limit).map((candidate) => candidate.hit),
       truncated: ranked.length > limit,
+      partial: searchBatch.partial,
+      warnings: searchBatch.partial ? ["Some archived evidence was unavailable."] : [],
     };
   }
 }

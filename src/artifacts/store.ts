@@ -7,6 +7,8 @@ import type { Telemetry } from "../telemetry.js";
 import { redactSecrets } from "./redaction.js";
 
 const METADATA_FILE = "observations.jsonl";
+const SEARCH_INDEX_FILE = "observation-search-index-v1.json";
+const SEARCH_INDEX_ALGORITHM = "cv-search-bloom-v1";
 const ACTIVE_SESSIONS_FILE = "active-sessions.json";
 const LOCK_FILE = "artifacts.lock";
 const DEFAULT_COMPACTION_BYTES = 4 * 1024 * 1024;
@@ -14,8 +16,11 @@ const DEFAULT_COMPACTION_OBSOLETE_RECORDS = 1024;
 const DEFAULT_COMPACTION_OBSOLETE_RATIO = 0.25;
 const METADATA_READ_CHUNK_BYTES = 64 * 1024;
 export const MAX_METADATA_RECORD_BYTES = 1024 * 1024;
-const MAX_SEARCH_GRAMS_PER_ARTIFACT = 4_096;
 const SEARCH_GRAM_LENGTH = 3;
+const SEARCH_BLOOM_BYTES = 2_048;
+const SEARCH_BLOOM_HASHES = 3;
+const SEARCH_INDEX_MAX_ENTRIES = 10_000;
+const MAX_SEARCH_INDEX_BYTES = 32 * 1024 * 1024;
 const SEARCH_IDENTIFIER_SEPARATOR_PATTERN = /[_./\\\p{Pd}]+/gu;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
@@ -40,6 +45,10 @@ export interface ArtifactStoreOptions {
   metadataCompactionThresholdObsoleteRatio?: number;
   /** Test-only durability-boundary fault hook. */
   faultHook?: (point: ArtifactStoreFaultPoint) => void | Promise<void>;
+  /** Test-only bound override for the derived search index. */
+  searchIndexMaxEntries?: number;
+  /** Test-only instrumentation for verified artifact reads. */
+  onArtifactRead?: (artifactId: string) => void;
 }
 
 export interface ArchiveObservationInput {
@@ -127,9 +136,29 @@ export interface ArtifactSearchNeedle {
   collapseIdentifierSeparators: boolean;
 }
 
+export interface ArtifactSearchBatch {
+  candidateArtifactIds: Set<string>;
+  metadata: ArtifactMetadata[];
+  contentByArtifact: Map<string, string>;
+  partial: boolean;
+}
+
 interface ArtifactSearchEntry {
-  complete: boolean;
-  grams: string[];
+  bloom: Uint8Array;
+}
+
+interface SerializedArtifactSearchEntry {
+  artifactId: string;
+  bloom: string;
+}
+
+interface ArtifactSearchIndexSnapshot {
+  schemaVersion: 1;
+  algorithm: typeof SEARCH_INDEX_ALGORITHM;
+  bloomBytes: number;
+  gramLength: number;
+  artifacts: SerializedArtifactSearchEntry[];
+  checksum: string;
 }
 
 interface OwnedDirectoryIdentity {
@@ -384,6 +413,11 @@ function errorCode(error: unknown): string {
   return (error as NodeJS.ErrnoException).code ?? "";
 }
 
+function isUnsafeStateError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Unsafe|escapes its root|replaced Context Vault/u.test(message);
+}
+
 function noFollowFlags(flags: number): number {
   if (process.platform === "win32") return flags;
   let result = flags | constants.O_NONBLOCK;
@@ -396,29 +430,131 @@ function searchForm(value: string, collapseIdentifierSeparators: boolean): strin
   return collapseIdentifierSeparators ? normalized.replace(SEARCH_IDENTIFIER_SEPARATOR_PATTERN, "") : normalized;
 }
 
-function searchGrams(
-  value: string,
-  prefix: "collapsed" | "normalized",
-  allWidths = false,
-  maximumGrams = Number.POSITIVE_INFINITY,
-): string[] {
+function isAscii(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) > 0x7f) return false;
+  }
+  return true;
+}
+
+function searchGrams(value: string, prefix: "collapsed" | "normalized"): string[] {
   const characters = Array.from(value);
   if (characters.length === 0) return [];
-  const maximumWidth = Math.min(SEARCH_GRAM_LENGTH, characters.length);
-  const minimumWidth = allWidths ? 1 : maximumWidth;
+  const width = Math.min(SEARCH_GRAM_LENGTH, characters.length);
   const grams = new Set<string>();
-  for (let width = minimumWidth; width <= maximumWidth; width += 1) {
-    for (let index = 0; index <= characters.length - width; index += 1) {
-      grams.add(`${prefix}:${characters.slice(index, index + width).join("")}`);
-      if (grams.size >= maximumGrams) return [...grams];
-    }
+  for (let index = 0; index <= characters.length - width; index += 1) {
+    grams.add(`${prefix}:${characters.slice(index, index + width).join("")}`);
   }
   return [...grams];
+}
+
+function forEachSearchGram(value: string, prefix: "collapsed" | "normalized", visitor: (gram: string) => void): void {
+  const previous: string[] = [];
+  for (const character of value) {
+    previous.push(character);
+    if (previous.length > SEARCH_GRAM_LENGTH) previous.shift();
+    if (previous.length === SEARCH_GRAM_LENGTH) visitor(`${prefix}:${previous.join("")}`);
+  }
+}
+
+function bloomSeeds(value: string): [number, number] {
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    first = Math.imul(first ^ code, 0x01000193) >>> 0;
+    second = (Math.imul(second ^ code, 0x85ebca6b) + 0xc2b2ae35) >>> 0;
+  }
+  return [first, second | 1];
+}
+
+function addToBloom(bloom: Uint8Array, gram: string): void {
+  const [first, second] = bloomSeeds(gram);
+  const bitCount = SEARCH_BLOOM_BYTES * 8;
+  for (let index = 0; index < SEARCH_BLOOM_HASHES; index += 1) {
+    const position = ((first + Math.imul(index, second)) >>> 0) % bitCount;
+    bloom[Math.floor(position / 8)] |= 1 << (position % 8);
+  }
+}
+
+function bloomHas(bloom: Uint8Array, gram: string): boolean {
+  const [first, second] = bloomSeeds(gram);
+  const bitCount = SEARCH_BLOOM_BYTES * 8;
+  for (let index = 0; index < SEARCH_BLOOM_HASHES; index += 1) {
+    const position = ((first + Math.imul(index, second)) >>> 0) % bitCount;
+    if ((bloom[Math.floor(position / 8)] & (1 << (position % 8))) === 0) return false;
+  }
+  return true;
+}
+
+function buildSearchBloom(content: string): Uint8Array {
+  const bloom = new Uint8Array(SEARCH_BLOOM_BYTES);
+  const normalized = searchForm(content, false);
+  const collapsed = searchForm(content, true);
+  forEachSearchGram(normalized, "normalized", (gram) => addToBloom(bloom, gram));
+  if (collapsed !== normalized) forEachSearchGram(collapsed, "collapsed", (gram) => addToBloom(bloom, gram));
+  else forEachSearchGram(normalized, "collapsed", (gram) => addToBloom(bloom, gram));
+  return bloom;
+}
+
+function artifactSearchSnapshotPayload(artifacts: SerializedArtifactSearchEntry[]): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    algorithm: SEARCH_INDEX_ALGORITHM,
+    bloomBytes: SEARCH_BLOOM_BYTES,
+    gramLength: SEARCH_GRAM_LENGTH,
+    artifacts,
+  });
+}
+
+function artifactSearchSnapshotChecksum(artifacts: SerializedArtifactSearchEntry[]): string {
+  return createHash("sha256").update(artifactSearchSnapshotPayload(artifacts), "utf8").digest("hex");
+}
+
+function parseArtifactSearchSnapshot(
+  source: string,
+  maximumEntries: number,
+): { entries: Map<string, ArtifactSearchEntry>; needsRewrite: boolean } {
+  const value = JSON.parse(source) as Partial<ArtifactSearchIndexSnapshot>;
+  if (
+    value.schemaVersion !== 1 ||
+    value.algorithm !== SEARCH_INDEX_ALGORITHM ||
+    value.bloomBytes !== SEARCH_BLOOM_BYTES ||
+    value.gramLength !== SEARCH_GRAM_LENGTH ||
+    !Array.isArray(value.artifacts) ||
+    typeof value.checksum !== "string" ||
+    !/^[a-f0-9]{64}$/.test(value.checksum) ||
+    artifactSearchSnapshotChecksum(value.artifacts as SerializedArtifactSearchEntry[]) !== value.checksum
+  ) {
+    throw new Error("unsupported derived search index");
+  }
+  const entries = new Map<string, ArtifactSearchEntry>();
+  let needsRewrite = value.artifacts.length > maximumEntries;
+  for (const candidate of value.artifacts.slice(0, maximumEntries)) {
+    if (
+      candidate === null ||
+      typeof candidate !== "object" ||
+      !/^[a-f0-9]{64}$/.test(candidate.artifactId) ||
+      typeof candidate.bloom !== "string" ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(candidate.bloom)
+    ) {
+      needsRewrite = true;
+      continue;
+    }
+    const bloom = Buffer.from(candidate.bloom, "base64");
+    if (bloom.length !== SEARCH_BLOOM_BYTES || entries.has(candidate.artifactId)) {
+      needsRewrite = true;
+      continue;
+    }
+    entries.set(candidate.artifactId, { bloom: new Uint8Array(bloom) });
+  }
+  return { entries, needsRewrite };
 }
 
 export class ArtifactStore {
   readonly #artifactsRoot: string;
   readonly #metadataPath: string;
+  readonly #searchIndexPath: string;
   readonly #activeSessionsPath: string;
   readonly #lockPath: string;
   readonly #now: () => Date;
@@ -428,17 +564,22 @@ export class ArtifactStore {
   readonly #compactionObsoleteRecords: number;
   readonly #compactionObsoleteRatio: number;
   readonly #faultHook?: (point: ArtifactStoreFaultPoint) => void | Promise<void>;
+  readonly #searchIndexMaxEntries: number;
+  readonly #onArtifactRead?: (artifactId: string) => void;
   #ownedDirectories?: OwnedDirectoryIdentity[];
   #namespaceInitialization?: Promise<void>;
   #index = emptyIndex();
   #indexMutex = Promise.resolve();
-  readonly #artifactSearch = new Map<string, ArtifactSearchEntry>();
-  readonly #searchPostings = new Map<string, Set<string>>();
+  #artifactSearch = new Map<string, ArtifactSearchEntry>();
+  readonly #unavailableSearchArtifacts = new Set<string>();
+  #searchIndexLoaded = false;
+  #searchIndexDirty = false;
 
   constructor(options: ArtifactStoreOptions) {
     this.#artifactsRoot = resolve(options.artifactsRoot);
     const metadataRoot = resolve(options.metadataRoot);
     this.#metadataPath = join(metadataRoot, METADATA_FILE);
+    this.#searchIndexPath = join(metadataRoot, SEARCH_INDEX_FILE);
     this.#activeSessionsPath = join(metadataRoot, ACTIVE_SESSIONS_FILE);
     this.#lockPath = join(metadataRoot, LOCK_FILE);
     this.#now = options.now ?? (() => new Date());
@@ -450,6 +591,11 @@ export class ArtifactStore {
     this.#compactionObsoleteRatio =
       options.metadataCompactionThresholdObsoleteRatio ?? DEFAULT_COMPACTION_OBSOLETE_RATIO;
     this.#faultHook = options.faultHook;
+    this.#searchIndexMaxEntries = options.searchIndexMaxEntries ?? SEARCH_INDEX_MAX_ENTRIES;
+    if (!Number.isSafeInteger(this.#searchIndexMaxEntries) || this.#searchIndexMaxEntries <= 0) {
+      throw new Error("searchIndexMaxEntries must be a positive safe integer");
+    }
+    this.#onArtifactRead = options.onArtifactRead;
   }
 
   artifactPath(artifactId: string): string {
@@ -578,6 +724,23 @@ export class ArtifactStore {
     }
   }
 
+  async #readRegularFileBounded(path: string, maximumBytes: number): Promise<string | undefined> {
+    let opened: { handle: FileHandle; existed: boolean };
+    try {
+      opened = await this.#openRegularFile(path, constants.O_RDONLY);
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") return undefined;
+      throw error;
+    }
+    try {
+      const info = await opened.handle.stat();
+      if (info.size > maximumBytes) return "";
+      return await opened.handle.readFile({ encoding: "utf8" });
+    } finally {
+      await opened.handle.close();
+    }
+  }
+
   async #atomicWriteFixedFile(path: string, content: string | Uint8Array): Promise<void> {
     await this.#validateNamespace();
     try {
@@ -618,6 +781,7 @@ export class ArtifactStore {
 
   async #readArtifactVerified(artifactId: string): Promise<string> {
     assertArtifactId(artifactId);
+    this.#onArtifactRead?.(artifactId);
     await this.#validateArtifactShard(artifactId, false);
     const source = await this.#readRegularFile(this.artifactPath(artifactId), "throw", false);
     const hash = createHash("sha256")
@@ -676,6 +840,23 @@ export class ArtifactStore {
         );
       }
     });
+  }
+
+  async flushSearchIndex(): Promise<void> {
+    try {
+      await this.#withStoreLock(async () =>
+        this.#withIndexMutex(async () => {
+          await this.#synchronizePathUnlocked();
+          await this.#loadArtifactSearchIndexUnlocked();
+          for (const artifactId of this.#artifactSearch.keys()) {
+            if (!this.#index.byArtifact.has(artifactId)) this.#removeArtifactSearch(artifactId);
+          }
+          await this.#publishArtifactSearchIndexUnlocked();
+        }),
+      );
+    } catch {
+      // The snapshot is disposable; shutdown must never affect durable evidence.
+    }
   }
 
   async archive(input: ArchiveObservationInput): Promise<ArchivedArtifact> {
@@ -745,41 +926,92 @@ export class ArtifactStore {
     });
   }
 
-  async findSearchCandidates(needles: readonly ArtifactSearchNeedle[]): Promise<Set<string>> {
+  async searchArtifacts(needles: readonly ArtifactSearchNeedle[]): Promise<ArtifactSearchBatch> {
+    const startedAt = performance.now();
+    let hydrationReads = 0;
     await this.#validateNamespace();
-    return this.#withIndexMutex(async () => {
-      await this.#synchronizePathUnlocked();
-      const liveArtifactIds = new Set(this.#index.byArtifact.keys());
-      for (const artifactId of this.#artifactSearch.keys()) {
-        if (!liveArtifactIds.has(artifactId)) this.#removeArtifactSearch(artifactId);
-      }
-      for (const artifactId of liveArtifactIds) {
-        if (!this.#artifactSearch.has(artifactId)) {
-          this.#indexArtifactSearch(artifactId, await this.#readArtifactVerified(artifactId));
+    return this.#withStoreLock(async () =>
+      this.#withIndexMutex(async () => {
+        await this.#synchronizePathUnlocked();
+        await this.#loadArtifactSearchIndexUnlocked();
+        const desiredArtifactIds = new Set<string>();
+        for (const metadata of [...this.#index.live.values()].reverse()) {
+          desiredArtifactIds.add(metadata.artifactId);
+          if (desiredArtifactIds.size >= this.#searchIndexMaxEntries) break;
         }
-      }
-
-      const candidates = new Set<string>();
-      for (const [artifactId, entry] of this.#artifactSearch) {
-        if (liveArtifactIds.has(artifactId) && !entry.complete) candidates.add(artifactId);
-      }
-      for (const needle of needles) {
-        const form = searchForm(needle.value, needle.collapseIdentifierSeparators);
-        const grams = searchGrams(form, needle.collapseIdentifierSeparators ? "collapsed" : "normalized");
-        if (grams.length === 0) continue;
-        const postings = grams
-          .map((gram) => this.#searchPostings.get(gram))
-          .sort((left, right) => (left?.size ?? 0) - (right?.size ?? 0));
-        const first = postings[0];
-        if (first === undefined) continue;
-        for (const artifactId of first) {
-          if (liveArtifactIds.has(artifactId) && postings.every((posting) => posting?.has(artifactId) === true)) {
-            candidates.add(artifactId);
+        for (const artifactId of this.#artifactSearch.keys()) {
+          if (!desiredArtifactIds.has(artifactId)) this.#removeArtifactSearch(artifactId);
+        }
+        for (const artifactId of this.#unavailableSearchArtifacts) {
+          if (!desiredArtifactIds.has(artifactId)) this.#unavailableSearchArtifacts.delete(artifactId);
+        }
+        for (const artifactId of desiredArtifactIds) {
+          if (this.#artifactSearch.has(artifactId) || this.#unavailableSearchArtifacts.has(artifactId)) continue;
+          try {
+            hydrationReads += 1;
+            this.#indexArtifactSearch(artifactId, await this.#readArtifactVerified(artifactId));
+          } catch (error) {
+            if (isUnsafeStateError(error)) throw error;
+            this.#unavailableSearchArtifacts.add(artifactId);
           }
         }
-      }
-      return candidates;
-    });
+        const orderedEntries = [...desiredArtifactIds]
+          .map((artifactId) => [artifactId, this.#artifactSearch.get(artifactId)] as const)
+          .filter((entry): entry is readonly [string, ArtifactSearchEntry] => entry[1] !== undefined);
+        if ([...this.#artifactSearch.keys()].some((artifactId, index) => orderedEntries[index]?.[0] !== artifactId)) {
+          this.#searchIndexDirty = true;
+        }
+        this.#artifactSearch = new Map(orderedEntries);
+        await this.#publishArtifactSearchIndexUnlocked();
+
+        const liveArtifactIds = new Set(this.#index.byArtifact.keys());
+        const candidates = new Set<string>();
+        for (const artifactId of liveArtifactIds) {
+          if (this.#unavailableSearchArtifacts.has(artifactId)) continue;
+          const entry = this.#artifactSearch.get(artifactId);
+          if (entry === undefined) {
+            candidates.add(artifactId);
+            continue;
+          }
+          for (const needle of needles) {
+            const form = searchForm(needle.value, needle.collapseIdentifierSeparators);
+            if (!isAscii(form) || Array.from(form).length < SEARCH_GRAM_LENGTH) {
+              candidates.add(artifactId);
+              break;
+            }
+            const prefix = needle.collapseIdentifierSeparators ? "collapsed" : "normalized";
+            const grams = searchGrams(form, prefix);
+            if (grams.every((gram) => bloomHas(entry.bloom, gram))) {
+              candidates.add(artifactId);
+              break;
+            }
+          }
+        }
+        const contentByArtifact = new Map<string, string>();
+        let partial = [...this.#unavailableSearchArtifacts].some((artifactId) => liveArtifactIds.has(artifactId));
+        for (const artifactId of candidates) {
+          try {
+            contentByArtifact.set(artifactId, await this.#readArtifactVerified(artifactId));
+          } catch (error) {
+            if (isUnsafeStateError(error)) throw error;
+            partial = true;
+          }
+        }
+        this.#telemetry?.recordObservationSearch({
+          durationMs: performance.now() - startedAt,
+          candidates: candidates.size,
+          artifactReads: candidates.size,
+          unavailable: partial ? candidates.size - contentByArtifact.size + this.#unavailableSearchArtifacts.size : 0,
+          hydrationReads,
+        });
+        return {
+          candidateArtifactIds: candidates,
+          metadata: [...this.#index.live.values()],
+          contentByArtifact,
+          partial,
+        };
+      }),
+    );
   }
 
   async getMetadata(observationId: string): Promise<ArtifactMetadata | undefined> {
@@ -936,32 +1168,91 @@ export class ArtifactStore {
     return source === undefined ? { schemaVersion: 1, leases: [] } : parseActiveSessions(source);
   }
 
-  #removeArtifactSearch(artifactId: string): void {
-    const previous = this.#artifactSearch.get(artifactId);
-    if (previous === undefined) return;
-    for (const gram of previous.grams) {
-      const posting = this.#searchPostings.get(gram);
-      posting?.delete(artifactId);
-      if (posting?.size === 0) this.#searchPostings.delete(gram);
+  async #readArtifactSearchIndexUnlocked(): Promise<
+    { entries: Map<string, ArtifactSearchEntry>; needsRewrite: boolean } | undefined
+  > {
+    const source = await this.#readRegularFileBounded(this.#searchIndexPath, MAX_SEARCH_INDEX_BYTES);
+    if (source === undefined) return undefined;
+    try {
+      return parseArtifactSearchSnapshot(source, this.#searchIndexMaxEntries);
+    } catch {
+      return { entries: new Map(), needsRewrite: true };
     }
-    this.#artifactSearch.delete(artifactId);
+  }
+
+  async #loadArtifactSearchIndexUnlocked(): Promise<void> {
+    if (this.#searchIndexLoaded) return;
+    const pending = new Map(this.#artifactSearch);
+    const persisted = await this.#readArtifactSearchIndexUnlocked();
+    this.#searchIndexDirty ||= persisted === undefined || persisted.needsRewrite;
+    this.#artifactSearch = new Map();
+    for (const [artifactId, entry] of pending) {
+      if (this.#artifactSearch.size >= this.#searchIndexMaxEntries) break;
+      this.#artifactSearch.set(artifactId, entry);
+    }
+    for (const [artifactId, entry] of persisted?.entries ?? []) {
+      if (this.#artifactSearch.size >= this.#searchIndexMaxEntries) break;
+      if (!this.#artifactSearch.has(artifactId)) this.#artifactSearch.set(artifactId, entry);
+    }
+    this.#searchIndexLoaded = true;
+  }
+
+  async #publishArtifactSearchIndexUnlocked(): Promise<void> {
+    if (!this.#searchIndexDirty) return;
+    const onDisk = await this.#readArtifactSearchIndexUnlocked();
+    if (onDisk !== undefined && !onDisk.needsRewrite) {
+      for (const [artifactId, entry] of onDisk.entries) {
+        if (
+          this.#artifactSearch.size < this.#searchIndexMaxEntries &&
+          this.#index.byArtifact.has(artifactId) &&
+          !this.#artifactSearch.has(artifactId)
+        ) {
+          this.#artifactSearch.set(artifactId, entry);
+        }
+      }
+    }
+    const liveByRecency = new Set([...this.#index.live.values()].reverse().map((metadata) => metadata.artifactId));
+    let artifacts = [...liveByRecency]
+      .map((artifactId) => [artifactId, this.#artifactSearch.get(artifactId)] as const)
+      .filter((entry): entry is readonly [string, ArtifactSearchEntry] => entry[1] !== undefined)
+      .slice(0, this.#searchIndexMaxEntries)
+      .map(([artifactId, entry]) => ({ artifactId, bloom: Buffer.from(entry.bloom).toString("base64") }));
+    let serialized = "";
+    while (true) {
+      const checksum = artifactSearchSnapshotChecksum(artifacts);
+      const snapshot: ArtifactSearchIndexSnapshot = {
+        schemaVersion: 1,
+        algorithm: SEARCH_INDEX_ALGORITHM,
+        bloomBytes: SEARCH_BLOOM_BYTES,
+        gramLength: SEARCH_GRAM_LENGTH,
+        artifacts,
+        checksum,
+      };
+      serialized = JSON.stringify(snapshot);
+      if (Buffer.byteLength(serialized, "utf8") <= MAX_SEARCH_INDEX_BYTES) break;
+      artifacts = artifacts.slice(0, -1);
+    }
+    this.#artifactSearch = new Map(
+      artifacts.map((entry) => [entry.artifactId, { bloom: new Uint8Array(Buffer.from(entry.bloom, "base64")) }]),
+    );
+    await this.#atomicWriteFixedFile(this.#searchIndexPath, serialized);
+    this.#searchIndexDirty = false;
+  }
+
+  #removeArtifactSearch(artifactId: string): void {
+    if (this.#artifactSearch.delete(artifactId)) this.#searchIndexDirty = true;
   }
 
   #indexArtifactSearch(artifactId: string, content: string): void {
     if (this.#artifactSearch.has(artifactId)) return;
-    const normalized = searchForm(content, false);
-    const collapsed = searchForm(content, true);
-    const normalizedGrams = searchGrams(normalized, "normalized", true, MAX_SEARCH_GRAMS_PER_ARTIFACT + 1);
-    const remaining = MAX_SEARCH_GRAMS_PER_ARTIFACT - normalizedGrams.length;
-    const collapsedGrams = remaining < 0 ? [] : searchGrams(collapsed, "collapsed", true, Math.max(1, remaining + 1));
-    const complete = normalizedGrams.length + collapsedGrams.length <= MAX_SEARCH_GRAMS_PER_ARTIFACT;
-    const indexedGrams = complete ? [...normalizedGrams, ...collapsedGrams] : [];
-    this.#artifactSearch.set(artifactId, { complete, grams: indexedGrams });
-    for (const gram of indexedGrams) {
-      const posting = this.#searchPostings.get(gram) ?? new Set<string>();
-      posting.add(artifactId);
-      this.#searchPostings.set(gram, posting);
+    if (this.#artifactSearch.size >= this.#searchIndexMaxEntries) {
+      let leastRecent: string | undefined;
+      for (const indexedArtifactId of this.#artifactSearch.keys()) leastRecent = indexedArtifactId;
+      if (leastRecent !== undefined) this.#artifactSearch.delete(leastRecent);
     }
+    this.#artifactSearch = new Map([[artifactId, { bloom: buildSearchBloom(content) }], ...this.#artifactSearch]);
+    this.#unavailableSearchArtifacts.delete(artifactId);
+    this.#searchIndexDirty = true;
   }
 
   async #parseRangeIntoIndex(
