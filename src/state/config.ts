@@ -3,6 +3,9 @@ import { join } from "node:path";
 
 export type ArchivePolicy = "all" | "errors-and-large" | "off";
 
+export const DEFAULT_SEARCH_PREVIEW_MAX_BYTES = 8 * 1024;
+export const MIN_SEARCH_PREVIEW_MAX_BYTES = 4 * 1024;
+
 export const LEGACY_REPO_CONFIG_WARNING = "Repository Map configuration has moved to pi-repo-context." as const;
 export const LEGACY_REPO_CONFIG_KEYS = Object.freeze([
   "repoMapEnabled",
@@ -25,6 +28,7 @@ export interface ContextVaultConfig {
   /** @deprecated Use replacementThresholdBytes. */
   archiveThresholdBytes: number;
   receiptMaxBytes: number;
+  searchPreviewMaxBytes: number;
   hotObservationCount: number;
   softContextRatio: number;
   targetContextRatio: number;
@@ -45,6 +49,7 @@ export const DEFAULT_CONFIG: Readonly<ContextVaultConfig> = Object.freeze({
   archiveErrorsAlways: true,
   archiveThresholdBytes: 16 * 1024,
   receiptMaxBytes: 4 * 1024,
+  searchPreviewMaxBytes: DEFAULT_SEARCH_PREVIEW_MAX_BYTES,
   hotObservationCount: 6,
   softContextRatio: 0.75,
   targetContextRatio: 0.6,
@@ -56,6 +61,7 @@ const ACTIVE_KEYS = new Set<keyof ContextVaultConfig>(Object.keys(DEFAULT_CONFIG
 const ARCHIVE_POLICIES = new Set<ArchivePolicy>(["all", "errors-and-large", "off"]);
 const POSITIVE_INTEGERS = new Set<keyof ContextVaultConfig>([
   "receiptMaxBytes",
+  "searchPreviewMaxBytes",
   "hotObservationCount",
   "projectQuotaBytes",
   "retentionDays",
@@ -125,6 +131,9 @@ export async function loadConfigWithDiagnostics(projectRoot: string): Promise<Lo
     throw new Error("targetContextRatio must be lower than softContextRatio");
   }
   if (config.receiptMaxBytes < 512) throw new Error("receiptMaxBytes must be at least 512 bytes");
+  if (config.searchPreviewMaxBytes < MIN_SEARCH_PREVIEW_MAX_BYTES) {
+    throw new Error(`searchPreviewMaxBytes must be at least ${MIN_SEARCH_PREVIEW_MAX_BYTES} bytes`);
+  }
   return { config, warnings: legacyPresent ? [LEGACY_REPO_CONFIG_WARNING] : [] };
 }
 

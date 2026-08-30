@@ -99,7 +99,7 @@ Tool results whose names start with `context_vault_` or `repo_context_` are inte
 | Tool | Purpose |
 | --- | --- |
 | `context_vault_obs_get` | Retrieve bounded evidence from an Observation or artifact ID; an optional query remains a contiguous literal per-line match. |
-| `context_vault_obs_search` | Search sanitized archived Observations. The default `terms` mode ranks partial matches, normalizes common code-identifier separators (`_`, `-`, `.`, `/`, `\\`), and reports a relevance score; `phrase` mode requires one contiguous literal per-line match. Identical artifacts collapse before the result limit is applied; each result identifies the newest Observation, its `occurrenceCount`, and up to five `recentObservationIds`. Results also include an executable `context_vault_obs_get` next action whose `arguments.id` is always retrievable. |
+| `context_vault_obs_search` | Search sanitized archived Observations. The default `terms` mode ranks partial matches, normalizes common code-identifier separators (`_`, `-`, `.`, `/`, `\\`), and reports a relevance score; `phrase` mode requires one contiguous literal per-line match. Identical artifacts collapse before the result limit is applied; each result identifies the newest Observation, its `occurrenceCount`, and up to five `recentObservationIds`. Ranked IDs and executable `context_vault_obs_get` next actions are retained before match previews are added. The complete pretty-printed JSON is capped by `searchPreviewMaxBytes` and reports `totalBytes`, `truncated`, `omittedResultCount`, and `omittedMatchCount`. |
 | `context_vault_status` | Report Vault-only lifecycle, storage, reduction, warning, and telemetry state. |
 
 Observation search maintains a disposable bounded Bloom snapshot; after it is persisted, the 1,000-Observation regression target is under 1,000 ms with zero artifact reads for an indexed miss and one for a unique hit. Short, Unicode, and phrase queries conservatively verify candidates.
@@ -139,6 +139,7 @@ Project configuration remains `.pi/context-vault.json`:
   "replacementThresholdBytes": 16384,
   "archiveErrorsAlways": true,
   "receiptMaxBytes": 4096,
+  "searchPreviewMaxBytes": 8192,
   "hotObservationCount": 6,
   "softContextRatio": 0.75,
   "targetContextRatio": 0.6,
@@ -149,6 +150,7 @@ Project configuration remains `.pi/context-vault.json`:
 
 `archiveThresholdBytes` remains a deprecated alias for `replacementThresholdBytes`; configuring both is an error.
 Unknown nonlegacy keys are rejected. Legacy repository keys are accepted only as inert migration input.
+`searchPreviewMaxBytes` is a UTF-8 byte budget for the complete model-visible Observation search JSON and must be at least 4096.
 
 Set `archivePolicy: "off"` to stop new archival and `reductionEnabled: false` to stop context reduction. Existing evidence
 is preserved.

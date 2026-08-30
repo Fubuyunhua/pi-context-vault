@@ -143,6 +143,8 @@ describe("Vault project state and configuration", () => {
       archiveThresholdBytes: 4096,
       replacementThresholdBytes: 4096,
     });
+    await writeFile(path, JSON.stringify({ searchPreviewMaxBytes: 12 * 1024 }));
+    await expect(loadConfig(root)).resolves.toMatchObject({ searchPreviewMaxBytes: 12 * 1024 });
     await writeFile(path, JSON.stringify({ archiveThresholdBytes: 1, replacementThresholdBytes: 2 }));
     await expect(loadConfig(root)).rejects.toThrow("cannot both be configured");
   });
@@ -168,6 +170,7 @@ describe("Vault project state and configuration", () => {
       [{ archivePolicy: "sometimes" }, "archivePolicy"],
       [{ archiveMinBytes: -1 }, "non-negative"],
       [{ receiptMaxBytes: 511 }, "at least 512"],
+      [{ searchPreviewMaxBytes: 4095 }, "at least 4096"],
       [{ softContextRatio: 2 }, "between 0 and 1"],
       [{ softContextRatio: 0.5, targetContextRatio: 0.6 }, "lower than"],
     ] as const) {

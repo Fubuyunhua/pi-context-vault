@@ -94,7 +94,7 @@ pi -e ./extensions/index.ts
 | Tool | 用途 |
 | --- | --- |
 | `context_vault_obs_get` | 通过 Observation 或 artifact ID 恢复有界证据；可选 query 仍按单行内连续字面短语匹配。 |
-| `context_vault_obs_search` | 搜索已清理的归档 Observation。默认 `terms` 模式对部分命中排序，归一化常见代码标识符分隔符（`_`、`-`、`.`、`/`、`\\`），并返回相关度分数；`phrase` 模式只匹配单行内连续字面短语。相同 artifact 会在应用结果数量限制前合并；每项结果返回最新 Observation、`occurrenceCount` 和最多五个 `recentObservationIds`，以及可直接执行的 `context_vault_obs_get` next action，其 `arguments.id` 始终可用于检索。 |
+| `context_vault_obs_search` | 搜索已清理的归档 Observation。默认 `terms` 模式对部分命中排序，归一化常见代码标识符分隔符（`_`、`-`、`.`、`/`、`\\`），并返回相关度分数；`phrase` 模式只匹配单行内连续字面短语。相同 artifact 会在应用结果数量限制前合并；先保留各项的最新 Observation、`occurrenceCount`、最多五个 `recentObservationIds` 及可执行的 `context_vault_obs_get` next action，再添加匹配预览。完整格式化 JSON 受 `searchPreviewMaxBytes` 限制，并返回 `totalBytes`、`truncated`、`omittedResultCount` 和 `omittedMatchCount`。 |
 | `context_vault_status` | 返回 Vault-only 生命周期、存储、reduction、warning 和 telemetry。 |
 
 Observation search 会维护一个可丢弃的有界 Bloom 快照；快照持久化后，1,000 条 Observation 回归目标为低于 1,000 ms，已索引 miss 读取 0 个 artifact，唯一命中读取 1 个。短查询、Unicode 查询和 phrase 查询会保守验证候选项。
@@ -133,6 +133,7 @@ Install pi-repo-context and use /repo-context rebuild.
   "replacementThresholdBytes": 16384,
   "archiveErrorsAlways": true,
   "receiptMaxBytes": 4096,
+  "searchPreviewMaxBytes": 8192,
   "hotObservationCount": 6,
   "softContextRatio": 0.75,
   "targetContextRatio": 0.6,
@@ -142,7 +143,7 @@ Install pi-repo-context and use /repo-context rebuild.
 ```
 
 `archiveThresholdBytes` 仍是 `replacementThresholdBytes` 的 deprecated alias；两者同时配置会报错。未知的非 legacy
-字段会被拒绝。旧仓库字段只作为 inert migration input 被接受。
+字段会被拒绝。旧仓库字段只作为 inert migration input 被接受。`searchPreviewMaxBytes` 是完整模型可见 Observation 搜索 JSON 的 UTF-8 字节预算，最小值为 4096。
 
 使用 `archivePolicy: "off"` 可停止新增归档，使用 `reductionEnabled: false` 可停止上下文削减；已有证据不会被删除。
 

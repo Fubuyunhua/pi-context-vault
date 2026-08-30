@@ -294,6 +294,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         replacementThresholdBytes: next.config.replacementThresholdBytes,
         archiveErrorsAlways: next.config.archiveErrorsAlways,
         receiptMaxBytes: next.config.receiptMaxBytes,
+        searchPreviewMaxBytes: next.config.searchPreviewMaxBytes,
         projectId: next.state.projectId,
         projectRoot: next.state.projectRoot,
         sessionId,
@@ -387,7 +388,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   pi.registerTool({
     name: "context_vault_obs_search",
     label: "Search Observations",
-    description: `Search sanitized archived observations. Default terms mode ranks observations that match at least one of up to ${MAX_SEARCH_TERMS} Unicode-whitespace-separated terms, normalizing common code-identifier separators; phrase mode requires a contiguous literal match within one line. Identical artifacts collapse to the newest Observation with an occurrence count and recent Observation IDs. Results include a relevance score and at most five matching lines per artifact.`,
+    description: `Search sanitized archived observations. Default terms mode ranks observations that match at least one of up to ${MAX_SEARCH_TERMS} Unicode-whitespace-separated terms, normalizing common code-identifier separators; phrase mode requires a contiguous literal match within one line. Identical artifacts collapse to the newest Observation with an occurrence count and recent Observation IDs. Results include a relevance score and retain ranked retrieval IDs before adding up to five matching lines per artifact, and the complete JSON preview is capped by the configured UTF-8 byte budget.`,
     promptSnippet: "Search archived observations by ranked code-aware terms or a contiguous literal phrase",
     promptGuidelines: [
       "Use context_vault_obs_search to find archived evidence, then execute its returned nextAction by calling context_vault_obs_get with nextAction.arguments.id for more bounded evidence; phrase mode is only for contiguous literal matching.",

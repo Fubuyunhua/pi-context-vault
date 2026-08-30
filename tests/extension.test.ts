@@ -375,6 +375,7 @@ describe("observation-only extension", () => {
     expect(searchTool?.description).toContain("ranks observations that match at least one");
     expect(searchTool?.description).toContain("code-identifier separators");
     expect(searchTool?.description).toContain("relevance score");
+    expect(searchTool?.description).toContain("UTF-8 byte budget");
     expect(searchTool?.promptSnippet).toContain("Search archived observations");
     expect(getTool?.promptSnippet).toContain("observation or artifact ID");
     expect(searchTool?.promptGuidelines).toEqual([expect.stringContaining("context_vault_obs_search")]);
@@ -400,6 +401,8 @@ describe("observation-only extension", () => {
       target.ctx,
     );
     expect(searched.isError).toBeUndefined();
+    expect(Buffer.byteLength(searched.content[0].text, "utf8")).toBe(searched.details.totalBytes);
+    expect(searched.details.totalBytes).toBeLessThanOrEqual(searched.details.byteBudget);
     const hit = searched.details.results[0];
     expect(hit).toMatchObject({
       observationId: expect.stringMatching(/^obs_[a-f0-9]{24}$/u),

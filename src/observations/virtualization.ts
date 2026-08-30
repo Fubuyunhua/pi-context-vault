@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ArchivedArtifact, ArtifactMetadata, ArtifactSearchNeedle, ArtifactStore } from "../artifacts/store.js";
-import type { ArchivePolicy } from "../state/config.js";
+import { type ArchivePolicy, DEFAULT_SEARCH_PREVIEW_MAX_BYTES, MIN_SEARCH_PREVIEW_MAX_BYTES } from "../state/config.js";
 import type { Telemetry } from "../telemetry.js";
 
 export const MAX_QUERY_LENGTH = 512;
@@ -45,6 +45,7 @@ export interface ObservationRuntimeOptions {
   /** @deprecated Use replacementThresholdBytes. */
   archiveThresholdBytes?: number;
   receiptMaxBytes: number;
+  searchPreviewMaxBytes?: number;
   projectId: string;
   projectRoot: string;
   sessionId: string;
@@ -87,8 +88,84 @@ export interface ObservationSearchResult {
   matchMode: ObservationSearchMatchMode;
   results: ObservationSearchHit[];
   truncated: boolean;
+  omittedResultCount: number;
+  omittedMatchCount: number;
+  byteBudget: number;
+  totalBytes: number;
   partial: boolean;
   warnings: string[];
+}
+
+interface SearchResultHeader {
+  query: string;
+  matchMode: ObservationSearchMatchMode;
+  partial: boolean;
+  warnings: string[];
+}
+
+function withSearchResultBytes(result: Omit<ObservationSearchResult, "totalBytes">): ObservationSearchResult {
+  let measured = { ...result, totalBytes: 0 };
+  for (;;) {
+    const totalBytes = Buffer.byteLength(JSON.stringify(measured, null, 2), "utf8");
+    if (measured.totalBytes === totalBytes) return measured;
+    measured = { ...measured, totalBytes };
+  }
+}
+
+function boundedSearchResult(input: {
+  header: SearchResultHeader;
+  ranked: ObservationSearchHit[];
+  resultLimit: number;
+  byteBudget: number;
+}): ObservationSearchResult {
+  const candidates = input.ranked.slice(0, input.resultLimit);
+  const totalPreviewMatches = input.ranked.reduce((total, hit) => total + hit.matches.length, 0);
+  let includedResults = 0;
+  let includedMatches: number[] = [];
+
+  const build = (resultCount = includedResults, matchCounts = includedMatches): ObservationSearchResult => {
+    const results = candidates.slice(0, resultCount).map((hit, index) => {
+      const matchCount = matchCounts[index] ?? 0;
+      return {
+        ...hit,
+        matches: hit.matches.slice(0, matchCount),
+        matchesTruncated: hit.matchesTruncated || matchCount < hit.matches.length,
+      };
+    });
+    const includedMatchCount = results.reduce((total, hit) => total + hit.matches.length, 0);
+    const omittedResultCount = input.ranked.length - results.length;
+    const omittedMatchCount = totalPreviewMatches - includedMatchCount;
+    return withSearchResultBytes({
+      ...input.header,
+      results,
+      truncated: omittedResultCount > 0 || omittedMatchCount > 0,
+      omittedResultCount,
+      omittedMatchCount,
+      byteBudget: input.byteBudget,
+    });
+  };
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const trialMatches = [...includedMatches, 0];
+    if (build(index + 1, trialMatches).totalBytes > input.byteBudget) break;
+    includedResults = index + 1;
+    includedMatches = trialMatches;
+  }
+
+  const blocked = new Set<number>();
+  const maximumMatches = Math.max(0, ...candidates.slice(0, includedResults).map((hit) => hit.matches.length));
+  for (let matchIndex = 0; matchIndex < maximumMatches; matchIndex += 1) {
+    for (let resultIndex = 0; resultIndex < includedResults; resultIndex += 1) {
+      const hit = candidates[resultIndex];
+      if (hit === undefined || blocked.has(resultIndex) || hit.matches.length <= matchIndex) continue;
+      const trialMatches = [...includedMatches];
+      trialMatches[resultIndex] = matchIndex + 1;
+      if (build(includedResults, trialMatches).totalBytes <= input.byteBudget) includedMatches = trialMatches;
+      else blocked.add(resultIndex);
+    }
+  }
+
+  return build();
 }
 
 interface Utf8Slice {
@@ -311,6 +388,7 @@ export class ObservationRuntime {
   readonly #replacementThresholdBytes: number;
   readonly #archiveErrorsAlways: boolean;
   readonly #receiptMaxBytes: number;
+  readonly #searchPreviewMaxBytes: number;
   readonly #status: ObservationRuntimeStatus;
   readonly #telemetry?: Telemetry;
 
@@ -340,12 +418,17 @@ export class ObservationRuntime {
     if (!Number.isSafeInteger(options.receiptMaxBytes) || options.receiptMaxBytes < 512) {
       throw new Error("receiptMaxBytes must be an integer of at least 512");
     }
+    const searchPreviewMaxBytes = options.searchPreviewMaxBytes ?? DEFAULT_SEARCH_PREVIEW_MAX_BYTES;
+    if (!Number.isSafeInteger(searchPreviewMaxBytes) || searchPreviewMaxBytes < MIN_SEARCH_PREVIEW_MAX_BYTES) {
+      throw new Error(`searchPreviewMaxBytes must be an integer of at least ${MIN_SEARCH_PREVIEW_MAX_BYTES}`);
+    }
     this.#store = options.store;
     this.#archivePolicy = archivePolicy;
     this.#archiveMinBytes = archiveMinBytes;
     this.#replacementThresholdBytes = replacementThresholdBytes;
     this.#archiveErrorsAlways = archiveErrorsAlways;
     this.#receiptMaxBytes = options.receiptMaxBytes;
+    this.#searchPreviewMaxBytes = searchPreviewMaxBytes;
     this.#telemetry = options.telemetry;
     this.#status = {
       projectId: options.projectId,
@@ -561,13 +644,16 @@ export class ObservationRuntime {
       });
     }
     ranked.sort((left, right) => right.relevance - left.relevance || left.recency - right.recency);
-    return {
-      query,
-      matchMode,
-      results: ranked.slice(0, limit).map((candidate) => candidate.hit),
-      truncated: ranked.length > limit,
-      partial: searchBatch.partial,
-      warnings: searchBatch.partial ? ["Some archived evidence was unavailable."] : [],
-    };
+    return boundedSearchResult({
+      header: {
+        query,
+        matchMode,
+        partial: searchBatch.partial,
+        warnings: searchBatch.partial ? ["Some archived evidence was unavailable."] : [],
+      },
+      ranked: ranked.map((candidate) => candidate.hit),
+      resultLimit: limit,
+      byteBudget: this.#searchPreviewMaxBytes,
+    });
   }
 }

@@ -22,6 +22,7 @@ async function setup(
   options: {
     threshold?: number;
     receiptMax?: number;
+    searchPreviewMax?: number;
     invalid?: boolean;
     onArtifactRead?: (artifactId: string) => void;
   } = {},
@@ -42,6 +43,7 @@ async function setup(
       store,
       archiveThresholdBytes: options.threshold ?? 16,
       receiptMaxBytes: options.receiptMax ?? 512,
+      searchPreviewMaxBytes: options.searchPreviewMax,
       projectId: "project",
       projectRoot: "/project",
       sessionId: "session",
@@ -64,6 +66,15 @@ describe("observation virtualization", () => {
     expect(() => new ObservationRuntime({ ...base, archiveThresholdBytes: 1, receiptMaxBytes: 511 })).toThrow(
       "receiptMaxBytes",
     );
+    expect(
+      () =>
+        new ObservationRuntime({
+          ...base,
+          archiveThresholdBytes: 1,
+          receiptMaxBytes: 512,
+          searchPreviewMaxBytes: 4095,
+        }),
+    ).toThrow("searchPreviewMaxBytes");
   });
 
   it("archives first, emits deterministic bounded receipts, and preserves error evidence", async () => {
@@ -776,6 +787,66 @@ describe("observation virtualization", () => {
       matchMode: "phrase",
     });
     await expect(runtime.search({ query: "needle", matchMode: "invalid" as never })).rejects.toThrow("matchMode");
+  });
+
+  it("caps a 10-hit by 5-match search preview deterministically and preserves get handoffs", async () => {
+    const { runtime, store } = await setup({ threshold: 1 });
+    for (let resultIndex = 0; resultIndex < 10; resultIndex += 1) {
+      await runtime.virtualize({
+        toolCallId: `byte-budget-${resultIndex}`,
+        toolName: "read",
+        text: Array.from(
+          { length: 5 },
+          (_, matchIndex) => `budget-marker result-${resultIndex} match-${matchIndex} ${"界".repeat(240)}`,
+        ).join("\n"),
+        isError: false,
+      });
+    }
+    const unboundedRuntime = new ObservationRuntime({
+      store,
+      receiptMaxBytes: 512,
+      searchPreviewMaxBytes: 128 * 1024,
+      projectId: "project",
+      projectRoot: "/project",
+      sessionId: "session",
+    });
+
+    const before = await unboundedRuntime.search({ query: "budget-marker", limit: 10 });
+    const after = await runtime.search({ query: "budget-marker", limit: 10 });
+    const repeated = await runtime.search({ query: "budget-marker", limit: 10 });
+    const beforeBytes = Buffer.byteLength(JSON.stringify(before, null, 2), "utf8");
+    const afterJson = JSON.stringify(after, null, 2);
+    const afterBytes = Buffer.byteLength(afterJson, "utf8");
+
+    expect(before.results).toHaveLength(10);
+    expect(before.results.every((hit) => hit.matches.length === 5)).toBe(true);
+    expect(beforeBytes).toBeGreaterThan(afterBytes);
+    expect(afterBytes).toBe(after.totalBytes);
+    expect(afterBytes).toBeLessThanOrEqual(8 * 1024);
+    expect(JSON.parse(afterJson)).toEqual(after);
+    expect(repeated).toEqual(after);
+    expect(after).toMatchObject({
+      byteBudget: 8 * 1024,
+      truncated: true,
+      omittedResultCount: expect.any(Number),
+      omittedMatchCount: expect.any(Number),
+    });
+    expect(after.omittedResultCount + after.results.length).toBe(10);
+    expect(after.omittedMatchCount).toBeGreaterThan(0);
+    expect(after.results.map((hit) => hit.observationId)).toEqual(
+      before.results.slice(0, after.results.length).map((hit) => hit.observationId),
+    );
+    for (const hit of after.results) {
+      expect(hit).toMatchObject({
+        observationId: expect.stringMatching(/^obs_[a-f0-9]{24}$/u),
+        occurrenceCount: 1,
+        score: 1,
+        nextAction: { tool: "context_vault_obs_get", arguments: { id: hit.observationId } },
+      });
+      await expect(runtime.get(hit.nextAction.arguments)).resolves.toMatchObject({
+        observation: { observationId: hit.observationId },
+      });
+    }
   });
 
   it("archives below-threshold evidence without replacement and returns defensive status", async () => {
