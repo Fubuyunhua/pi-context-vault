@@ -1,0 +1,551 @@
+{
+  "generatedAt": "2026-08-30T07:16:14.616Z",
+  "total": 39,
+  "literalBaselineHits": 0,
+  "termsHits": 38,
+  "recall": 0.9743589743589743,
+  "anyTermHits": 25,
+  "byArm": {
+    "B_CORRECT_PASSIVE": {
+      "total": 12,
+      "termsHits": 12,
+      "anyTermHits": 8
+    },
+    "C_CORRECT_HINT": {
+      "total": 10,
+      "termsHits": 10,
+      "anyTermHits": 6
+    },
+    "D_WRONG_PASSIVE": {
+      "total": 7,
+      "termsHits": 6,
+      "anyTermHits": 5
+    },
+    "E_WRONG_HINT": {
+      "total": 10,
+      "termsHits": 10,
+      "anyTermHits": 6
+    }
+  },
+  "rows": [
+    {
+      "run": "r0001",
+      "arm": "E_WRONG_HINT",
+      "query": "parse_config legacy_api",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 2,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0001",
+      "arm": "E_WRONG_HINT",
+      "query": "legacy config parser key value environment expansion",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 4,
+      "termCount": 7,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "legacy",
+        "config",
+        "key",
+        "value"
+      ]
+    },
+    {
+      "run": "r0002",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "parse_config legacy_api unresolved",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 1,
+      "termCount": 3,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "unresolved"
+      ]
+    },
+    {
+      "run": "r0002",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "parse_config metadata key configuration",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 2,
+      "termCount": 4,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "metadata",
+        "key"
+      ]
+    },
+    {
+      "run": "r0004",
+      "arm": "C_CORRECT_HINT",
+      "query": "parse_config legacy_api",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 2,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0004",
+      "arm": "C_CORRECT_HINT",
+      "query": "config parser key value env expansion",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 4,
+      "termCount": 6,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "config",
+        "key",
+        "value",
+        "env"
+      ]
+    },
+    {
+      "run": "r0006",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "parse_config",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 1,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0006",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "legacy_api _expand env",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 1,
+      "termCount": 3,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "env"
+      ]
+    },
+    {
+      "run": "r0007",
+      "arm": "C_CORRECT_HINT",
+      "query": "legacy_api parse_config",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 2,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0007",
+      "arm": "C_CORRECT_HINT",
+      "query": "parse_config config parser expansion unresolved",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 2,
+      "termCount": 5,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "config",
+        "unresolved"
+      ]
+    },
+    {
+      "run": "r0009",
+      "arm": "D_WRONG_PASSIVE",
+      "query": "parse_config resolved metadata key",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 3,
+      "termCount": 4,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "resolved",
+        "metadata",
+        "key"
+      ]
+    },
+    {
+      "run": "r0009",
+      "arm": "D_WRONG_PASSIVE",
+      "query": "legacy_api.py original implementation",
+      "hit": false,
+      "termsHit": false,
+      "matchingTermCount": 0,
+      "termCount": 3,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0010",
+      "arm": "E_WRONG_HINT",
+      "query": "legacy_api parse_config implementation",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 3,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0010",
+      "arm": "E_WRONG_HINT",
+      "query": "parse_config env expansion ConfigParseError",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 1,
+      "termCount": 4,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "env"
+      ]
+    },
+    {
+      "run": "r0011",
+      "arm": "C_CORRECT_HINT",
+      "query": "legacy_api parse_config implementation",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 3,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0011",
+      "arm": "C_CORRECT_HINT",
+      "query": "unresolved variable metadata _expand config parsing behavior",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 4,
+      "termCount": 7,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "unresolved",
+        "metadata",
+        "config",
+        "behavior"
+      ]
+    },
+    {
+      "run": "r0012",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "parse_config legacy_api implementation",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 3,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0013",
+      "arm": "D_WRONG_PASSIVE",
+      "query": "parse_config legacy_api implementation",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 3,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0015",
+      "arm": "E_WRONG_HINT",
+      "query": "legacy_api parse_config implementation",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 3,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0015",
+      "arm": "E_WRONG_HINT",
+      "query": "parse_config env expansion unresolved variable",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 3,
+      "termCount": 5,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "env",
+        "unresolved",
+        "variable"
+      ]
+    },
+    {
+      "run": "r0016",
+      "arm": "D_WRONG_PASSIVE",
+      "query": "parse_config unresolved metadata key",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 3,
+      "termCount": 4,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "unresolved",
+        "metadata",
+        "key"
+      ]
+    },
+    {
+      "run": "r0016",
+      "arm": "D_WRONG_PASSIVE",
+      "query": "legacy_api parse_config legacy config parser",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 2,
+      "termCount": 5,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "legacy",
+        "config"
+      ]
+    },
+    {
+      "run": "r0017",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "parse_config _expand legacy_api",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 3,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0017",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "config parsing hidden contract unresolved counting",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 3,
+      "termCount": 6,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "config",
+        "contract",
+        "unresolved"
+      ]
+    },
+    {
+      "run": "r0018",
+      "arm": "C_CORRECT_HINT",
+      "query": "parse_config legacy_api",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 2,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0018",
+      "arm": "C_CORRECT_HINT",
+      "query": "config parser key value env expansion tests",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 5,
+      "termCount": 7,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "config",
+        "key",
+        "value",
+        "env",
+        "tests"
+      ]
+    },
+    {
+      "run": "r0020",
+      "arm": "E_WRONG_HINT",
+      "query": "parse_config legacylib.utils.legacy_api",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 2,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0020",
+      "arm": "E_WRONG_HINT",
+      "query": "legacy_api parse_config text env default",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 1,
+      "termCount": 5,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "env"
+      ]
+    },
+    {
+      "run": "r0021",
+      "arm": "C_CORRECT_HINT",
+      "query": "parse_config legacy config parser key value env expansion unresolved",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 6,
+      "termCount": 9,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "legacy",
+        "config",
+        "key",
+        "value",
+        "env",
+        "unresolved"
+      ]
+    },
+    {
+      "run": "r0021",
+      "arm": "C_CORRECT_HINT",
+      "query": "legacy_api parse_config _expand ConfigParseError metadata key",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 2,
+      "termCount": 6,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "metadata",
+        "key"
+      ]
+    },
+    {
+      "run": "r0022",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "parse_config unresolved variable",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 1,
+      "termCount": 3,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "unresolved"
+      ]
+    },
+    {
+      "run": "r0022",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "metadata unresolved count",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 2,
+      "termCount": 3,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "metadata",
+        "unresolved"
+      ]
+    },
+    {
+      "run": "r0022",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "legacy_api config parser implementation",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 1,
+      "termCount": 4,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "config"
+      ]
+    },
+    {
+      "run": "r0022",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "_unresolved",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 0,
+      "termCount": 1,
+      "anyTermHit": false,
+      "matchingTerms": []
+    },
+    {
+      "run": "r0022",
+      "arm": "B_CORRECT_PASSIVE",
+      "query": "ConfigParseError key value config",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 3,
+      "termCount": 4,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "key",
+        "value",
+        "config"
+      ]
+    },
+    {
+      "run": "r0024",
+      "arm": "D_WRONG_PASSIVE",
+      "query": "parse_config legacy_api expand unresolved",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 2,
+      "termCount": 4,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "expand",
+        "unresolved"
+      ]
+    },
+    {
+      "run": "r0024",
+      "arm": "D_WRONG_PASSIVE",
+      "query": "unresolved count metadata config parser legacy",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 5,
+      "termCount": 6,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "unresolved",
+        "count",
+        "metadata",
+        "config",
+        "legacy"
+      ]
+    },
+    {
+      "run": "r0025",
+      "arm": "E_WRONG_HINT",
+      "query": "parse_config legacylib legacy_api",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 1,
+      "termCount": 3,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "legacylib"
+      ]
+    },
+    {
+      "run": "r0025",
+      "arm": "E_WRONG_HINT",
+      "query": "ConfigParseError _expand env variable expansion config parser",
+      "hit": false,
+      "termsHit": true,
+      "matchingTermCount": 3,
+      "termCount": 7,
+      "anyTermHit": true,
+      "matchingTerms": [
+        "env",
+        "variable",
+        "config"
+      ]
+    }
+  ]
+}

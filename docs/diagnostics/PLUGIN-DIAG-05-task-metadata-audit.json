@@ -1,0 +1,775 @@
+{
+  "generatedAt": "2026-08-30T07:17:38.394Z",
+  "total": 50,
+  "valid": 33,
+  "invalid": 17,
+  "rows": [
+    {
+      "id": "django__django-11790",
+      "repo": "django/django",
+      "f2p": 2,
+      "p2p": 77,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "UserCreationForm password validation uses all of the form's data.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "An invalid login doesn't leak the inactive status of a user.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "The change form does not return the password value",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-11815",
+      "repo": "django/django",
+      "f2p": 2,
+      "p2p": 44,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "A reference in a local scope can't be serialized.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "An unbound method used within a class body can be serialized.",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-11848",
+      "repo": "django/django",
+      "f2p": 2,
+      "p2p": 43,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "test (utils_tests.test_http.EscapeLeadingSlashesTests)",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-11880",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 114,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "BoundField without any choices (subwidgets) evaluates to True.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "#21962 - adding html escape flag to ErrorDict",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "#5749 - `field_name` may be used as a key in _html_output().",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-11885",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 43,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "django__django-11951",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 21,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "django__django-11964",
+      "repo": "django/django",
+      "f2p": 2,
+      "p2p": 15,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "django__django-11999",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 30,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "Can supply a custom choices form class to Field.formfield()",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "deconstruct() uses __qualname__ for nested class support.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "Field instances can be pickled.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "Fields are ordered based on their creation.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "__repr__() uses __qualname__ for nested class support.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "Field.formfield() sets disabled for fields with choices.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "A translated display value is coerced to str.",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-12039",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 11,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "django__django-12050",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 10,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "django__django-12143",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 52,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "{% get_admin_log %} works without specifying a user.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "list_editable edits use a filtered queryset to limit memory usage.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "#15185 -- Allow no links from the 'change list' view grid.",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-12155",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 6,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "django__django-12193",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 11,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "django__django-12209",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 0,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "f2p",
+          "id": "partial(func, *args, **keywords) - new function with partial application",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-12262",
+      "repo": "django/django",
+      "f2p": 4,
+      "p2p": 18,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "django__django-12273",
+      "repo": "django/django",
+      "f2p": 2,
+      "p2p": 27,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "django__django-12276",
+      "repo": "django/django",
+      "f2p": 2,
+      "p2p": 117,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "BoundField without any choices (subwidgets) evaluates to True.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "#21962 - adding html escape flag to ErrorDict",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "#5749 - `field_name` may be used as a key in _html_output().",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-12304",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 17,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "django__django-12308",
+      "repo": "django/django",
+      "f2p": 2,
+      "p2p": 20,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "django__django-12325",
+      "repo": "django/django",
+      "f2p": 2,
+      "p2p": 201,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "Ref #22047.",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-12406",
+      "repo": "django/django",
+      "f2p": 3,
+      "p2p": 165,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "Regression for #13095: Using base forms with widgets defined in Meta should not raise errors.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "A custom formfield_callback is used if provided",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "Regression for #15315: modelform_factory should accept widgets",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "Regression for #19733",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "Data for a ManyToManyField is a list rather than a lazy QuerySet.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "Ensure keys and blank character strings are tested for uniqueness.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "Test for primary_key being in the form and failing validation.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "ModelForm test of unique_together constraint",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "Check basic URL field validation on model forms",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "FilePathField(blank=True) includes the empty option.",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-12708",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 101,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "A field may be migrated from AutoField to BigAutoField.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "RenameModel renames a many-to-many column after a RenameField.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "A field may be migrated from SmallAutoField to AutoField.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "A field may be migrated from SmallAutoField to BigAutoField.",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-12713",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 58,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "m2m fields help text as it applies to admin app (#9321).",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-12774",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 41,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "Lookup.can_use_none_as_rhs=True allows None as a lookup value.",
+          "reason": "invalid-django-label"
+        },
+        {
+          "kind": "p2p",
+          "id": "Transforms are used for __exact=None.",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "django__django-9296",
+      "repo": "django/django",
+      "f2p": 1,
+      "p2p": 20,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "Paginator.get_page() with an empty object_list.",
+          "reason": "invalid-django-label"
+        }
+      ]
+    },
+    {
+      "id": "sphinx-doc__sphinx-10323",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 40,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-10435",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 74,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-10466",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 6,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-10673",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 9,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-11510",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 2,
+      "p2p": 7,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-7590",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 24,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-7748",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 2,
+      "p2p": 12,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-7757",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 33,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-7985",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 2,
+      "p2p": 3,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-8035",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 2,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-8056",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 40,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "tests/test_ext_napoleon_docstring.py::TestNumpyDocstring::test_escape_args_and_kwargs[x,",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_ext_napoleon_docstring.py::TestNumpyDocstring::test_escape_args_and_kwargs[*args,",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_ext_napoleon_docstring.py::TestNumpyDocstring::test_escape_args_and_kwargs[*x,",
+          "reason": "unbalanced-parameter-id"
+        }
+      ]
+    },
+    {
+      "id": "sphinx-doc__sphinx-8265",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 22,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "f2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[(1,",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[a",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[1",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[{'key1':",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[Tuple[int,",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[~",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[lambda",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[[1,",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[not",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[{1,",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[+",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[-",
+          "reason": "unbalanced-parameter-id"
+        }
+      ]
+    },
+    {
+      "id": "sphinx-doc__sphinx-8269",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 5,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-8475",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 17,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-8548",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 5,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-8551",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 32,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-8638",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 34,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-8721",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 3,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-9229",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 13,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-9230",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 44,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-9281",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 38,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-9320",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 9,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-9367",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 25,
+      "valid": false,
+      "invalid": [
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[a",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[1",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[{'key1':",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[Tuple[int,",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[~",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[lambda",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[[1,",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[not",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[{1,",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[+",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[-",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse[(1,",
+          "reason": "unbalanced-parameter-id"
+        },
+        {
+          "kind": "p2p",
+          "id": "tests/test_pycode_ast.py::test_unparse_py38[lambda",
+          "reason": "unbalanced-parameter-id"
+        }
+      ]
+    },
+    {
+      "id": "sphinx-doc__sphinx-9461",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 3,
+      "p2p": 59,
+      "valid": true,
+      "invalid": []
+    },
+    {
+      "id": "sphinx-doc__sphinx-9698",
+      "repo": "sphinx-doc/sphinx",
+      "f2p": 1,
+      "p2p": 45,
+      "valid": true,
+      "invalid": []
+    }
+  ]
+}

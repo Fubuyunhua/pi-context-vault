@@ -1,0 +1,51 @@
+{
+  "generatedAt": "2026-08-30T07:19:01.673Z",
+  "network": "none",
+  "tasks": [
+    "django__django-12039",
+    "sphinx-doc__sphinx-9461"
+  ],
+  "accepted": true,
+  "rows": [
+    {
+      "task": "django__django-12039",
+      "mode": "base",
+      "exitCode": 1,
+      "timedOut": false,
+      "durationMs": 21007,
+      "expected": "fail",
+      "accepted": true,
+      "outputTail": "12039:latest\nCreating test database for alias 'default'...\nCloning test database for alias 'default'...\nCloning test database for alias 'default'...\nCloning test database for alias 'default'...\nF...........\n======================================================================\nFAIL: test_descending_columns_list_sql (indexes.tests.SchemaIndexesTests)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/opt/miniconda3/envs/testbed/lib/python3.6/unittest/case.py\", line 59, in testPartExecutor\n    yield\n  File \"/opt/miniconda3/envs/testbed/lib/python3.6/unittest/case.py\", line 605, in run\n    testMethod()\n  File \"/testbed/tests/indexes/tests.py\", line 91, in test_descending_columns_list_sql\n    str(index.create_sql(Article, editor)),\n  File \"/opt/miniconda3/envs/testbed/lib/python3.6/unittest/case.py\", line 1089, in assertIn\n    self.fail(self._formatMessage(msg, standardMsg))\n  File \"/opt/miniconda3/envs/testbed/lib/python3.6/unittest/case.py\", line 670, in fail\n    raise self.failureException(msg)\nAssertionError: '(\"headline\" DESC)' not found in 'CREATE INDEX \"whitespace_idx\" ON \"indexes_article\" (\"headline\"DESC)'\n\n----------------------------------------------------------------------\nRan 12 tests in 0.149s\n\nFAILED (failures=1)\nDestroying test database for alias 'default'...\nDestroying test database for alias 'default'...\nDestroying test database for alias 'default'...\nDestroying test database for alias 'default'...\n"
+    },
+    {
+      "task": "django__django-12039",
+      "mode": "gold",
+      "exitCode": 0,
+      "timedOut": false,
+      "durationMs": 3172,
+      "expected": "pass",
+      "accepted": true,
+      "outputTail": "Testing against Django installed in '/testbed/django' with up to 16 processes\nSystem check identified no issues (0 silenced).\n\nCreating test database for alias 'default'...\nCloning test database for alias 'default'...\nCloning test database for alias 'default'...\nCloning test database for alias 'default'...\n............\n----------------------------------------------------------------------\nRan 12 tests in 0.144s\n\nOK\nDestroying test database for alias 'default'...\nDestroying test database for alias 'default'...\nDestroying test database for alias 'default'...\nDestroying test database for alias 'default'...\n"
+    },
+    {
+      "task": "sphinx-doc__sphinx-9461",
+      "mode": "base",
+      "exitCode": 1,
+      "timedOut": false,
+      "durationMs": 5622,
+      "expected": "fail",
+      "accepted": true,
+      "outputTail": "type_names_disabled\n  <template>:224: DeprecationWarning: 'soft_unicode' has been renamed to 'soft_str'. The old name will be removed in MarkupSafe 2.1.\n\ntests/test_domain_py.py::test_domain_py_xrefs_abbreviations\ntests/test_domain_py.py::test_resolve_xref_for_properties\ntests/test_domain_py.py::test_domain_py_canonical\ntests/test_domain_py.py::test_python_python_use_unqualified_type_names\ntests/test_domain_py.py::test_python_python_use_unqualified_type_names_disabled\n  <template>:386: DeprecationWarning: 'soft_unicode' has been renamed to 'soft_str'. The old name will be removed in MarkupSafe 2.1.\n\ntests/test_domain_py.py::test_domain_py_xrefs_abbreviations\ntests/test_domain_py.py::test_resolve_xref_for_properties\ntests/test_domain_py.py::test_domain_py_canonical\ntests/test_domain_py.py::test_python_python_use_unqualified_type_names\ntests/test_domain_py.py::test_python_python_use_unqualified_type_names_disabled\n  <template>:401: DeprecationWarning: 'soft_unicode' has been renamed to 'soft_str'. The old name will be removed in MarkupSafe 2.1.\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED tests/test_domain_py.py::test_pyproperty - AssertionError: The node[1]...\nFAILED tests/test_ext_autodoc_autoclass.py::test_properties - AssertionError:...\nFAILED tests/test_ext_autodoc_autoproperty.py::test_class_properties - Assert...\n3 failed, 59 passed, 192 warnings in 3.37s\n\n"
+    },
+    {
+      "task": "sphinx-doc__sphinx-9461",
+      "mode": "gold",
+      "exitCode": 0,
+      "timedOut": false,
+      "durationMs": 4496,
+      "expected": "pass",
+      "accepted": true,
+      "outputTail": "ill be removed in MarkupSafe 2.1.\n\ntests/test_domain_py.py::test_domain_py_xrefs_abbreviations\ntests/test_domain_py.py::test_resolve_xref_for_properties\ntests/test_domain_py.py::test_domain_py_canonical\ntests/test_domain_py.py::test_python_python_use_unqualified_type_names\ntests/test_domain_py.py::test_python_python_use_unqualified_type_names_disabled\n  <template>:224: DeprecationWarning: 'soft_unicode' has been renamed to 'soft_str'. The old name will be removed in MarkupSafe 2.1.\n\ntests/test_domain_py.py::test_domain_py_xrefs_abbreviations\ntests/test_domain_py.py::test_resolve_xref_for_properties\ntests/test_domain_py.py::test_domain_py_canonical\ntests/test_domain_py.py::test_python_python_use_unqualified_type_names\ntests/test_domain_py.py::test_python_python_use_unqualified_type_names_disabled\n  <template>:386: DeprecationWarning: 'soft_unicode' has been renamed to 'soft_str'. The old name will be removed in MarkupSafe 2.1.\n\ntests/test_domain_py.py::test_domain_py_xrefs_abbreviations\ntests/test_domain_py.py::test_resolve_xref_for_properties\ntests/test_domain_py.py::test_domain_py_canonical\ntests/test_domain_py.py::test_python_python_use_unqualified_type_names\ntests/test_domain_py.py::test_python_python_use_unqualified_type_names_disabled\n  <template>:401: DeprecationWarning: 'soft_unicode' has been renamed to 'soft_str'. The old name will be removed in MarkupSafe 2.1.\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n62 passed, 192 warnings in 2.78s\n\n"
+    }
+  ]
+}
