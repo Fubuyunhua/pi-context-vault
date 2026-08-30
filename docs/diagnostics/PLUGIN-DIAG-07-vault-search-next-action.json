@@ -1,0 +1,26 @@
+{
+  "observationId": "obs_41640760f12350e42515b4e5",
+  "contentBytes": 18761,
+  "receiptContainsMarker": false,
+  "searchContainsMarker": true,
+  "searchMatches": [
+    {
+      "line": 2,
+      "text": "NEXT_ACTION_DEEP_MARKER_7f31"
+    }
+  ],
+  "nextAction": {
+    "tool": "context_vault_obs_get",
+    "arguments": {
+      "id": "obs_41640760f12350e42515b4e5"
+    }
+  },
+  "nextActionGet": {
+    "byteStart": 0,
+    "byteEnd": 8192,
+    "truncated": true,
+    "containsMarker": false
+  },
+  "queryGetContainsMarker": true,
+  "reproduced": true
+}

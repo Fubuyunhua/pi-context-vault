@@ -1,0 +1,45 @@
+{
+  "generatedAt": "2026-08-30T09:59:43.163Z",
+  "taskPath": "tasks/postfix-02/context-pressure-v2.json",
+  "taskVersion": "synthetic-v2-retrieval-required",
+  "receiptVisibilityAccepted": true,
+  "accepted": false,
+  "rows": [
+    {
+      "arm": "none",
+      "chunks": 12,
+      "originalBytes": 786432,
+      "modelVisibleBytes": 786432,
+      "replacedResults": 0,
+      "ratio": 1,
+      "visibleContractOccurrences": 1,
+      "sessionEntryDigest": "b919f3a1f94da9fceb043fcf5526a3e00a47733f51f380ba13ec7f7ea81ede4b",
+      "searchBytes": 0,
+      "searchResults": 0,
+      "searchContainsContract": false,
+      "getContainsContract": false,
+      "getWithQueryContainsContract": false
+    },
+    {
+      "arm": "vault",
+      "chunks": 12,
+      "originalBytes": 786432,
+      "modelVisibleBytes": 49152,
+      "replacedResults": 12,
+      "ratio": 0.0625,
+      "visibleContractOccurrences": 0,
+      "sessionEntryDigest": "d2ca2b7055bb228785b829767fdf51a0427455d41240332ab2658f1f82727487",
+      "searchBytes": 2421,
+      "searchResults": 1,
+      "searchContainsContract": true,
+      "searchNextAction": {
+        "tool": "context_vault_obs_get",
+        "arguments": {
+          "id": "obs_3b254c1d509678482e8b0c43"
+        }
+      },
+      "getContainsContract": false,
+      "getWithQueryContainsContract": true
+    }
+  ]
+}

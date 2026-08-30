@@ -39,7 +39,7 @@ Each run received 12 paired synthetic tool results before the user task:
 | REPO | 768KB raw | 0/2 | 227s | 102k | 0/0 |
 | BOTH | 48KB receipts | 2/2 | 36s | 54k | 2/2 |
 
-Every arm edited the intended `pressurelib/parser.py`. VAULT and BOTH searched and fetched the archived contract in both repeats and passed all hidden tests. NONE and REPO retained the raw prelude but failed the exact contract tests.
+Every arm edited the intended `pressurelib/parser.py`. VAULT and BOTH searched and fetched the archived contract in both repeats and passed all hidden tests. NONE and REPO retained the raw prelude, guessed status-counting APIs, and failed the exact contract tests.
 
 Relative to NONE in this stratum:
 
@@ -48,7 +48,13 @@ Relative to NONE in this stratum:
 
 No Pi compaction occurred. The measured mechanism is immediate Observation archival/receipt virtualization plus explicit search→get, not automatic compaction.
 
-This is strong mechanism-specific evidence but only two independent repeats; it is not a general SWE-bench effect estimate.
+This is strong treatment-specific evidence but only two independent repeats; it is not a general SWE-bench effect estimate.
+
+### Post-run integrity caveat
+
+A deeper replay found one occurrence of the contract still present in the first Vault receipt preview. Therefore the 4/4 search→get sequence was real, but this v1 task does **not** establish that get was strictly necessary to see the contract. The supported interpretation is the joint effect of receipt virtualization and the observed retrieval behavior, not retrieval-only causality.
+
+A zero-model v2 gate moved the contract beyond the receipt preview. That gate exposed a separate deterministic handoff problem: search finds the deep contract, but executing its returned `{id}` next action fetches only bytes 0–8192 and misses the matched evidence. An explicit query-targeted get succeeds. This is tracked as Context Vault #69; no post-hoc model runs were added.
 
 ## Repo Context behavior
 
@@ -95,9 +101,9 @@ Aggregate averages mix very different strata and should not replace the task-lev
 ## Conclusions
 
 1. The neutral task showed no correctness regression: 8/8 across arms.
-2. Context Vault produced a replicated mechanism-specific benefit under scripted evidence pressure: VAULT/BOTH 4/4 versus NONE/REPO 0/4, with much lower tokens and wall time.
+2. Context Vault produced a replicated treatment-specific benefit under scripted evidence pressure: VAULT/BOTH 4/4 versus NONE/REPO 0/4, with much lower tokens and wall time. Receipt virtualization and retrieval-only causality are not separated in v1.
 3. Repo Context now returns useful cold fallback/indexed evidence, but the selected navigation task remained 0/8; relevant localization alone did not solve the implementation challenge.
 4. BOTH inherited the Vault pressure benefit and did not show a dual-install regression in this matrix.
 5. These results justify a larger context-pressure replication, not a claim that Vault or BOTH broadly improves arbitrary coding tasks.
 
-No new plugin defect met the Issue threshold in this batch. No adaptive model runs should be added to POSTFIX-02.
+The post-run v2 deterministic gate identified Context Vault #69 (deep search hit → returned get action misses the evidence). No adaptive model runs should be added to POSTFIX-02.

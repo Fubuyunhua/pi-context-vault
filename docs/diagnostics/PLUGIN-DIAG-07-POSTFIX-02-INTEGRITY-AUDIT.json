@@ -1,0 +1,139 @@
+{
+  "generatedAt": "2026-08-30T10:06:45.247Z",
+  "runs": 24,
+  "taskHashes": {
+    "taskFile": "d34241f285400a50a8525709c84ccecc407e09fbc1b86b2297f9c95f02326a71",
+    "prompt": "ee6e89626bdac1378037f03192c967b01f865e5c4c2359400327567fcebca7bf",
+    "contract": "777a036f36fe5183935c2c038571d572a08faf1d6cbc62b95e6e823d633b098a",
+    "fixturePatch": "533a19aa7700e16707cd722b6c37636c79c32701bdf85cb4ad7cc7bfaa762fc3",
+    "testPatch": "aebd282c68c6716a40216c5de97887b0886d2e619ae3e52562d6e37636d55328",
+    "goldPatch": "e5e4f4ecd06815980961dafd9a8ab8de3beb3c97e27159d95d52b7d8f19e1faf"
+  },
+  "leakageChecks": {
+    "promptContainsContract": false,
+    "promptContainsHiddenTest": false,
+    "fixtureContainsContract": false,
+    "fixtureContainsHiddenTest": false,
+    "hiddenTestOnlyInPostRunPatch": true
+  },
+  "pressureRows": [
+    {
+      "arm": "none",
+      "repeat": 1,
+      "passed": false,
+      "hiddenTestNameOccurrences": 0,
+      "diffTouchesTests": false,
+      "matchedChecks": true,
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "arm": "vault",
+      "repeat": 1,
+      "passed": true,
+      "hiddenTestNameOccurrences": 0,
+      "diffTouchesTests": false,
+      "matchedChecks": true,
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "arm": "repoctx",
+      "repeat": 1,
+      "passed": false,
+      "hiddenTestNameOccurrences": 0,
+      "diffTouchesTests": false,
+      "matchedChecks": true,
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "arm": "both",
+      "repeat": 1,
+      "passed": true,
+      "hiddenTestNameOccurrences": 0,
+      "diffTouchesTests": false,
+      "matchedChecks": true,
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "arm": "none",
+      "repeat": 2,
+      "passed": false,
+      "hiddenTestNameOccurrences": 0,
+      "diffTouchesTests": false,
+      "matchedChecks": true,
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "arm": "vault",
+      "repeat": 2,
+      "passed": true,
+      "hiddenTestNameOccurrences": 0,
+      "diffTouchesTests": false,
+      "matchedChecks": true,
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "arm": "repoctx",
+      "repeat": 2,
+      "passed": false,
+      "hiddenTestNameOccurrences": 0,
+      "diffTouchesTests": false,
+      "matchedChecks": true,
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    },
+    {
+      "arm": "both",
+      "repeat": 2,
+      "passed": true,
+      "hiddenTestNameOccurrences": 0,
+      "diffTouchesTests": false,
+      "matchedChecks": true,
+      "editedFiles": [
+        "pressurelib/parser.py"
+      ]
+    }
+  ],
+  "v1ReceiptContractOccurrences": {
+    "none": 1,
+    "vault": 1
+  },
+  "v2Gate": {
+    "receiptVisibilityAccepted": true,
+    "accepted": false,
+    "vault": {
+      "arm": "vault",
+      "chunks": 12,
+      "originalBytes": 786432,
+      "modelVisibleBytes": 49152,
+      "replacedResults": 12,
+      "ratio": 0.0625,
+      "visibleContractOccurrences": 0,
+      "sessionEntryDigest": "d2ca2b7055bb228785b829767fdf51a0427455d41240332ab2658f1f82727487",
+      "searchBytes": 2421,
+      "searchResults": 1,
+      "searchContainsContract": true,
+      "searchNextAction": {
+        "tool": "context_vault_obs_get",
+        "arguments": {
+          "id": "obs_3b254c1d509678482e8b0c43"
+        }
+      },
+      "getContainsContract": false,
+      "getWithQueryContainsContract": true
+    }
+  },
+  "accepted": true
+}
