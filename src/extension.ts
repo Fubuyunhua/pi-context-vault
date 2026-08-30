@@ -183,6 +183,15 @@ function modelVisibleTelemetry(telemetry: TelemetrySnapshot): TelemetrySnapshot 
     metadataCompactionBytesBefore: telemetry.metadataCompactionBytesBefore,
     metadataCompactionBytesAfter: telemetry.metadataCompactionBytesAfter,
     artifactGcFailureCount: telemetry.artifactGcFailureCount,
+    observationSearchCount: telemetry.observationSearchCount,
+    observationSearchCandidateCount: telemetry.observationSearchCandidateCount,
+    observationSearchArtifactReadCount: telemetry.observationSearchArtifactReadCount,
+    observationSearchUnavailableCount: telemetry.observationSearchUnavailableCount,
+    observationSearchHydrationReadCount: telemetry.observationSearchHydrationReadCount,
+    observationSearchFallbackCount: telemetry.observationSearchFallbackCount,
+    observationSearchIndexLoadFailureCount: telemetry.observationSearchIndexLoadFailureCount,
+    observationSearchIndexWriteFailureCount: telemetry.observationSearchIndexWriteFailureCount,
+    observationSearchDurationMsTotal: telemetry.observationSearchDurationMsTotal,
     reductionInvocationCount: telemetry.reductionInvocationCount,
     reductionTriggeredCount: telemetry.reductionTriggeredCount,
     reducedObservationCount: telemetry.reducedObservationCount,
@@ -247,6 +256,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
     const store = runtime.store;
     const lease = runtime.activeSessionLease;
     runtime = { initialized: false, warnings: [], failures: [], telemetry: new Telemetry() };
+    await store?.flushSearchIndex();
     if (store && lease) {
       try {
         await store.releaseActiveSession(lease);

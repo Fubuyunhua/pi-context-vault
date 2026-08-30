@@ -102,6 +102,8 @@ Tool results whose names start with `context_vault_` or `repo_context_` are inte
 | `context_vault_obs_search` | Search sanitized archived Observations. The default `terms` mode ranks partial matches, normalizes common code-identifier separators (`_`, `-`, `.`, `/`, `\\`), and reports a relevance score; `phrase` mode requires one contiguous literal per-line match. Identical artifacts collapse before the result limit is applied; each result identifies the newest Observation, its `occurrenceCount`, and up to five `recentObservationIds`. Results also include an executable `context_vault_obs_get` next action whose `arguments.id` is always retrievable. |
 | `context_vault_status` | Report Vault-only lifecycle, storage, reduction, warning, and telemetry state. |
 
+Observation search maintains a disposable bounded Bloom snapshot; after it is persisted, the 1,000-Observation regression target is under 1,000 ms with zero artifact reads for an indexed miss and one for a unique hit. Short, Unicode, and phrase queries conservatively verify candidates.
+
 ## Command
 
 ```text

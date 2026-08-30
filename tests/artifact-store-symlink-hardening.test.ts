@@ -149,7 +149,7 @@ describe("ArtifactStore symlink-swap hardening", () => {
 
         await expect(store.read(artifactId)).rejects.toThrow(/Unsafe|symbolic|replaced/u);
         await expect(runtime(store).get({ id: metadata.observationId })).rejects.toThrow(/Unsafe|symbolic|replaced/u);
-        await expect(runtime(store).search({ query: "Repo evidence" })).rejects.toThrow(/Unsafe|symbolic|replaced/u);
+        await expect(runtime(store).search({ query: "Repo evidence" })).rejects.toThrow("Observation search failed.");
         const messages = reductionMessages();
         const reduced = await reduceContext({
           store,
@@ -211,7 +211,7 @@ describe("ArtifactStore symlink-swap hardening", () => {
         await symlink(target, metadataPath, "file");
 
         await expect(store.listMetadata()).rejects.toThrow(/Unsafe|symbolic|state file/u);
-        await expect(runtime(store).search({ query: "Repo evidence" })).rejects.toThrow(/Unsafe|symbolic|state file/u);
+        await expect(runtime(store).search({ query: "Repo evidence" })).rejects.toThrow("Observation search failed.");
         await expect(
           store.archive({ observationId: "obs-append", toolName: "read", sessionId: "session", content: "safe" }),
         ).rejects.toThrow(/Unsafe|symbolic|state file/u);

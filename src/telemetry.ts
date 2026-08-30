@@ -26,6 +26,15 @@ export interface TelemetrySnapshot {
   metadataCompactionBytesBefore: number;
   metadataCompactionBytesAfter: number;
   artifactGcFailureCount: number;
+  observationSearchCount: number;
+  observationSearchCandidateCount: number;
+  observationSearchArtifactReadCount: number;
+  observationSearchUnavailableCount: number;
+  observationSearchHydrationReadCount: number;
+  observationSearchFallbackCount: number;
+  observationSearchIndexLoadFailureCount: number;
+  observationSearchIndexWriteFailureCount: number;
+  observationSearchDurationMsTotal: number;
   reductionInvocationCount: number;
   reductionTriggeredCount: number;
   reducedObservationCount: number;
@@ -59,6 +68,15 @@ export class Telemetry {
     metadataCompactionBytesBefore: 0,
     metadataCompactionBytesAfter: 0,
     artifactGcFailureCount: 0,
+    observationSearchCount: 0,
+    observationSearchCandidateCount: 0,
+    observationSearchArtifactReadCount: 0,
+    observationSearchUnavailableCount: 0,
+    observationSearchHydrationReadCount: 0,
+    observationSearchFallbackCount: 0,
+    observationSearchIndexLoadFailureCount: 0,
+    observationSearchIndexWriteFailureCount: 0,
+    observationSearchDurationMsTotal: 0,
     reductionInvocationCount: 0,
     reductionTriggeredCount: 0,
     reducedObservationCount: 0,
@@ -117,6 +135,28 @@ export class Telemetry {
   }
   recordArtifactGcFailure(): void {
     this.#values.artifactGcFailureCount += 1;
+  }
+  recordObservationSearch(input: {
+    durationMs: number;
+    candidates: number;
+    artifactReads: number;
+    unavailable: number;
+    hydrationReads: number;
+    fallbacks: number;
+  }): void {
+    this.#values.observationSearchCount += 1;
+    this.#values.observationSearchCandidateCount += finiteNonnegative(input.candidates);
+    this.#values.observationSearchArtifactReadCount += finiteNonnegative(input.artifactReads);
+    this.#values.observationSearchUnavailableCount += finiteNonnegative(input.unavailable);
+    this.#values.observationSearchHydrationReadCount += finiteNonnegative(input.hydrationReads);
+    this.#values.observationSearchFallbackCount += finiteNonnegative(input.fallbacks);
+    this.#values.observationSearchDurationMsTotal += finiteNonnegative(input.durationMs);
+  }
+  recordObservationSearchIndexLoadFailure(): void {
+    this.#values.observationSearchIndexLoadFailureCount += 1;
+  }
+  recordObservationSearchIndexWriteFailure(): void {
+    this.#values.observationSearchIndexWriteFailureCount += 1;
   }
   recordReduction(input: {
     durationMs: number;

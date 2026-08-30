@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,15 +18,25 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function setup(options: { threshold?: number; receiptMax?: number; invalid?: boolean } = {}) {
+async function setup(
+  options: {
+    threshold?: number;
+    receiptMax?: number;
+    invalid?: boolean;
+    onArtifactRead?: (artifactId: string) => void;
+  } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "context-vault-observations-"));
   roots.push(root);
   const artifactsRoot = join(root, "artifacts");
   const metadataRoot = join(root, "metadata");
   if (options.invalid) await writeFile(artifactsRoot, "not a directory");
   else await mkdir(artifactsRoot);
-  const store = new ArtifactStore({ artifactsRoot, metadataRoot });
+  const store = new ArtifactStore({ artifactsRoot, metadataRoot, onArtifactRead: options.onArtifactRead });
   return {
+    root,
+    artifactsRoot,
+    metadataRoot,
     store,
     runtime: new ObservationRuntime({
       store,
@@ -97,7 +108,13 @@ describe("observation virtualization", () => {
   });
 
   it("collapses duplicate artifacts before applying the result limit", async () => {
-    const { runtime, store } = await setup({ threshold: 1 });
+    let artifactReads = 0;
+    const { runtime } = await setup({
+      threshold: 1,
+      onArtifactRead: () => {
+        artifactReads += 1;
+      },
+    });
     const unique = await runtime.virtualize({
       toolCallId: "unique-older",
       toolName: "bash",
@@ -115,8 +132,7 @@ describe("observation virtualization", () => {
         }),
       );
     }
-    const read = vi.spyOn(store, "read");
-
+    artifactReads = 0;
     const searched = await runtime.search({ query: "shared-search-marker", limit: 10 });
 
     expect(searched).toMatchObject({ truncated: false });
@@ -136,7 +152,7 @@ describe("observation virtualization", () => {
       occurrenceCount: 1,
       recentObservationIds: [unique.observationId],
     });
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(artifactReads).toBe(2);
   });
 
   it("aligns byte retrieval to UTF-8 boundaries and reports requested and actual ranges", async () => {
@@ -243,6 +259,299 @@ describe("observation virtualization", () => {
     const pastEnd = await runtime.get({ id: archived.observationId, query: "needle", offset: 10, limit: 1 });
     expect(pastEnd.matches).toEqual([]);
     expect(pastEnd.truncated).toBe(false);
+  });
+
+  it("bounds artifact reads for indexed searches across 1,000 Observations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "context-vault-observations-scale-"));
+    roots.push(root);
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    await Promise.all([mkdir(artifactsRoot), mkdir(metadataRoot)]);
+    const records: string[] = [];
+    await Promise.all(
+      Array.from({ length: 1_000 }, async (_, index) => {
+        const content =
+          index === 999 ? `background evidence ${index} unique-newest-marker` : `background evidence ${index}`;
+        const artifactId = createHash("sha256").update(content).digest("hex");
+        await mkdir(join(artifactsRoot, artifactId.slice(0, 2)), { recursive: true });
+        await writeFile(join(artifactsRoot, artifactId.slice(0, 2), `${artifactId}.txt`), content);
+        records[index] = JSON.stringify({
+          schemaVersion: 1,
+          artifactId,
+          observationId: observationId("scale", `call-${index}`),
+          toolName: "read",
+          sessionId: "scale",
+          contentHash: artifactId,
+          originalBytes: Buffer.byteLength(content),
+          sanitizedBytes: Buffer.byteLength(content),
+          redactionCount: 0,
+          createdAt: "2026-08-30T00:00:00.000Z",
+          updatedAt: "2026-08-30T00:00:00.000Z",
+        });
+      }),
+    );
+    await writeFile(join(metadataRoot, "observations.jsonl"), `${records.join("\n")}\n`);
+    let warmReads = 0;
+    const warmingStore = new ArtifactStore({
+      artifactsRoot,
+      metadataRoot,
+      onArtifactRead: () => {
+        warmReads += 1;
+      },
+    });
+    await warmingStore.searchArtifacts([{ value: "index-hydration", collapseIdentifierSeparators: false }]);
+    expect(warmReads).toBe(1_000);
+
+    const coldReads: string[] = [];
+    const restartedStore = new ArtifactStore({
+      artifactsRoot,
+      metadataRoot,
+      onArtifactRead: (artifactId) => coldReads.push(artifactId),
+    });
+    const runtime = new ObservationRuntime({
+      store: restartedStore,
+      receiptMaxBytes: 512,
+      projectId: "project",
+      projectRoot: "/project",
+      sessionId: "scale",
+    });
+    const startedAt = performance.now();
+    await expect(runtime.search({ query: "missing-scale-marker" })).resolves.toMatchObject({ results: [] });
+    const newest = await runtime.search({ query: "unique-newest-marker" });
+    const durationMs = performance.now() - startedAt;
+
+    expect(newest.results).toHaveLength(1);
+    expect(newest.results[0]?.matches[0]?.text).toContain("unique-newest-marker");
+    expect(coldReads).toEqual([newest.results[0]?.observation.artifactId]);
+    expect(durationMs).toBeLessThan(1_000);
+  }, 30_000);
+
+  it("persists bounded candidates for large artifacts without repeated miss scans", async () => {
+    const { runtime, artifactsRoot, metadataRoot } = await setup({ threshold: 10 * 1024 * 1024 });
+    const diverse = "large-content-line\n".repeat(32_000);
+    const archived = await runtime.virtualize({
+      toolCallId: "large-persistent-index",
+      toolName: "read",
+      text: `${diverse}\nlarge-persistent-marker`,
+      isError: false,
+    });
+    await runtime.search({ query: "large-persistent-marker" });
+
+    const reads: string[] = [];
+    const restarted = new ObservationRuntime({
+      store: new ArtifactStore({
+        artifactsRoot,
+        metadataRoot,
+        onArtifactRead: (artifactId) => reads.push(artifactId),
+      }),
+      receiptMaxBytes: 512,
+      projectId: "project",
+      projectRoot: "/project",
+      sessionId: "session",
+    });
+    await expect(restarted.search({ query: "definitely-missing-large-query" })).resolves.toMatchObject({ results: [] });
+    expect(reads).toEqual([]);
+    await expect(restarted.search({ query: "large-persistent-marker" })).resolves.toMatchObject({
+      results: [{ observationId: archived.observationId }],
+    });
+    expect(reads).toHaveLength(1);
+  });
+
+  it("isolates corrupt derived indexes and individual artifacts", async () => {
+    const { runtime, store, artifactsRoot, metadataRoot } = await setup({ threshold: 1_000_000 });
+    const healthy = await runtime.virtualize({
+      toolCallId: "healthy-corruption-peer",
+      toolName: "read",
+      text: "shared-corruption-query healthy evidence",
+      isError: false,
+    });
+    const corrupt = await runtime.virtualize({
+      toolCallId: "corrupt-evidence",
+      toolName: "read",
+      text: "shared-corruption-query corrupt evidence",
+      isError: false,
+    });
+    await runtime.search({ query: "shared-corruption-query" });
+    const corruptMetadata = await store.getMetadata(corrupt.observationId);
+    if (corruptMetadata === undefined) throw new Error("expected corrupt fixture metadata");
+    await writeFile(store.artifactPath(corruptMetadata.artifactId), "tampered evidence");
+    await writeFile(join(metadataRoot, "observation-search-index-v1.json"), "{broken");
+
+    const reads: string[] = [];
+    const restarted = new ObservationRuntime({
+      store: new ArtifactStore({
+        artifactsRoot,
+        metadataRoot,
+        onArtifactRead: (artifactId) => reads.push(artifactId),
+      }),
+      receiptMaxBytes: 512,
+      projectId: "project",
+      projectRoot: "/project",
+      sessionId: "session",
+    });
+    await expect(restarted.search({ query: "shared-corruption-query" })).resolves.toMatchObject({
+      results: [{ observationId: healthy.observationId }],
+      partial: true,
+      warnings: ["Some archived evidence was unavailable."],
+    });
+    const readsAfterRecovery = reads.length;
+    await expect(restarted.search({ query: "absent-after-corruption" })).resolves.toMatchObject({ results: [] });
+    expect(reads).toHaveLength(readsAfterRecovery);
+  });
+
+  it("returns a fixed path-free error when search state becomes unavailable", async () => {
+    const { runtime, metadataRoot, root } = await setup({ threshold: 1_000_000 });
+    await runtime.virtualize({ toolCallId: "privacy", toolName: "read", text: "privacy evidence", isError: false });
+    await rm(metadataRoot, { recursive: true, force: true });
+
+    let message = "";
+    try {
+      await runtime.search({ query: "privacy" });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toBe("Observation search failed.");
+    expect(message).not.toContain(root);
+  });
+
+  it("fails closed with a path-free error for an unsafe search-index symlink", async () => {
+    const { runtime, artifactsRoot, metadataRoot, root } = await setup({ threshold: 1_000_000 });
+    await runtime.virtualize({ toolCallId: "symlink", toolName: "read", text: "symlink evidence", isError: false });
+    await runtime.search({ query: "symlink" });
+    const indexPath = join(metadataRoot, "observation-search-index-v1.json");
+    const target = join(root, "unsafe-index-target.json");
+    await writeFile(target, "{}");
+    await rm(indexPath);
+    try {
+      await symlink(target, indexPath);
+    } catch (error) {
+      if (["EACCES", "ENOSYS", "ENOTSUP", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
+      throw error;
+    }
+    const restarted = new ObservationRuntime({
+      store: new ArtifactStore({ artifactsRoot, metadataRoot }),
+      receiptMaxBytes: 512,
+      projectId: "project",
+      projectRoot: "/project",
+      sessionId: "session",
+    });
+    let message = "";
+    try {
+      await restarted.search({ query: "symlink" });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toBe("Observation search failed.");
+    expect(message).not.toContain(root);
+  });
+
+  it("serializes search snapshots with concurrent garbage collection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "context-vault-observations-concurrency-"));
+    roots.push(root);
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    await mkdir(artifactsRoot);
+    let releaseTombstones = (): void => undefined;
+    const tombstonesReleased = new Promise<void>((resolve) => {
+      releaseTombstones = resolve;
+    });
+    let reportTombstones = (): void => undefined;
+    const tombstonesWritten = new Promise<void>((resolve) => {
+      reportTombstones = resolve;
+    });
+    const store = new ArtifactStore({
+      artifactsRoot,
+      metadataRoot,
+      faultHook: async (point) => {
+        if (point === "after-gc-tombstone-sync") {
+          reportTombstones();
+          await tombstonesReleased;
+        }
+      },
+    });
+    const runtime = new ObservationRuntime({
+      store,
+      receiptMaxBytes: 512,
+      projectId: "project",
+      projectRoot: "/project",
+      sessionId: "session",
+    });
+    await runtime.virtualize({
+      toolCallId: "concurrent-gc",
+      toolName: "read",
+      text: "concurrent-search-evidence",
+      isError: false,
+    });
+
+    const collection = store.garbageCollect({ retentionDays: 0, quotaBytes: 0 });
+    await tombstonesWritten;
+    const search = runtime.search({ query: "concurrent-search-evidence" });
+    releaseTombstones();
+    await expect(collection).resolves.toMatchObject({ quotaSatisfied: true });
+    await expect(search).resolves.toMatchObject({ results: [] });
+  });
+
+  it("serializes search snapshots with concurrent observation upserts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "context-vault-observations-upsert-"));
+    roots.push(root);
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    await mkdir(artifactsRoot);
+    let gateUpsert = false;
+    let releaseUpsert = (): void => undefined;
+    const upsertReleased = new Promise<void>((resolve) => {
+      releaseUpsert = resolve;
+    });
+    let reportUpsert = (): void => undefined;
+    const upsertWritten = new Promise<void>((resolve) => {
+      reportUpsert = resolve;
+    });
+    const store = new ArtifactStore({
+      artifactsRoot,
+      metadataRoot,
+      faultHook: async (point) => {
+        if (gateUpsert && point === "after-metadata-sync") {
+          reportUpsert();
+          await upsertReleased;
+        }
+      },
+    });
+    const runtime = new ObservationRuntime({
+      store,
+      receiptMaxBytes: 512,
+      projectId: "project",
+      projectRoot: "/project",
+      sessionId: "session",
+    });
+    await runtime.virtualize({ toolCallId: "upsert", toolName: "read", text: "old-upsert-marker", isError: false });
+    gateUpsert = true;
+    const upsert = runtime.virtualize({
+      toolCallId: "upsert",
+      toolName: "read",
+      text: "new-upsert-marker",
+      isError: false,
+    });
+    await upsertWritten;
+    const search = runtime.search({ query: "new-upsert-marker" });
+    releaseUpsert();
+    await upsert;
+    await expect(search).resolves.toMatchObject({ results: [{ matches: [{ text: "new-upsert-marker" }] }] });
+  });
+
+  it("conservatively verifies short and Unicode queries", async () => {
+    let reads = 0;
+    const { runtime } = await setup({
+      threshold: 1_000_000,
+      onArtifactRead: () => {
+        reads += 1;
+      },
+    });
+    await runtime.virtualize({ toolCallId: "fallback-a", toolName: "read", text: "x marker", isError: false });
+    await runtime.virtualize({ toolCallId: "fallback-b", toolName: "read", text: "界 marker", isError: false });
+    reads = 0;
+    await expect(runtime.search({ query: "x" })).resolves.toMatchObject({ results: [expect.any(Object)] });
+    await expect(runtime.search({ query: "界" })).resolves.toMatchObject({ results: [expect.any(Object)] });
+    expect(reads).toBe(4);
   });
 
   it("returns only sanitized bounded search evidence", async () => {
@@ -362,6 +671,23 @@ describe("observation virtualization", () => {
     await expect(runtime.search({ query: "extra key", matchMode: "phrase" })).resolves.toMatchObject({ results: [] });
     const fetched = await runtime.get({ id: archived.observationId, query: "extra key" });
     expect(fetched.matches).toEqual([]);
+  });
+
+  it("preserves Unicode case-fold equivalence in phrase fallback", async () => {
+    const { runtime } = await setup({ threshold: 1_000_000 });
+    const archived = await runtime.virtualize({
+      toolCallId: "unicode-phrase-fold",
+      toolName: "read",
+      text: [...Array.from({ length: 5 }, (_, index) => `ſay decoy ${index}`), "say actual terms match"].join("\n"),
+      isError: false,
+    });
+    await expect(runtime.search({ query: "say", matchMode: "terms" })).resolves.toMatchObject({
+      results: [{ observationId: archived.observationId, matches: [{ line: 6, text: "say actual terms match" }] }],
+    });
+    const phrase = await runtime.search({ query: "say", matchMode: "phrase" });
+    expect(phrase.results[0]).toMatchObject({ observationId: archived.observationId });
+    expect(phrase.results[0]?.matches[0]).toEqual({ line: 1, text: "ſay decoy 0" });
+    expect(phrase.results[0]?.matches).toHaveLength(5);
   });
 
   it("treats punctuation and identifiers as escaped literal terms", async () => {

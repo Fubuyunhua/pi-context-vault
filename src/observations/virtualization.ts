@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ArchivedArtifact, ArtifactMetadata, ArtifactStore } from "../artifacts/store.js";
+import type { ArchivedArtifact, ArtifactMetadata, ArtifactSearchNeedle, ArtifactStore } from "../artifacts/store.js";
 import type { ArchivePolicy } from "../state/config.js";
 import type { Telemetry } from "../telemetry.js";
 
@@ -87,6 +87,8 @@ export interface ObservationSearchResult {
   matchMode: ObservationSearchMatchMode;
   results: ObservationSearchHit[];
   truncated: boolean;
+  partial: boolean;
+  warnings: string[];
 }
 
 interface Utf8Slice {
@@ -164,34 +166,46 @@ function termMatches(text: SearchText, term: SearchTerm): boolean {
   return text.collapsed.includes(term.collapsed);
 }
 
-function separatorNormalizedPattern(terms: SearchTerm[]): RegExp {
+function separatorNormalizedPattern(terms: SearchTerm[], caseInsensitive = true): RegExp {
   const separator = String.raw`[_./\\\p{Pd}]*`;
   const sources = terms.map((term) => {
     if (term.collapsed.length === 0) return escapedLiteral(term.normalized);
     return Array.from(term.collapsed, escapedLiteral).join(separator);
   });
-  return new RegExp(sources.join("|"), "iu");
+  return new RegExp(sources.join("|"), caseInsensitive ? "iu" : "u");
 }
 
-function matchingExcerpt(line: string, pattern: RegExp, maxBytes: number): string | undefined {
-  const match = pattern.exec(line);
-  if (match === null) return undefined;
+function matchingExcerptAt(line: string, matchIndex: number, matchLength: number, maxBytes: number): string {
   const sourceBytes = Buffer.byteLength(line, "utf8");
   if (sourceBytes <= maxBytes) return line;
 
-  const matchStart = Buffer.byteLength(line.slice(0, match.index), "utf8");
-  const matchBytes = Buffer.byteLength(match[0], "utf8");
+  const matchStart = Buffer.byteLength(line.slice(0, matchIndex), "utf8");
+  const matchBytes = Buffer.byteLength(line.slice(matchIndex, matchIndex + matchLength), "utf8");
   const contextBefore = Math.max(0, Math.floor((maxBytes - Math.min(matchBytes, maxBytes)) / 2));
   const desiredStart = Math.min(Math.max(0, matchStart - contextBefore), sourceBytes - maxBytes);
   return byteSlice(line, desiredStart, maxBytes).text;
 }
 
-function matchingLines(
+function matchingExcerpt(line: string, pattern: RegExp, maxBytes: number): string | undefined {
+  const match = pattern.exec(line);
+  return match === null ? undefined : matchingExcerptAt(line, match.index, match[0].length, maxBytes);
+}
+
+function matchingTermExcerpt(line: string, terms: SearchTerm[], maxBytes: number): string | undefined {
+  const normalizedLine = line.toLocaleLowerCase("en-US");
+  const searchable = normalizedSearchText(line);
+  const matchedTerms = terms.filter((term) => termMatches(searchable, term));
+  if (matchedTerms.length === 0) return undefined;
+  const match = separatorNormalizedPattern(matchedTerms, false).exec(normalizedLine);
+  if (match === null) return line;
+  return matchingExcerptAt(line, match.index, match[0].length, maxBytes);
+}
+
+function matchingLinesWithExcerpt(
   content: string,
-  pattern: RegExp,
+  excerpt: (line: string) => string | undefined,
   offset: number,
   limit: number,
-  excerptBytes: number,
 ): { matches: Array<{ line: number; text: string }>; truncated: boolean } {
   const matches: Array<{ line: number; text: string }> = [];
   let matchingIndex = 0;
@@ -201,7 +215,7 @@ function matchingLines(
     const newline = content.indexOf("\n", lineStart);
     const lineEnd = newline === -1 ? content.length : newline;
     const line = content.slice(lineStart, lineEnd);
-    const text = matchingExcerpt(line, pattern, excerptBytes);
+    const text = excerpt(line);
     if (text !== undefined) {
       if (matchingIndex >= offset) {
         if (matches.length >= limit) return { matches, truncated: true };
@@ -214,6 +228,26 @@ function matchingLines(
     lineNumber += 1;
   }
   return { matches, truncated: false };
+}
+
+function matchingLines(
+  content: string,
+  pattern: RegExp,
+  offset: number,
+  limit: number,
+  excerptBytes: number,
+): { matches: Array<{ line: number; text: string }>; truncated: boolean } {
+  return matchingLinesWithExcerpt(content, (line) => matchingExcerpt(line, pattern, excerptBytes), offset, limit);
+}
+
+function matchingTermLines(
+  content: string,
+  terms: SearchTerm[],
+  offset: number,
+  limit: number,
+  excerptBytes: number,
+): { matches: Array<{ line: number; text: string }>; truncated: boolean } {
+  return matchingLinesWithExcerpt(content, (line) => matchingTermExcerpt(line, terms, excerptBytes), offset, limit);
 }
 
 export function observationId(sessionId: string, toolCallId: string): string {
@@ -453,15 +487,28 @@ export class ObservationRuntime {
       throw new Error(`query must not contain more than ${MAX_SEARCH_TERMS} terms in terms mode`);
     }
     const terms = matchMode === "terms" ? searchTerms(query) : [];
-    const linePattern =
-      matchMode === "terms" ? separatorNormalizedPattern(terms) : literalAnyCaseInsensitivePattern([query]);
+    const phraseLinePattern = matchMode === "phrase" ? literalAnyCaseInsensitivePattern([query]) : undefined;
+    const needles: ArtifactSearchNeedle[] =
+      matchMode === "terms"
+        ? terms.map((term) => ({
+            value: term.collapsed.length === 0 ? term.normalized : term.collapsed,
+            collapseIdentifierSeparators: term.collapsed.length > 0,
+          }))
+        : [{ value: query, collapseIdentifierSeparators: false, conservativeFallback: true }];
+    let searchBatch: Awaited<ReturnType<ArtifactStore["searchArtifacts"]>>;
+    try {
+      searchBatch = await this.#store.searchArtifacts(needles);
+    } catch {
+      throw new Error("Observation search failed.");
+    }
     const ranked: Array<{ hit: ObservationSearchHit; relevance: number; recency: number }> = [];
     const artifacts = new Map<
       string,
       { metadata: ArtifactMetadata; occurrenceCount: number; recentObservationIds: string[] }
     >();
-    const entries = (await this.#store.listMetadata()).reverse();
+    const entries = searchBatch.metadata.reverse();
     for (const metadata of entries) {
+      if (!searchBatch.candidateArtifactIds.has(metadata.artifactId)) continue;
       if (params.toolName !== undefined && metadata.toolName !== params.toolName) continue;
       const artifact = artifacts.get(metadata.artifactId);
       if (artifact === undefined) {
@@ -479,7 +526,8 @@ export class ObservationRuntime {
     }
     for (const [recency, artifact] of [...artifacts.values()].entries()) {
       const { metadata } = artifact;
-      const content = await this.#store.read(metadata.artifactId);
+      const content = searchBatch.contentByArtifact.get(metadata.artifactId);
+      if (content === undefined) continue;
       const normalizedContent = matchMode === "terms" ? normalizedSearchText(content) : undefined;
       const matchedTerms =
         matchMode === "terms" && normalizedContent !== undefined
@@ -489,7 +537,10 @@ export class ObservationRuntime {
             : [];
       const relevance = matchMode === "terms" ? matchedTerms.length / terms.length : matchedTerms.length;
       if (matchedTerms.length === 0) continue;
-      const page = matchingLines(content, linePattern, 0, 5, 1024);
+      const page =
+        matchMode === "terms"
+          ? matchingTermLines(content, terms, 0, 5, 1024)
+          : matchingLines(content, phraseLinePattern as RegExp, 0, 5, 1024);
       if (page.matches.length === 0) continue;
       const observationId = metadata.observationId;
       const retrievalId = CANONICAL_OBSERVATION_ID_PATTERN.test(observationId) ? observationId : metadata.artifactId;
@@ -515,6 +566,8 @@ export class ObservationRuntime {
       matchMode,
       results: ranked.slice(0, limit).map((candidate) => candidate.hit),
       truncated: ranked.length > limit,
+      partial: searchBatch.partial,
+      warnings: searchBatch.partial ? ["Some archived evidence was unavailable."] : [],
     };
   }
 }
