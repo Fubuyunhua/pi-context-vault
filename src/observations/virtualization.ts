@@ -206,19 +206,25 @@ function matchingExcerptAt(line: string, matchIndex: number, matchLength: number
 interface MatchExcerpt {
   text: string;
   matchIndex: number;
+  matchEndIndex: number;
 }
 
 interface MatchingLinesPage {
   matches: Array<{ line: number; text: string }>;
   truncated: boolean;
   firstMatchByteOffset: number | undefined;
+  firstMatchByteEnd: number | undefined;
 }
 
 function matchingExcerpt(line: string, pattern: RegExp, maxBytes: number): MatchExcerpt | undefined {
   const match = pattern.exec(line);
   return match === null
     ? undefined
-    : { text: matchingExcerptAt(line, match.index, match[0].length, maxBytes), matchIndex: match.index };
+    : {
+        text: matchingExcerptAt(line, match.index, match[0].length, maxBytes),
+        matchIndex: match.index,
+        matchEndIndex: match.index + match[0].length,
+      };
 }
 
 function originalIndexAtNormalizedOffset(value: string, normalizedOffset: number, edge: "start" | "end"): number {
@@ -241,12 +247,13 @@ function matchingTermExcerpt(line: string, terms: SearchTerm[], maxBytes: number
   const matchedTerms = terms.filter((term) => termMatches(searchable, term));
   if (matchedTerms.length === 0) return undefined;
   const match = separatorNormalizedPattern(matchedTerms, false).exec(normalizedLine);
-  if (match === null) return { text: line, matchIndex: 0 };
+  if (match === null) return { text: line, matchIndex: 0, matchEndIndex: line.length };
   const matchIndex = originalIndexAtNormalizedOffset(line, match.index, "start");
   const matchEnd = originalIndexAtNormalizedOffset(line, match.index + match[0].length, "end");
   return {
     text: matchingExcerptAt(line, matchIndex, matchEnd - matchIndex, maxBytes),
     matchIndex,
+    matchEndIndex: matchEnd,
   };
 }
 
@@ -262,6 +269,7 @@ function matchingLinesWithExcerpt(
   let lineByteStart = 0;
   let lineNumber = 1;
   let firstMatchByteOffset: number | undefined;
+  let firstMatchByteEnd: number | undefined;
   while (lineStart <= content.length) {
     const newline = content.indexOf("\n", lineStart);
     const lineEnd = newline === -1 ? content.length : newline;
@@ -269,8 +277,11 @@ function matchingLinesWithExcerpt(
     const match = excerpt(line);
     if (match !== undefined) {
       if (matchingIndex >= offset) {
-        if (matches.length >= limit) return { matches, truncated: true, firstMatchByteOffset };
-        firstMatchByteOffset ??= lineByteStart + Buffer.byteLength(line.slice(0, match.matchIndex), "utf8");
+        if (matches.length >= limit) return { matches, truncated: true, firstMatchByteOffset, firstMatchByteEnd };
+        if (firstMatchByteOffset === undefined) {
+          firstMatchByteOffset = lineByteStart + Buffer.byteLength(line.slice(0, match.matchIndex), "utf8");
+          firstMatchByteEnd = lineByteStart + Buffer.byteLength(line.slice(0, match.matchEndIndex), "utf8");
+        }
         matches.push({ line: lineNumber, text: match.text });
       }
       matchingIndex += 1;
@@ -280,7 +291,7 @@ function matchingLinesWithExcerpt(
     lineStart = newline + 1;
     lineNumber += 1;
   }
-  return { matches, truncated: false, firstMatchByteOffset };
+  return { matches, truncated: false, firstMatchByteOffset, firstMatchByteEnd };
 }
 
 function matchingLines(
@@ -301,6 +312,13 @@ function matchingTermLines(
   excerptBytes: number,
 ): MatchingLinesPage {
   return matchingLinesWithExcerpt(content, (line) => matchingTermExcerpt(line, terms, excerptBytes), offset, limit);
+}
+
+function searchHandoffOffset(matchStart: number | undefined, matchEnd: number | undefined): number {
+  if (matchStart === undefined || matchEnd === undefined) return 0;
+  const startCenteredOffset = Math.max(0, matchStart - SEARCH_HANDOFF_CONTEXT_BYTES);
+  if (matchEnd - matchStart > DEFAULT_RETRIEVAL_BYTES) return startCenteredOffset;
+  return Math.max(startCenteredOffset, matchEnd - DEFAULT_RETRIEVAL_BYTES);
 }
 
 function searchResultSerializedBytes(result: ObservationSearchResult): number {
@@ -690,7 +708,7 @@ export class ObservationRuntime {
       if (page.matches.length === 0) continue;
       const observationId = metadata.observationId;
       const retrievalId = CANONICAL_OBSERVATION_ID_PATTERN.test(observationId) ? observationId : metadata.artifactId;
-      const evidenceOffset = Math.max(0, (page.firstMatchByteOffset ?? 0) - SEARCH_HANDOFF_CONTEXT_BYTES);
+      const evidenceOffset = searchHandoffOffset(page.firstMatchByteOffset, page.firstMatchByteEnd);
       ranked.push({
         hit: {
           observationId,

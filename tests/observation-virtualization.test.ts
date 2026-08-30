@@ -361,6 +361,28 @@ describe("observation virtualization", () => {
     }
   });
 
+  it("shifts a deep handoff to include a complete bounded identifier-normalized match", async () => {
+    const { runtime } = await setup({ threshold: 1_000_000 });
+    const prefix = "x".repeat(18 * 1024);
+    const normalizedMatch = `a${"_".repeat(6 * 1024)}b`;
+    const archived = await runtime.virtualize({
+      toolCallId: "deep-wide-normalized-match",
+      toolName: "read",
+      text: `${prefix}${normalizedMatch}${"z".repeat(4 * 1024)}`,
+      isError: false,
+    });
+
+    const searched = await runtime.search({ query: "ab" });
+    const hit = searched.results.find((result) => result.observationId === archived.observationId);
+    if (hit === undefined) throw new Error("expected wide normalized search hit");
+    const matchEnd = Buffer.byteLength(prefix, "utf8") + Buffer.byteLength(normalizedMatch, "utf8");
+    expect(hit.nextAction.arguments.offset).toBe(matchEnd - 8 * 1024);
+
+    const replay = await runtime.get(hit.nextAction.arguments);
+    expect(replay.evidence?.text).toContain(normalizedMatch);
+    expect(Buffer.byteLength(replay.evidence?.text ?? "", "utf8")).toBeLessThanOrEqual(8 * 1024);
+  });
+
   it("preserves a deep executable next action when its search preview is omitted", async () => {
     const { runtime } = await setup({ threshold: 1_000_000 });
     const deepPrefix = `${"x".repeat(1023)}\n`.repeat(18);
