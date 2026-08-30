@@ -1,0 +1,1276 @@
+{
+  "generatedAt": "2026-08-30T04:39:46.283Z",
+  "design": {
+    "initialRuns": 16,
+    "adaptiveRepeatRuns": 8,
+    "evaluableRuns": 24,
+    "preInferenceInfrastructureFailures": 1
+  },
+  "scoringCorrection": "Malformed historical test IDs were replaced offline by full affected-module tests; sphinx-10435 remote-image network failure was replayed successfully and classified as infrastructure.",
+  "armSummary": {
+    "none": {
+      "runs": 6,
+      "passed": 4,
+      "passRate": 0.6666666666666666,
+      "totalDurationMs": 727730,
+      "averageDurationMs": 121288.33333333333,
+      "tokenTotals": {
+        "input": 199720,
+        "output": 19780,
+        "cacheRead": 1167360,
+        "cacheWrite": 0,
+        "total": 1386860
+      },
+      "averageTokens": 231143.33333333334,
+      "toolCalls": {
+        "bash": 95,
+        "read": 47,
+        "edit": 16
+      },
+      "compactions": 0
+    },
+    "vault": {
+      "runs": 6,
+      "passed": 5,
+      "passRate": 0.8333333333333334,
+      "totalDurationMs": 897318,
+      "averageDurationMs": 149553,
+      "tokenTotals": {
+        "input": 261366,
+        "output": 23043,
+        "cacheRead": 1879552,
+        "cacheWrite": 0,
+        "total": 2163961
+      },
+      "averageTokens": 360660.1666666667,
+      "toolCalls": {
+        "bash": 105,
+        "read": 53,
+        "edit": 20,
+        "context_vault_obs_search": 3
+      },
+      "compactions": 0
+    },
+    "repoctx": {
+      "runs": 6,
+      "passed": 4,
+      "passRate": 0.6666666666666666,
+      "totalDurationMs": 1050918,
+      "averageDurationMs": 175153,
+      "tokenTotals": {
+        "input": 279392,
+        "output": 25265,
+        "cacheRead": 1397248,
+        "cacheWrite": 0,
+        "total": 1701905
+      },
+      "averageTokens": 283650.8333333333,
+      "toolCalls": {
+        "repo_context_search": 6,
+        "bash": 89,
+        "read": 47,
+        "edit": 25
+      },
+      "compactions": 0
+    },
+    "both": {
+      "runs": 6,
+      "passed": 6,
+      "passRate": 1,
+      "totalDurationMs": 794245,
+      "averageDurationMs": 132374.16666666666,
+      "tokenTotals": {
+        "input": 286240,
+        "output": 20915,
+        "cacheRead": 1229312,
+        "cacheWrite": 0,
+        "total": 1536467
+      },
+      "averageTokens": 256077.83333333334,
+      "toolCalls": {
+        "repo_context_search": 6,
+        "bash": 86,
+        "read": 50,
+        "context_vault_obs_search": 2,
+        "edit": 17
+      },
+      "compactions": 0
+    }
+  },
+  "taskSummary": {
+    "sphinx-doc__sphinx-10435": {
+      "none": [
+        true
+      ],
+      "vault": [
+        true
+      ],
+      "repoctx": [
+        true
+      ],
+      "both": [
+        true
+      ]
+    },
+    "sphinx-doc__sphinx-8265": {
+      "none": [
+        false,
+        true,
+        false
+      ],
+      "vault": [
+        true,
+        true,
+        false
+      ],
+      "repoctx": [
+        false,
+        false,
+        true
+      ],
+      "both": [
+        true,
+        true,
+        true
+      ]
+    },
+    "django__django-12209": {
+      "none": [
+        true
+      ],
+      "vault": [
+        true
+      ],
+      "repoctx": [
+        true
+      ],
+      "both": [
+        true
+      ]
+    },
+    "django__django-12774": {
+      "none": [
+        true
+      ],
+      "vault": [
+        true
+      ],
+      "repoctx": [
+        true
+      ],
+      "both": [
+        true
+      ]
+    }
+  },
+  "rows": [
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "sphinx-doc__sphinx-10435",
+      "arm": "none",
+      "passed": true,
+      "originalPassed": true,
+      "originalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 50831,
+      "tokens": {
+        "input": 23468,
+        "output": 1990,
+        "cacheRead": 58368,
+        "cacheWrite": 0,
+        "total": 83826
+      },
+      "cacheHitRate": 71.32,
+      "toolCalls": {
+        "total": 22,
+        "byTool": {
+          "bash": 13,
+          "read": 7,
+          "edit": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "editedFiles": [
+        "sphinx/writers/latex.py",
+        "tests/test_build_latex.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "sphinx-doc__sphinx-10435",
+      "arm": "vault",
+      "passed": true,
+      "originalPassed": true,
+      "originalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 90695,
+      "tokens": {
+        "input": 22880,
+        "output": 1910,
+        "cacheRead": 46592,
+        "cacheWrite": 0,
+        "total": 71382
+      },
+      "cacheHitRate": 67.07,
+      "toolCalls": {
+        "total": 14,
+        "byTool": {
+          "bash": 9,
+          "read": 3,
+          "edit": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 14,
+          "originalBytes": 22644,
+          "sanitizedBytes": 22644,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 22644,
+        "mapBytes": 0,
+        "stateBytes": 31052
+      },
+      "repoContext": null,
+      "editedFiles": [
+        "sphinx/writers/latex.py",
+        "tests/test_build_latex.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "sphinx-doc__sphinx-10435",
+      "arm": "repoctx",
+      "passed": true,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 64911,
+      "tokens": {
+        "input": 27638,
+        "output": 1946,
+        "cacheRead": 52224,
+        "cacheWrite": 0,
+        "total": 81808
+      },
+      "cacheHitRate": 65.39,
+      "toolCalls": {
+        "total": 15,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 8,
+          "read": 4,
+          "edit": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 1370,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 4,
+        "pendingFiles": 0,
+        "dirtyFiles": 4,
+        "mapBytes": 9245914,
+        "stateBytes": 9245914
+      },
+      "editedFiles": [
+        "sphinx/writers/latex.py",
+        "tests/test_build_latex.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "sphinx-doc__sphinx-10435",
+      "arm": "both",
+      "passed": true,
+      "originalPassed": true,
+      "originalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 83483,
+      "tokens": {
+        "input": 31985,
+        "output": 3014,
+        "cacheRead": 101376,
+        "cacheWrite": 0,
+        "total": 136375
+      },
+      "cacheHitRate": 76.02,
+      "toolCalls": {
+        "total": 20,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 12,
+          "read": 4,
+          "context_vault_obs_search": 1,
+          "edit": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 18,
+          "originalBytes": 18795,
+          "sanitizedBytes": 18795,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 18795,
+        "mapBytes": 0,
+        "stateBytes": 49524
+      },
+      "repoContext": {
+        "files": 1370,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 4,
+        "pendingFiles": 0,
+        "dirtyFiles": 4,
+        "mapBytes": 9245896,
+        "stateBytes": 9245896
+      },
+      "editedFiles": [
+        "sphinx/writers/latex.py",
+        "tests/test_build_latex.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "none",
+      "passed": false,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 102988,
+      "tokens": {
+        "input": 45259,
+        "output": 3666,
+        "cacheRead": 361984,
+        "cacheWrite": 0,
+        "total": 410909
+      },
+      "cacheHitRate": 88.89,
+      "toolCalls": {
+        "total": 26,
+        "byTool": {
+          "bash": 14,
+          "read": 9,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "editedFiles": [
+        "setup.py",
+        "sphinx/util/inspect.py",
+        "tests/test_domain_py.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "vault",
+      "passed": true,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 262443,
+      "tokens": {
+        "input": 63630,
+        "output": 4635,
+        "cacheRead": 433664,
+        "cacheWrite": 0,
+        "total": 501929
+      },
+      "cacheHitRate": 87.2,
+      "toolCalls": {
+        "total": 36,
+        "byTool": {
+          "bash": 21,
+          "read": 10,
+          "context_vault_obs_search": 1,
+          "edit": 4
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 35,
+          "originalBytes": 93970,
+          "sanitizedBytes": 93970,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 93970,
+        "mapBytes": 0,
+        "stateBytes": 174260
+      },
+      "repoContext": null,
+      "editedFiles": [
+        "setup.py",
+        "sphinx/pycode/ast.py",
+        "tests/test_pycode_ast.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "repoctx",
+      "passed": false,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 145303,
+      "tokens": {
+        "input": 75949,
+        "output": 3826,
+        "cacheRead": 354816,
+        "cacheWrite": 0,
+        "total": 434591
+      },
+      "cacheHitRate": 82.37,
+      "toolCalls": {
+        "total": 30,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 14,
+          "read": 10,
+          "edit": 5
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 1242,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 6,
+        "pendingFiles": 0,
+        "dirtyFiles": 5,
+        "mapBytes": 8621274,
+        "stateBytes": 8621274
+      },
+      "editedFiles": [
+        "setup.py",
+        "sphinx/util/inspect.py",
+        "tests/test_domain_py.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "both",
+      "passed": true,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 132935,
+      "tokens": {
+        "input": 65495,
+        "output": 4132,
+        "cacheRead": 210432,
+        "cacheWrite": 0,
+        "total": 280059
+      },
+      "cacheHitRate": 76.26,
+      "toolCalls": {
+        "total": 33,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 18,
+          "read": 11,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 32,
+          "originalBytes": 123952,
+          "sanitizedBytes": 123952,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 123952,
+        "mapBytes": 0,
+        "stateBytes": 142958
+      },
+      "repoContext": {
+        "files": 1242,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 4,
+        "pendingFiles": 0,
+        "dirtyFiles": 5,
+        "mapBytes": 8620853,
+        "stateBytes": 8620853
+      },
+      "editedFiles": [
+        "setup.py",
+        "sphinx/pycode/ast.py",
+        "tests/test_pycode_ast.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "django__django-12209",
+      "arm": "none",
+      "passed": true,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 92095,
+      "tokens": {
+        "input": 25587,
+        "output": 2461,
+        "cacheRead": 80384,
+        "cacheWrite": 0,
+        "total": 108432
+      },
+      "cacheHitRate": 75.85,
+      "toolCalls": {
+        "total": 16,
+        "byTool": {
+          "bash": 10,
+          "read": 4,
+          "edit": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "editedFiles": [
+        "django/db/models/base.py",
+        "tests/basic/tests.py"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "django__django-12209",
+      "arm": "vault",
+      "passed": true,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 87822,
+      "tokens": {
+        "input": 33302,
+        "output": 3049,
+        "cacheRead": 210944,
+        "cacheWrite": 0,
+        "total": 247295
+      },
+      "cacheHitRate": 86.37,
+      "toolCalls": {
+        "total": 26,
+        "byTool": {
+          "bash": 15,
+          "read": 8,
+          "context_vault_obs_search": 1,
+          "edit": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 25,
+          "originalBytes": 47269,
+          "sanitizedBytes": 47269,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 47269,
+        "mapBytes": 0,
+        "stateBytes": 101902
+      },
+      "repoContext": null,
+      "editedFiles": [
+        "django/db/models/base.py",
+        "tests/basic/tests.py"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "django__django-12209",
+      "arm": "repoctx",
+      "passed": true,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 251472,
+      "tokens": {
+        "input": 36908,
+        "output": 7309,
+        "cacheRead": 292352,
+        "cacheWrite": 0,
+        "total": 336569
+      },
+      "cacheHitRate": 88.79,
+      "toolCalls": {
+        "total": 33,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 18,
+          "read": 8,
+          "edit": 6
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 4907,
+        "warnings": 3,
+        "freshness": "unsupported",
+        "generation": 8,
+        "pendingFiles": 0,
+        "dirtyFiles": 4,
+        "mapBytes": 29844749,
+        "stateBytes": 29844749
+      },
+      "editedFiles": [
+        "django/db/models/base.py",
+        "tests/basic/tests.py"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "django__django-12209",
+      "arm": "both",
+      "passed": true,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 183700,
+      "tokens": {
+        "input": 73920,
+        "output": 3834,
+        "cacheRead": 361472,
+        "cacheWrite": 0,
+        "total": 439226
+      },
+      "cacheHitRate": 83.02,
+      "toolCalls": {
+        "total": 30,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 14,
+          "read": 12,
+          "context_vault_obs_search": 1,
+          "edit": 2
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 28,
+          "originalBytes": 82577,
+          "sanitizedBytes": 82577,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 82577,
+        "mapBytes": 0,
+        "stateBytes": 124864
+      },
+      "repoContext": {
+        "files": 4907,
+        "warnings": 3,
+        "freshness": "unsupported",
+        "generation": 4,
+        "pendingFiles": 0,
+        "dirtyFiles": 4,
+        "mapBytes": 29844539,
+        "stateBytes": 29844539
+      },
+      "editedFiles": [
+        "django/db/models/base.py",
+        "tests/fixtures/tests.py"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "django__django-12774",
+      "arm": "none",
+      "passed": true,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 121383,
+      "tokens": {
+        "input": 22790,
+        "output": 2734,
+        "cacheRead": 129536,
+        "cacheWrite": 0,
+        "total": 155060
+      },
+      "cacheHitRate": 85.04,
+      "toolCalls": {
+        "total": 30,
+        "byTool": {
+          "bash": 18,
+          "read": 9,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "editedFiles": [
+        "django/db/models/query.py",
+        "tests/lookup/models.py",
+        "tests/lookup/tests.py"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "django__django-12774",
+      "arm": "vault",
+      "passed": true,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 102822,
+      "tokens": {
+        "input": 37149,
+        "output": 3134,
+        "cacheRead": 93184,
+        "cacheWrite": 0,
+        "total": 133467
+      },
+      "cacheHitRate": 71.5,
+      "toolCalls": {
+        "total": 28,
+        "byTool": {
+          "bash": 18,
+          "read": 7,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 28,
+          "originalBytes": 34491,
+          "sanitizedBytes": 34491,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 34480,
+        "mapBytes": 0,
+        "stateBytes": 51108
+      },
+      "repoContext": null,
+      "editedFiles": [
+        "django/db/models/query.py",
+        "tests/lookup/models.py",
+        "tests/lookup/tests.py"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "django__django-12774",
+      "arm": "repoctx",
+      "passed": true,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 310979,
+      "tokens": {
+        "input": 32185,
+        "output": 3257,
+        "cacheRead": 101888,
+        "cacheWrite": 0,
+        "total": 137330
+      },
+      "cacheHitRate": 75.99,
+      "toolCalls": {
+        "total": 26,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 17,
+          "read": 5,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 4940,
+        "warnings": 3,
+        "freshness": "unsupported",
+        "generation": 4,
+        "pendingFiles": 0,
+        "dirtyFiles": 3,
+        "mapBytes": 29842228,
+        "stateBytes": 29842228
+      },
+      "editedFiles": [
+        "django/db/models/query.py",
+        "tests/lookup/models.py",
+        "tests/lookup/tests.py"
+      ]
+    },
+    {
+      "phase": "initial",
+      "repeat": 1,
+      "task": "django__django-12774",
+      "arm": "both",
+      "passed": true,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 149989,
+      "tokens": {
+        "input": 22671,
+        "output": 2633,
+        "cacheRead": 93696,
+        "cacheWrite": 0,
+        "total": 119000
+      },
+      "cacheHitRate": 80.52,
+      "toolCalls": {
+        "total": 25,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 16,
+          "read": 5,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 24,
+          "originalBytes": 31625,
+          "sanitizedBytes": 31625,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 31554,
+        "mapBytes": 0,
+        "stateBytes": 45828
+      },
+      "repoContext": {
+        "files": 4940,
+        "warnings": 3,
+        "freshness": "unsupported",
+        "generation": 4,
+        "pendingFiles": 0,
+        "dirtyFiles": 3,
+        "mapBytes": 29842135,
+        "stateBytes": 29842135
+      },
+      "editedFiles": [
+        "django/db/models/query.py",
+        "tests/lookup/models.py",
+        "tests/lookup/tests.py"
+      ]
+    },
+    {
+      "phase": "adaptive-repeat",
+      "repeat": 2,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "none",
+      "passed": true,
+      "originalPassed": true,
+      "originalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 143323,
+      "tokens": {
+        "input": 38555,
+        "output": 4121,
+        "cacheRead": 235008,
+        "cacheWrite": 0,
+        "total": 277684
+      },
+      "cacheHitRate": 85.91,
+      "toolCalls": {
+        "total": 33,
+        "byTool": {
+          "bash": 20,
+          "read": 10,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "editedFiles": [
+        "setup.py",
+        "sphinx/pycode/ast.py",
+        "tests/test_pycode_ast.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "adaptive-repeat",
+      "repeat": 2,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "vault",
+      "passed": true,
+      "originalPassed": true,
+      "originalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 132175,
+      "tokens": {
+        "input": 50906,
+        "output": 4719,
+        "cacheRead": 543232,
+        "cacheWrite": 0,
+        "total": 598857
+      },
+      "cacheHitRate": 91.43,
+      "toolCalls": {
+        "total": 35,
+        "byTool": {
+          "bash": 18,
+          "read": 14,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 35,
+          "originalBytes": 170756,
+          "sanitizedBytes": 170756,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 170715,
+        "mapBytes": 0,
+        "stateBytes": 191490
+      },
+      "repoContext": null,
+      "editedFiles": [
+        "setup.py",
+        "sphinx/pycode/ast.py",
+        "tests/test_domain_py.py",
+        "tests/test_pycode_ast.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "adaptive-repeat",
+      "repeat": 2,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "repoctx",
+      "passed": false,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 155231,
+      "tokens": {
+        "input": 62764,
+        "output": 5008,
+        "cacheRead": 219136,
+        "cacheWrite": 0,
+        "total": 286908
+      },
+      "cacheHitRate": 77.74,
+      "toolCalls": {
+        "total": 29,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 16,
+          "read": 8,
+          "edit": 4
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 1242,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 5,
+        "pendingFiles": 0,
+        "dirtyFiles": 6,
+        "mapBytes": 8621186,
+        "stateBytes": 8621186
+      },
+      "editedFiles": [
+        "setup.py",
+        "sphinx/pycode/ast.py",
+        "sphinx/util/inspect.py",
+        "tests/test_domain_py.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "adaptive-repeat",
+      "repeat": 2,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "both",
+      "passed": true,
+      "originalPassed": true,
+      "originalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 147541,
+      "tokens": {
+        "input": 58010,
+        "output": 3807,
+        "cacheRead": 246784,
+        "cacheWrite": 0,
+        "total": 308601
+      },
+      "cacheHitRate": 80.97,
+      "toolCalls": {
+        "total": 25,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 12,
+          "read": 8,
+          "edit": 4
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 24,
+          "originalBytes": 79516,
+          "sanitizedBytes": 79516,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 79475,
+        "mapBytes": 0,
+        "stateBytes": 93765
+      },
+      "repoContext": {
+        "files": 1242,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 5,
+        "pendingFiles": 0,
+        "dirtyFiles": 6,
+        "mapBytes": 8621367,
+        "stateBytes": 8621367
+      },
+      "editedFiles": [
+        "setup.py",
+        "sphinx/pycode/ast.py",
+        "tests/test_domain_py.py",
+        "tests/test_pycode_ast.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "adaptive-repeat",
+      "repeat": 3,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "none",
+      "passed": false,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 217110,
+      "tokens": {
+        "input": 44061,
+        "output": 4808,
+        "cacheRead": 302080,
+        "cacheWrite": 0,
+        "total": 350949
+      },
+      "cacheHitRate": 87.27,
+      "toolCalls": {
+        "total": 31,
+        "byTool": {
+          "bash": 20,
+          "read": 8,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": null,
+      "editedFiles": [
+        "setup.py",
+        "sphinx/pycode/ast.py",
+        "sphinx/util/inspect.py",
+        "tests/test_domain_py.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "adaptive-repeat",
+      "repeat": 3,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "vault",
+      "passed": false,
+      "originalPassed": false,
+      "originalStatus": "FAIL",
+      "infrastructureFailure": false,
+      "durationMs": 221361,
+      "tokens": {
+        "input": 53499,
+        "output": 5596,
+        "cacheRead": 551936,
+        "cacheWrite": 0,
+        "total": 611031
+      },
+      "cacheHitRate": 91.16,
+      "toolCalls": {
+        "total": 42,
+        "byTool": {
+          "bash": 24,
+          "read": 11,
+          "context_vault_obs_search": 1,
+          "edit": 6
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 41,
+          "originalBytes": 185425,
+          "sanitizedBytes": 185425,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 185287,
+        "mapBytes": 0,
+        "stateBytes": 274759
+      },
+      "repoContext": null,
+      "editedFiles": [
+        "setup.py",
+        "sphinx/util/inspect.py",
+        "tests/test_domain_py.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "adaptive-repeat",
+      "repeat": 3,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "repoctx",
+      "passed": true,
+      "originalPassed": true,
+      "originalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 123022,
+      "tokens": {
+        "input": 43948,
+        "output": 3919,
+        "cacheRead": 376832,
+        "cacheWrite": 0,
+        "total": 424699
+      },
+      "cacheHitRate": 89.56,
+      "toolCalls": {
+        "total": 34,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 16,
+          "read": 12,
+          "edit": 5
+        }
+      },
+      "compactionCount": 0,
+      "vault": null,
+      "repoContext": {
+        "files": 1242,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 6,
+        "pendingFiles": 0,
+        "dirtyFiles": 6,
+        "mapBytes": 8621202,
+        "stateBytes": 8621202
+      },
+      "editedFiles": [
+        "setup.py",
+        "sphinx/pycode/ast.py",
+        "tests/test_domain_py.py",
+        "tests/test_pycode_ast.py",
+        "tests/test_util_inspect.py",
+        "tox.ini"
+      ]
+    },
+    {
+      "phase": "adaptive-repeat",
+      "repeat": 3,
+      "task": "sphinx-doc__sphinx-8265",
+      "arm": "both",
+      "passed": true,
+      "originalPassed": true,
+      "originalStatus": "PASS",
+      "infrastructureFailure": false,
+      "durationMs": 96597,
+      "tokens": {
+        "input": 34159,
+        "output": 3495,
+        "cacheRead": 215552,
+        "cacheWrite": 0,
+        "total": 253206
+      },
+      "cacheHitRate": 86.32,
+      "toolCalls": {
+        "total": 28,
+        "byTool": {
+          "repo_context_search": 1,
+          "bash": 14,
+          "read": 10,
+          "edit": 3
+        }
+      },
+      "compactionCount": 0,
+      "vault": {
+        "observations": {
+          "entries": 27,
+          "originalBytes": 99085,
+          "sanitizedBytes": 99085,
+          "redactionCount": 0
+        },
+        "artifactsBytes": 99085,
+        "mapBytes": 0,
+        "stateBytes": 115148
+      },
+      "repoContext": {
+        "files": 1242,
+        "warnings": 0,
+        "freshness": "dirty",
+        "generation": 4,
+        "pendingFiles": 0,
+        "dirtyFiles": 5,
+        "mapBytes": 8620677,
+        "stateBytes": 8620677
+      },
+      "editedFiles": [
+        "setup.py",
+        "sphinx/pycode/ast.py",
+        "tests/test_domain_py.py",
+        "tests/test_pycode_ast.py",
+        "tox.ini"
+      ]
+    }
+  ]
+}
