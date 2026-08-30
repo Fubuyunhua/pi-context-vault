@@ -9,6 +9,7 @@
       "!.pi-context-vault",
       "!docs/reports",
       "!docs/diagnostics/*.json",
+      "!docs/diagnostics/PLUGIN-DIAG-*-repro-*.ts",
       "!docs/specs/0017-repository-context-planning-contract.md",
       "!src/repo-context",
       "!tests/repo-context-contract.test.ts",
