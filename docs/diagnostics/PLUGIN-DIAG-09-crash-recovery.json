@@ -1,0 +1,42 @@
+{
+  "generatedAt": "2026-08-30T11:30:59.629Z",
+  "accepted": true,
+  "crash": {
+    "durationMs": 2755.11,
+    "payload": {
+      "mode": "crash",
+      "repoLifecycle": "warming",
+      "repoResults": 1,
+      "repoTop": "src/file-099.ts",
+      "vaultReplaced": true,
+      "tools": [
+        "context_vault_obs_get",
+        "context_vault_obs_search",
+        "context_vault_repo_map",
+        "context_vault_status",
+        "repo_context_search",
+        "repo_context_status"
+      ]
+    }
+  },
+  "recover": {
+    "durationMs": 17858.84,
+    "payload": {
+      "mode": "recover",
+      "repoLifecycle": "warming",
+      "repoResults": 1,
+      "repoTop": "src/file-099.ts",
+      "vaultSearchResults": 1,
+      "vaultSearchContainsMarker": true,
+      "vaultDegraded": false,
+      "tools": [
+        "context_vault_obs_get",
+        "context_vault_obs_search",
+        "context_vault_repo_map",
+        "context_vault_status",
+        "repo_context_search",
+        "repo_context_status"
+      ]
+    }
+  }
+}

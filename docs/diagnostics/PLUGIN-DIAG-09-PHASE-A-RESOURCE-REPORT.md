@@ -126,6 +126,21 @@ The v2 preflight now has zero contract occurrences in Vault session receipts and
 
 POSTFIX-02 v1 interpretation remains narrower: v1 demonstrates the Vault treatment, but not retrieval-only necessity because one contract occurrence remained in its receipt preview.
 
+## Forced crash/restart recovery
+
+BOTH was started on a 100-file Git fixture, performed a Repo search, archived a Vault Observation, and then exited without `session_shutdown`. A second process reused the same project and agent state.
+
+```text
+crash process:       Repo warming fallback 1 result, Vault replacement true
+recovery process:    Repo warming fallback 1 result, correct top file
+Vault search:        1 result, crash marker recovered
+Vault degraded:      false
+tool names:          6 unique
+recovery wall time:  17.9s
+```
+
+The gate passed. Recovery latency is elevated, consistent with stale lock/lease fail-closed handling after an ungraceful process death, but neither plugin lost evidence or returned an empty first search.
+
 ## Current status
 
 Passed:
@@ -135,6 +150,7 @@ Passed:
 - 100/1,000/5,000 Vault archive/search scale;
 - Vault redaction correctness, 64KB deduplication, and context reduction;
 - dual shutdown without duplicate tools or process hang after explicit lifecycle shutdown;
+- forced BOTH crash/restart recovery with Vault evidence and Repo fallback intact;
 - retrieval-required pressure v2 and exact deep search→get handoff after Context Vault #69.
 
 Open deterministic defects:
@@ -145,5 +161,4 @@ Open deterministic defects:
 Remaining gates:
 
 - rerun 1MB unique/duplicate Vault archive after #70;
-- rerun 5,000-file/100-change first query after #17;
-- add a separate forced-crash/restart state recovery test.
+- rerun 5,000-file/100-change first query after #17.
