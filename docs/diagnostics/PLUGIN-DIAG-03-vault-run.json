@@ -1,0 +1,117 @@
+{
+  "repo": "vault",
+  "repository": "Fubuyunhua/pi-context-vault",
+  "head": "73274f3908270822bd96fe032755cb90b33836cd",
+  "startedAt": "2026-08-30T00:07:39.874Z",
+  "finishedAt": "2026-08-30T00:11:30.675Z",
+  "consumedClosedIssues": [
+    53,
+    56,
+    58
+  ],
+  "sourceChangedFiles": [
+    "src/extension.ts",
+    "src/observations/virtualization.ts",
+    "tests/extension.test.ts",
+    "tests/observation-virtualization.test.ts"
+  ],
+  "steps": [
+    {
+      "name": "npm-ci",
+      "command": "npm ci",
+      "required": true,
+      "durationMs": 78896,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "project-ci",
+      "command": "npm run ci",
+      "required": true,
+      "durationMs": 100588,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "production-audit",
+      "command": "npm audit --omit=dev --json",
+      "required": false,
+      "durationMs": 1367,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "search-repro",
+      "command": "bun run diagnostics/repro-vault-search.ts",
+      "required": true,
+      "durationMs": 293,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "historical-query-recall",
+      "command": "bun run diagnostics/replay-vault-queries-after-fix.ts --verify",
+      "required": true,
+      "requiredWhenIssueClosed": 53,
+      "durationMs": 348,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "search-scale",
+      "command": "bun run diagnostics/benchmark-vault-search.ts",
+      "required": true,
+      "durationMs": 44937,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "search-duplicates",
+      "command": "bun run diagnostics/repro-vault-search-duplicates.ts",
+      "required": true,
+      "durationMs": 589,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "quota",
+      "command": "bun run diagnostics/repro-vault-quota.ts",
+      "required": true,
+      "durationMs": 1181,
+      "exitCode": 1,
+      "signal": null,
+      "timedOut": false,
+      "classification": "HARNESS_ERROR: diagnostic used intentionally removed model-visible stateRoot"
+    },
+    {
+      "name": "quota-rerun-after-status-privacy-harness-fix",
+      "command": "bun run diagnostics/repro-vault-quota.ts",
+      "required": true,
+      "durationMs": null,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    }
+  ],
+  "worktreeDirtyAfter": false,
+  "passed": true,
+  "criticalIssues": [
+    53,
+    55,
+    58
+  ],
+  "closedCriticalIssues": [
+    53,
+    58
+  ],
+  "modelRetestReady": false,
+  "runDirectory": "diagnostics/watch/runs/2026-08-30T00-07-42-417Z-vault-73274f390827",
+  "reconciledAt": "2026-08-30T00:17:12.045Z"
+}

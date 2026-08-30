@@ -1,0 +1,92 @@
+{
+  "repo": "repo",
+  "repository": "Fubuyunhua/pi-repo-context",
+  "head": "212e1b7e9b647c36a09186d2371b9f242d399f1f",
+  "startedAt": "2026-08-30T00:07:39.874Z",
+  "finishedAt": "2026-08-30T00:16:04.773Z",
+  "consumedClosedIssues": [
+    3,
+    4,
+    5,
+    9,
+    6,
+    7,
+    8,
+    10,
+    13
+  ],
+  "sourceChangedFiles": [
+    "package.json",
+    "scripts/package-smoke.mjs",
+    "scripts/pi-rpc-smoke.mjs",
+    "src/extension.ts",
+    "src/repo-map/index.ts",
+    "src/repo-map/runtime.ts",
+    "src/state/atomic.ts",
+    "src/state/config.ts",
+    "src/telemetry.ts",
+    "tests/extension.test.ts",
+    "tests/file-lock.test.ts",
+    "tests/fixtures/search-ranking-gold.json",
+    "tests/legacy-state-isolation.test.ts",
+    "tests/package-boundary.test.ts",
+    "tests/pi-tool-wrapper.test.ts",
+    "tests/repo-map-runtime-capture.test.ts",
+    "tests/repo-map-runtime.test.ts",
+    "tests/repo-map-startup-benchmark.test.ts",
+    "tests/search-ranking.test.ts",
+    "tests/state-config-telemetry.test.ts"
+  ],
+  "steps": [
+    {
+      "name": "npm-ci",
+      "command": "npm ci",
+      "required": true,
+      "durationMs": 71490,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "project-ci",
+      "command": "npm run ci",
+      "required": true,
+      "durationMs": 120511,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "production-audit",
+      "command": "npm audit --omit=dev --json",
+      "required": false,
+      "durationMs": 1808,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    },
+    {
+      "name": "startup-benchmark",
+      "command": "bun run diagnostics/benchmark-repo-startup.ts",
+      "required": true,
+      "durationMs": 78429,
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false
+    }
+  ],
+  "worktreeDirtyAfter": false,
+  "passed": true,
+  "criticalIssues": [
+    6,
+    7,
+    10
+  ],
+  "closedCriticalIssues": [
+    6,
+    7,
+    10
+  ],
+  "modelRetestReady": true,
+  "runDirectory": "diagnostics/watch/runs/2026-08-30T00-11-32-490Z-repo-212e1b7e9b64"
+}
