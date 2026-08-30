@@ -5,8 +5,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "../src/artifacts/store.js";
 import {
+  boundObservationSearchResult,
   buildReceipt,
   MAX_RETRIEVAL_BYTES,
+  MAX_SEARCH_PAYLOAD_BYTES,
+  MIN_SEARCH_PAYLOAD_BYTES,
   ObservationRuntime,
   observationId,
 } from "../src/observations/virtualization.js";
@@ -24,6 +27,7 @@ async function setup(
     receiptMax?: number;
     invalid?: boolean;
     onArtifactRead?: (artifactId: string) => void;
+    telemetry?: Telemetry;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "context-vault-observations-"));
@@ -45,6 +49,7 @@ async function setup(
       projectId: "project",
       projectRoot: "/project",
       sessionId: "session",
+      telemetry: options.telemetry,
     }),
   };
 }
@@ -153,6 +158,159 @@ describe("observation virtualization", () => {
       recentObservationIds: [unique.observationId],
     });
     expect(artifactReads).toBe(2);
+  });
+
+  it("bounds a 10-hit by 5-match UTF-8 search payload and preserves deterministic get handoffs", async () => {
+    const telemetry = new Telemetry();
+    const { runtime } = await setup({ threshold: 1, telemetry });
+    await expect(
+      runtime.search({ query: "shared-budget-marker", maxBytes: MIN_SEARCH_PAYLOAD_BYTES - 1 }),
+    ).rejects.toThrow("maxBytes");
+    await expect(
+      runtime.search({ query: "shared-budget-marker", maxBytes: MAX_SEARCH_PAYLOAD_BYTES + 1 }),
+    ).rejects.toThrow("maxBytes");
+    const minimumBase = await runtime.search({
+      query: "\u0001".repeat(512),
+      matchMode: "phrase",
+      maxBytes: MIN_SEARCH_PAYLOAD_BYTES,
+    });
+    expect(minimumBase.results).toEqual([]);
+    expect(minimumBase.serializedBytes).toBeLessThanOrEqual(MIN_SEARCH_PAYLOAD_BYTES);
+    for (let artifact = 0; artifact < 10; artifact += 1) {
+      await runtime.virtualize({
+        toolCallId: `budget-${artifact}`,
+        toolName: "read",
+        text: Array.from(
+          { length: 5 },
+          (_, line) => `预算🙂 shared-budget-marker artifact-${artifact} line-${line} ${"界".repeat(350)}`,
+        ).join("\n"),
+        isError: false,
+      });
+    }
+
+    const first = await runtime.search({
+      query: "shared-budget-marker",
+      limit: 10,
+      maxBytes: MIN_SEARCH_PAYLOAD_BYTES,
+    });
+    const second = await runtime.search({
+      query: "shared-budget-marker",
+      limit: 10,
+      maxBytes: MIN_SEARCH_PAYLOAD_BYTES,
+    });
+
+    expect(first).toEqual(second);
+    expect(first.serializedBytes).toBe(Buffer.byteLength(JSON.stringify(first, null, 2), "utf8"));
+    expect(first.serializedBytes).toBeLessThanOrEqual(MIN_SEARCH_PAYLOAD_BYTES);
+    expect(first).toMatchObject({
+      byteBudget: MIN_SEARCH_PAYLOAD_BYTES,
+      truncated: true,
+      partial: false,
+      warnings: [],
+    });
+    expect(first.results.length + first.omittedResults).toBe(10);
+    expect(first.results.reduce((sum, hit) => sum + hit.matches.length, 0) + first.omittedMatches).toBe(50);
+    expect(first.omittedResults).toBeGreaterThan(0);
+    expect(first.omittedMatches).toBeGreaterThan(0);
+    expect(first.results.length).toBeGreaterThan(0);
+    for (const hit of first.results) {
+      expect(hit.observationId).toMatch(/^obs_/);
+      expect(hit.nextAction).toEqual({
+        tool: "context_vault_obs_get",
+        arguments: { id: hit.observationId },
+      });
+    }
+    const replay = await runtime.get(first.results[0]?.nextAction.arguments ?? { id: "missing" });
+    expect(replay.observation.observationId).toBe(first.results[0]?.observationId);
+
+    const roomy = await runtime.search({
+      query: "shared-budget-marker",
+      limit: 10,
+      maxBytes: MAX_SEARCH_PAYLOAD_BYTES,
+    });
+    expect(first.serializedBytes).toBeLessThan(roomy.serializedBytes);
+    expect(first.results.length).toBeLessThanOrEqual(roomy.results.length);
+    let equalityBudget = roomy.serializedBytes;
+    let equality = boundObservationSearchResult(
+      {
+        query: roomy.query,
+        matchMode: roomy.matchMode,
+        results: roomy.results,
+        partial: roomy.partial,
+        warnings: roomy.warnings,
+      },
+      10,
+      equalityBudget,
+    );
+    for (let iteration = 0; iteration < 8 && equality.serializedBytes !== equalityBudget; iteration += 1) {
+      equalityBudget = equality.serializedBytes;
+      equality = boundObservationSearchResult(
+        {
+          query: roomy.query,
+          matchMode: roomy.matchMode,
+          results: roomy.results,
+          partial: roomy.partial,
+          warnings: roomy.warnings,
+        },
+        10,
+        equalityBudget,
+      );
+    }
+    expect(equality.serializedBytes).toBe(equalityBudget);
+    expect(Buffer.byteLength(JSON.stringify(equality, null, 2), "utf8")).toBe(equalityBudget);
+
+    const source = roomy.results[0];
+    expect(source).toBeDefined();
+    if (source === undefined) throw new Error("expected a roomy search result");
+    const noFit = boundObservationSearchResult(
+      {
+        query: "shared-budget-marker",
+        matchMode: "terms",
+        results: [
+          {
+            ...source,
+            observation: { ...source.observation, sessionId: "私".repeat(MIN_SEARCH_PAYLOAD_BYTES) },
+          },
+        ],
+        partial: false,
+        warnings: [],
+      },
+      1,
+      MIN_SEARCH_PAYLOAD_BYTES,
+    );
+    expect(noFit.results).toEqual([]);
+    expect(noFit).toMatchObject({ truncated: true, omittedResults: 1, byteBudget: MIN_SEARCH_PAYLOAD_BYTES });
+    expect(noFit.serializedBytes).toBeLessThanOrEqual(MIN_SEARCH_PAYLOAD_BYTES);
+
+    expect(telemetry.snapshot()).toMatchObject({
+      observationSearchPayloadTruncatedCount: 3,
+      observationSearchPayloadBytesTotal:
+        minimumBase.serializedBytes + first.serializedBytes + second.serializedBytes + roomy.serializedBytes,
+    });
+  });
+
+  it("preserves ranked recall across 39 bounded queries", async () => {
+    const { runtime } = await setup({ threshold: 1 });
+    const archived = [];
+    for (let index = 0; index < 39; index += 1) {
+      archived.push(
+        await runtime.virtualize({
+          toolCallId: `historical-recall-${index}`,
+          toolName: index % 2 === 0 ? "read" : "bash",
+          text: `historical-recall-marker-${index.toString().padStart(2, "0")} evidence`,
+          isError: false,
+        }),
+      );
+    }
+
+    for (let index = 0; index < archived.length; index += 1) {
+      const result = await runtime.search({
+        query: `historical_recall_marker_${index.toString().padStart(2, "0")}`,
+      });
+      expect(result.results[0]?.observationId).toBe(archived[index]?.observationId);
+      expect(result.results[0]?.nextAction.arguments.id).toBe(archived[index]?.observationId);
+      expect(result.serializedBytes).toBeLessThanOrEqual(result.byteBudget);
+    }
   });
 
   it("aligns byte retrieval to UTF-8 boundaries and reports requested and actual ranges", async () => {

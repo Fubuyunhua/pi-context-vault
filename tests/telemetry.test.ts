@@ -31,6 +31,7 @@ describe("Vault-only telemetry", () => {
       hydrationReads: 4,
       fallbacks: 5,
     });
+    telemetry.recordObservationSearchPayload(4096, true);
     telemetry.recordReduction({
       durationMs: 7,
       triggered: true,
@@ -62,6 +63,8 @@ describe("Vault-only telemetry", () => {
       observationSearchIndexLoadFailureCount: 0,
       observationSearchIndexWriteFailureCount: 0,
       observationSearchDurationMsTotal: 8,
+      observationSearchPayloadBytesTotal: 4096,
+      observationSearchPayloadTruncatedCount: 1,
       reductionInvocationCount: 1,
       reductionTriggeredCount: 1,
       reducedObservationCount: 2,

@@ -4,10 +4,13 @@ import { Type } from "typebox";
 import { type ActiveSessionLease, ArtifactStore } from "./artifacts/store.js";
 import { reduceContext } from "./context/reduction.js";
 import {
+  DEFAULT_SEARCH_PAYLOAD_BYTES,
   MAX_QUERY_LENGTH,
   MAX_RETRIEVAL_BYTES,
+  MAX_SEARCH_PAYLOAD_BYTES,
   MAX_SEARCH_RESULTS,
   MAX_SEARCH_TERMS,
+  MIN_SEARCH_PAYLOAD_BYTES,
   ObservationRuntime,
 } from "./observations/virtualization.js";
 import { type ContextVaultConfig, loadConfigWithDiagnostics } from "./state/config.js";
@@ -192,6 +195,8 @@ function modelVisibleTelemetry(telemetry: TelemetrySnapshot): TelemetrySnapshot 
     observationSearchIndexLoadFailureCount: telemetry.observationSearchIndexLoadFailureCount,
     observationSearchIndexWriteFailureCount: telemetry.observationSearchIndexWriteFailureCount,
     observationSearchDurationMsTotal: telemetry.observationSearchDurationMsTotal,
+    observationSearchPayloadBytesTotal: telemetry.observationSearchPayloadBytesTotal,
+    observationSearchPayloadTruncatedCount: telemetry.observationSearchPayloadTruncatedCount,
     reductionInvocationCount: telemetry.reductionInvocationCount,
     reductionTriggeredCount: telemetry.reductionTriggeredCount,
     reducedObservationCount: telemetry.reducedObservationCount,
@@ -387,7 +392,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
   pi.registerTool({
     name: "context_vault_obs_search",
     label: "Search Observations",
-    description: `Search sanitized archived observations. Default terms mode ranks observations that match at least one of up to ${MAX_SEARCH_TERMS} Unicode-whitespace-separated terms, normalizing common code-identifier separators; phrase mode requires a contiguous literal match within one line. Identical artifacts collapse to the newest Observation with an occurrence count and recent Observation IDs. Results include a relevance score and at most five matching lines per artifact.`,
+    description: `Search sanitized archived observations within a total UTF-8 payload budget (default ${DEFAULT_SEARCH_PAYLOAD_BYTES} bytes). Default terms mode ranks observations that match at least one of up to ${MAX_SEARCH_TERMS} Unicode-whitespace-separated terms by relevance score, normalizing common code-identifier separators; phrase mode requires a contiguous literal match within one line. Identical artifacts collapse to the newest Observation with an occurrence count and recent Observation IDs. Ranked IDs and executable next actions are retained before bounded matching-line previews.`,
     promptSnippet: "Search archived observations by ranked code-aware terms or a contiguous literal phrase",
     promptGuidelines: [
       "Use context_vault_obs_search to find archived evidence, then execute its returned nextAction by calling context_vault_obs_get with nextAction.arguments.id for more bounded evidence; phrase mode is only for contiguous literal matching.",
@@ -404,6 +409,14 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         ),
         toolName: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_RESULTS })),
+        maxBytes: Type.Optional(
+          Type.Integer({
+            minimum: MIN_SEARCH_PAYLOAD_BYTES,
+            maximum: MAX_SEARCH_PAYLOAD_BYTES,
+            default: DEFAULT_SEARCH_PAYLOAD_BYTES,
+            description: "Maximum UTF-8 bytes for the complete model-visible JSON search result",
+          }),
+        ),
       },
       { additionalProperties: false },
     ),

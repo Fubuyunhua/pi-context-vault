@@ -94,10 +94,10 @@ pi -e ./extensions/index.ts
 | Tool | 用途 |
 | --- | --- |
 | `context_vault_obs_get` | 通过 Observation 或 artifact ID 恢复有界证据；可选 query 仍按单行内连续字面短语匹配。 |
-| `context_vault_obs_search` | 搜索已清理的归档 Observation。默认 `terms` 模式对部分命中排序，归一化常见代码标识符分隔符（`_`、`-`、`.`、`/`、`\\`），并返回相关度分数；`phrase` 模式只匹配单行内连续字面短语。相同 artifact 会在应用结果数量限制前合并；每项结果返回最新 Observation、`occurrenceCount` 和最多五个 `recentObservationIds`，以及可直接执行的 `context_vault_obs_get` next action，其 `arguments.id` 始终可用于检索。 |
+| `context_vault_obs_search` | 搜索已清理的归档 Observation。默认 `terms` 模式对部分命中排序，归一化常见代码标识符分隔符（`_`、`-`、`.`、`/`、`\\`），并返回相关度分数；`phrase` 模式只匹配单行内连续字面短语。相同 artifact 会在应用结果数量限制前合并；每项结果返回最新 Observation、`occurrenceCount` 和最多五个 `recentObservationIds`，以及可直接执行的 `context_vault_obs_get` next action，其 `arguments.id` 始终可用于检索。完整的 pretty-printed 模型可见 JSON 默认上限为 12,288 UTF-8 bytes；可选 `maxBytes` 范围为 4,096–32,768。 |
 | `context_vault_status` | 返回 Vault-only 生命周期、存储、reduction、warning 和 telemetry。 |
 
-Observation search 会维护一个可丢弃的有界 Bloom 快照；快照持久化后，1,000 条 Observation 回归目标为低于 1,000 ms，已索引 miss 读取 0 个 artifact，唯一命中读取 1 个。短查询、Unicode 查询和 phrase 查询会保守验证候选项。
+Observation search 会维护一个可丢弃的有界 Bloom 快照；快照持久化后，1,000 条 Observation 回归目标为低于 1,000 ms，已索引 miss 读取 0 个 artifact，唯一命中读取 1 个。短查询、Unicode 查询和 phrase 查询会保守验证候选项。聚合 payload 会先保留排序后的 result identity、score、occurrence/recency metadata 和可执行 `nextAction`，再添加行预览，且绝不会截断 JSON。`serializedBytes` 精确计算 pretty-printed result；`truncated`、`omittedResults` 和 `omittedMatches` 确定性报告省略项；`matchesTruncated` 继续表示超出每个 artifact 五行预览窗口的匹配。
 
 ## Command
 

@@ -35,6 +35,8 @@ export interface TelemetrySnapshot {
   observationSearchIndexLoadFailureCount: number;
   observationSearchIndexWriteFailureCount: number;
   observationSearchDurationMsTotal: number;
+  observationSearchPayloadBytesTotal: number;
+  observationSearchPayloadTruncatedCount: number;
   reductionInvocationCount: number;
   reductionTriggeredCount: number;
   reducedObservationCount: number;
@@ -77,6 +79,8 @@ export class Telemetry {
     observationSearchIndexLoadFailureCount: 0,
     observationSearchIndexWriteFailureCount: 0,
     observationSearchDurationMsTotal: 0,
+    observationSearchPayloadBytesTotal: 0,
+    observationSearchPayloadTruncatedCount: 0,
     reductionInvocationCount: 0,
     reductionTriggeredCount: 0,
     reducedObservationCount: 0,
@@ -157,6 +161,10 @@ export class Telemetry {
   }
   recordObservationSearchIndexWriteFailure(): void {
     this.#values.observationSearchIndexWriteFailureCount += 1;
+  }
+  recordObservationSearchPayload(bytes: number, truncated: boolean): void {
+    this.#values.observationSearchPayloadBytesTotal += finiteNonnegative(bytes);
+    if (truncated) this.#values.observationSearchPayloadTruncatedCount += 1;
   }
   recordReduction(input: {
     durationMs: number;

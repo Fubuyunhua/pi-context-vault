@@ -12,6 +12,11 @@ import {
   type RegisterContextVaultOptions,
   registerContextVault,
 } from "../src/extension.js";
+import {
+  DEFAULT_SEARCH_PAYLOAD_BYTES,
+  MAX_SEARCH_PAYLOAD_BYTES,
+  MIN_SEARCH_PAYLOAD_BYTES,
+} from "../src/observations/virtualization.js";
 import { LEGACY_REPO_CONFIG_WARNING } from "../src/state/config.js";
 import { resolveProjectState } from "../src/state/project-state.js";
 import { extractTelemetryFrame } from "../src/telemetry-frame.js";
@@ -386,6 +391,11 @@ describe("observation-only extension", () => {
       expect.objectContaining({ const: "terms" }),
       expect.objectContaining({ const: "phrase" }),
     ]);
+    expect(searchTool?.parameters.properties.maxBytes).toMatchObject({
+      minimum: MIN_SEARCH_PAYLOAD_BYTES,
+      maximum: MAX_SEARCH_PAYLOAD_BYTES,
+      default: DEFAULT_SEARCH_PAYLOAD_BYTES,
+    });
 
     await target.handlers.get("session_start")?.({}, target.ctx);
     await target.handlers.get("tool_result")?.(
@@ -400,6 +410,10 @@ describe("observation-only extension", () => {
       target.ctx,
     );
     expect(searched.isError).toBeUndefined();
+    expect(Buffer.byteLength(searched.content[0].text, "utf8")).toBe(searched.details.serializedBytes);
+    expect(searched.details.serializedBytes).toBeLessThanOrEqual(DEFAULT_SEARCH_PAYLOAD_BYTES);
+    expect(searched.content[0].text).not.toContain(target.project);
+    expect(searched.content[0].text).not.toContain(target.piRoot);
     const hit = searched.details.results[0];
     expect(hit).toMatchObject({
       observationId: expect.stringMatching(/^obs_[a-f0-9]{24}$/u),
