@@ -363,7 +363,7 @@ describe("observation virtualization", () => {
 
   it("preserves a deep executable next action when its search preview is omitted", async () => {
     const { runtime } = await setup({ threshold: 1_000_000 });
-    const deepPrefix = "x".repeat(18 * 1024);
+    const deepPrefix = `${"x".repeat(1023)}\n`.repeat(18);
     for (let index = 0; index < 10; index += 1) {
       await runtime.virtualize({
         toolCallId: `preview-omission-${index}`,

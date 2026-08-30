@@ -221,11 +221,7 @@ function matchingExcerpt(line: string, pattern: RegExp, maxBytes: number): Match
     : { text: matchingExcerptAt(line, match.index, match[0].length, maxBytes), matchIndex: match.index };
 }
 
-function originalIndexAtNormalizedOffset(
-  value: string,
-  normalizedOffset: number,
-  edge: "start" | "end",
-): number {
+function originalIndexAtNormalizedOffset(value: string, normalizedOffset: number, edge: "start" | "end"): number {
   let originalIndex = 0;
   let normalizedIndex = 0;
   for (const character of value) {
