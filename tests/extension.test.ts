@@ -235,6 +235,61 @@ describe("observation-only extension", () => {
     expect(localStatus.storage).toEqual(parsed.storage);
   });
 
+  it("keeps storage healthy at the exact manual GC target boundary", async () => {
+    const evidence = "exact-quota-boundary-evidence";
+    const targetBytes = Buffer.byteLength(evidence);
+    const target = await harness({
+      archivePolicy: "all",
+      archiveMinBytes: 0,
+      replacementThresholdBytes: 1,
+      projectQuotaBytes: targetBytes,
+    });
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    await target.handlers.get("tool_result")?.(toolEvent("read", evidence), target.ctx);
+
+    const result = await executeStatus(target);
+    const parsed = expectModelStatusPrivate(result, ["private-home-marker", target.project, target.piRoot]);
+    expect(parsed).toMatchObject({ degraded: false });
+    expect(parsed.storage).toMatchObject({
+      available: true,
+      usedBytes: targetBytes,
+      targetBytes,
+      overBudget: false,
+    });
+    expect(parsed.warnings).not.toContain(PROJECT_QUOTA_EXCEEDED_WARNING);
+  });
+
+  it("keeps storage usage failures useful locally and private in model-visible status", async () => {
+    const target = await harness();
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    const rawFailure = `${target.piRoot}/private-storage-path-marker`;
+    const publicWarning = "Context Vault artifact storage usage is unavailable.";
+    vi.spyOn(ArtifactStore.prototype, "storageUsage").mockRejectedValue(new Error(rawFailure));
+
+    await target.commands.get("context-vault")?.handler("status", target.ctx);
+    const localStatus = JSON.parse(target.notifications.at(-1)?.text ?? "null");
+    expect(target.notifications.at(-1)?.type).toBe("warning");
+    expect(localStatus).toMatchObject({
+      degraded: true,
+      storage: { available: false, error: rawFailure },
+      warnings: [publicWarning],
+    });
+
+    const result = await executeStatus(target);
+    const parsed = expectModelStatusPrivate(result, [
+      "private-home-marker",
+      "private-storage-path-marker",
+      rawFailure,
+      target.project,
+      target.piRoot,
+    ]);
+    expect(parsed).toMatchObject({
+      degraded: true,
+      storage: { available: false, error: publicWarning },
+      warnings: [publicWarning],
+    });
+  });
+
   it("replaces initialization errors in model status while retaining raw local diagnostics", async () => {
     const target = await harness();
     const configPath = join(target.project, ".pi", "context-vault.json");
