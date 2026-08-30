@@ -1,0 +1,23 @@
+{
+  "generatedAt": "2026-08-30T07:39:58.091Z",
+  "network": "none",
+  "accepted": true,
+  "rows": [
+    {
+      "mode": "base",
+      "expected": "fail",
+      "passed": false,
+      "failed": true,
+      "accepted": true,
+      "outputTail": " 3}\nE         \nE         Left contains 1 more item:\nE         {'count': 5}\nE         Right contains 3 more items:\nE         {'accepted': ['alpha', 'γ'], 'checksum': 1465, 'rejected': 3}\nE         Use -v to get more diff\n\ntests/test_pressure_hidden.py:5: AssertionError\n_____________________ test_non_strings_and_first_separator _____________________\n\n    def test_non_strings_and_first_separator():\n>       assert summarize([None, \"OK:a:b\", \"NO:x\", \"OK:z\"]) == {\n            \"accepted\": [\"a:b\", \"z\"],\n            \"rejected\": 2,\n            \"checksum\": sum(map(ord, \"a:bz\")) % 10007,\n        }\nE       AssertionError: assert {'count': 4} == {'accepted': ...'rejected': 2}\nE         \nE         Left contains 1 more item:\nE         {'count': 4}\nE         Right contains 3 more items:\nE         {'accepted': ['a:b', 'z'], 'checksum': 375, 'rejected': 2}\nE         Use -v to get more diff\n\ntests/test_pressure_hidden.py:13: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_pressure_hidden.py::test_authoritative_contract_and_order\nFAILED tests/test_pressure_hidden.py::test_non_strings_and_first_separator - ...\n2 failed, 1 passed in 0.06s\n"
+    },
+    {
+      "mode": "gold",
+      "expected": "pass",
+      "passed": true,
+      "failed": false,
+      "accepted": true,
+      "outputTail": "...                                                                      [100%]\n3 passed in 0.03s\n"
+    }
+  ]
+}
