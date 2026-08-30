@@ -463,7 +463,7 @@ export class ObservationRuntime {
             value: term.collapsed.length === 0 ? term.normalized : term.collapsed,
             collapseIdentifierSeparators: term.collapsed.length > 0,
           }))
-        : [{ value: query, collapseIdentifierSeparators: false }];
+        : [{ value: query, collapseIdentifierSeparators: false, conservativeFallback: true }];
     let searchBatch: Awaited<ReturnType<ArtifactStore["searchArtifacts"]>>;
     try {
       searchBatch = await this.#store.searchArtifacts(needles);

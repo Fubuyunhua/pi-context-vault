@@ -31,6 +31,9 @@ export interface TelemetrySnapshot {
   observationSearchArtifactReadCount: number;
   observationSearchUnavailableCount: number;
   observationSearchHydrationReadCount: number;
+  observationSearchFallbackCount: number;
+  observationSearchIndexLoadFailureCount: number;
+  observationSearchIndexWriteFailureCount: number;
   observationSearchDurationMsTotal: number;
   reductionInvocationCount: number;
   reductionTriggeredCount: number;
@@ -70,6 +73,9 @@ export class Telemetry {
     observationSearchArtifactReadCount: 0,
     observationSearchUnavailableCount: 0,
     observationSearchHydrationReadCount: 0,
+    observationSearchFallbackCount: 0,
+    observationSearchIndexLoadFailureCount: 0,
+    observationSearchIndexWriteFailureCount: 0,
     observationSearchDurationMsTotal: 0,
     reductionInvocationCount: 0,
     reductionTriggeredCount: 0,
@@ -136,13 +142,21 @@ export class Telemetry {
     artifactReads: number;
     unavailable: number;
     hydrationReads: number;
+    fallbacks: number;
   }): void {
     this.#values.observationSearchCount += 1;
     this.#values.observationSearchCandidateCount += finiteNonnegative(input.candidates);
     this.#values.observationSearchArtifactReadCount += finiteNonnegative(input.artifactReads);
     this.#values.observationSearchUnavailableCount += finiteNonnegative(input.unavailable);
     this.#values.observationSearchHydrationReadCount += finiteNonnegative(input.hydrationReads);
+    this.#values.observationSearchFallbackCount += finiteNonnegative(input.fallbacks);
     this.#values.observationSearchDurationMsTotal += finiteNonnegative(input.durationMs);
+  }
+  recordObservationSearchIndexLoadFailure(): void {
+    this.#values.observationSearchIndexLoadFailureCount += 1;
+  }
+  recordObservationSearchIndexWriteFailure(): void {
+    this.#values.observationSearchIndexWriteFailureCount += 1;
   }
   recordReduction(input: {
     durationMs: number;

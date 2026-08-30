@@ -30,7 +30,8 @@ export type ArtifactStoreFaultPoint =
   | "after-gc-tombstone-sync"
   | "after-gc-unlink"
   | "before-compaction-replace"
-  | "after-compaction-replace";
+  | "after-compaction-replace"
+  | "before-search-index-publication";
 
 export interface ArtifactStoreOptions {
   artifactsRoot: string;
@@ -134,6 +135,7 @@ export interface ArtifactStorageUsage {
 export interface ArtifactSearchNeedle {
   value: string;
   collapseIdentifierSeparators: boolean;
+  conservativeFallback?: boolean;
 }
 
 export interface ArtifactSearchBatch {
@@ -155,9 +157,11 @@ interface SerializedArtifactSearchEntry {
 interface ArtifactSearchIndexSnapshot {
   schemaVersion: 1;
   algorithm: typeof SEARCH_INDEX_ALGORITHM;
-  bloomBytes: number;
   gramLength: number;
-  artifacts: SerializedArtifactSearchEntry[];
+  bloomBytes: number;
+  hashCount: number;
+  maxEntries: number;
+  entries: SerializedArtifactSearchEntry[];
   checksum: string;
 }
 
@@ -497,18 +501,20 @@ function buildSearchBloom(content: string): Uint8Array {
   return bloom;
 }
 
-function artifactSearchSnapshotPayload(artifacts: SerializedArtifactSearchEntry[]): string {
+function artifactSearchSnapshotPayload(entries: SerializedArtifactSearchEntry[]): string {
   return JSON.stringify({
     schemaVersion: 1,
     algorithm: SEARCH_INDEX_ALGORITHM,
-    bloomBytes: SEARCH_BLOOM_BYTES,
     gramLength: SEARCH_GRAM_LENGTH,
-    artifacts,
+    bloomBytes: SEARCH_BLOOM_BYTES,
+    hashCount: SEARCH_BLOOM_HASHES,
+    maxEntries: SEARCH_INDEX_MAX_ENTRIES,
+    entries,
   });
 }
 
-function artifactSearchSnapshotChecksum(artifacts: SerializedArtifactSearchEntry[]): string {
-  return createHash("sha256").update(artifactSearchSnapshotPayload(artifacts), "utf8").digest("hex");
+function artifactSearchSnapshotChecksum(entries: SerializedArtifactSearchEntry[]): string {
+  return createHash("sha256").update(artifactSearchSnapshotPayload(entries), "utf8").digest("hex");
 }
 
 function parseArtifactSearchSnapshot(
@@ -519,18 +525,20 @@ function parseArtifactSearchSnapshot(
   if (
     value.schemaVersion !== 1 ||
     value.algorithm !== SEARCH_INDEX_ALGORITHM ||
-    value.bloomBytes !== SEARCH_BLOOM_BYTES ||
     value.gramLength !== SEARCH_GRAM_LENGTH ||
-    !Array.isArray(value.artifacts) ||
+    value.bloomBytes !== SEARCH_BLOOM_BYTES ||
+    value.hashCount !== SEARCH_BLOOM_HASHES ||
+    value.maxEntries !== SEARCH_INDEX_MAX_ENTRIES ||
+    !Array.isArray(value.entries) ||
+    value.entries.length > maximumEntries ||
     typeof value.checksum !== "string" ||
     !/^[a-f0-9]{64}$/.test(value.checksum) ||
-    artifactSearchSnapshotChecksum(value.artifacts as SerializedArtifactSearchEntry[]) !== value.checksum
+    artifactSearchSnapshotChecksum(value.entries as SerializedArtifactSearchEntry[]) !== value.checksum
   ) {
     throw new Error("unsupported derived search index");
   }
   const entries = new Map<string, ArtifactSearchEntry>();
-  let needsRewrite = value.artifacts.length > maximumEntries;
-  for (const candidate of value.artifacts.slice(0, maximumEntries)) {
+  for (const candidate of value.entries) {
     if (
       candidate === null ||
       typeof candidate !== "object" ||
@@ -538,17 +546,19 @@ function parseArtifactSearchSnapshot(
       typeof candidate.bloom !== "string" ||
       !/^[A-Za-z0-9+/]+={0,2}$/.test(candidate.bloom)
     ) {
-      needsRewrite = true;
-      continue;
+      throw new Error("invalid derived search index entry");
     }
     const bloom = Buffer.from(candidate.bloom, "base64");
-    if (bloom.length !== SEARCH_BLOOM_BYTES || entries.has(candidate.artifactId)) {
-      needsRewrite = true;
-      continue;
+    if (
+      bloom.length !== SEARCH_BLOOM_BYTES ||
+      bloom.toString("base64") !== candidate.bloom ||
+      entries.has(candidate.artifactId)
+    ) {
+      throw new Error("invalid derived search index entry");
     }
     entries.set(candidate.artifactId, { bloom: new Uint8Array(bloom) });
   }
-  return { entries, needsRewrite };
+  return { entries, needsRewrite: false };
 }
 
 export class ArtifactStore {
@@ -572,6 +582,7 @@ export class ArtifactStore {
   #indexMutex = Promise.resolve();
   #artifactSearch = new Map<string, ArtifactSearchEntry>();
   readonly #unavailableSearchArtifacts = new Set<string>();
+  readonly #operatorDiagnostics: string[] = [];
   #searchIndexLoaded = false;
   #searchIndexDirty = false;
 
@@ -596,6 +607,16 @@ export class ArtifactStore {
       throw new Error("searchIndexMaxEntries must be a positive safe integer");
     }
     this.#onArtifactRead = options.onArtifactRead;
+  }
+
+  operatorDiagnostics(): string[] {
+    return [...this.#operatorDiagnostics];
+  }
+
+  #recordOperatorDiagnostic(error: unknown): void {
+    const message = (error instanceof Error ? error.message : String(error)).slice(0, 512);
+    this.#operatorDiagnostics.push(message);
+    this.#operatorDiagnostics.splice(0, Math.max(0, this.#operatorDiagnostics.length - 20));
   }
 
   artifactPath(artifactId: string): string {
@@ -934,11 +955,9 @@ export class ArtifactStore {
       this.#withIndexMutex(async () => {
         await this.#synchronizePathUnlocked();
         await this.#loadArtifactSearchIndexUnlocked();
-        const desiredArtifactIds = new Set<string>();
-        for (const metadata of [...this.#index.live.values()].reverse()) {
-          desiredArtifactIds.add(metadata.artifactId);
-          if (desiredArtifactIds.size >= this.#searchIndexMaxEntries) break;
-        }
+        const desiredArtifactIds = new Set(
+          this.#liveArtifactIdsByRecencyUnlocked().slice(0, this.#searchIndexMaxEntries),
+        );
         for (const artifactId of this.#artifactSearch.keys()) {
           if (!desiredArtifactIds.has(artifactId)) this.#removeArtifactSearch(artifactId);
         }
@@ -966,17 +985,20 @@ export class ArtifactStore {
 
         const liveArtifactIds = new Set(this.#index.byArtifact.keys());
         const candidates = new Set<string>();
+        const fallbackArtifacts = new Set<string>();
         for (const artifactId of liveArtifactIds) {
           if (this.#unavailableSearchArtifacts.has(artifactId)) continue;
           const entry = this.#artifactSearch.get(artifactId);
           if (entry === undefined) {
             candidates.add(artifactId);
+            fallbackArtifacts.add(artifactId);
             continue;
           }
           for (const needle of needles) {
             const form = searchForm(needle.value, needle.collapseIdentifierSeparators);
-            if (!isAscii(form) || Array.from(form).length < SEARCH_GRAM_LENGTH) {
+            if (needle.conservativeFallback || !isAscii(form) || Array.from(form).length < SEARCH_GRAM_LENGTH) {
               candidates.add(artifactId);
+              fallbackArtifacts.add(artifactId);
               break;
             }
             const prefix = needle.collapseIdentifierSeparators ? "collapsed" : "normalized";
@@ -1003,6 +1025,7 @@ export class ArtifactStore {
           artifactReads: candidates.size,
           unavailable: partial ? candidates.size - contentByArtifact.size + this.#unavailableSearchArtifacts.size : 0,
           hydrationReads,
+          fallbacks: fallbackArtifacts.size,
         });
         return {
           candidateArtifactIds: candidates,
@@ -1171,11 +1194,20 @@ export class ArtifactStore {
   async #readArtifactSearchIndexUnlocked(): Promise<
     { entries: Map<string, ArtifactSearchEntry>; needsRewrite: boolean } | undefined
   > {
-    const source = await this.#readRegularFileBounded(this.#searchIndexPath, MAX_SEARCH_INDEX_BYTES);
+    let source: string | undefined;
+    try {
+      source = await this.#readRegularFileBounded(this.#searchIndexPath, MAX_SEARCH_INDEX_BYTES);
+    } catch (error) {
+      this.#telemetry?.recordObservationSearchIndexLoadFailure();
+      this.#recordOperatorDiagnostic(error);
+      throw error;
+    }
     if (source === undefined) return undefined;
     try {
       return parseArtifactSearchSnapshot(source, this.#searchIndexMaxEntries);
-    } catch {
+    } catch (error) {
+      this.#telemetry?.recordObservationSearchIndexLoadFailure();
+      this.#recordOperatorDiagnostic(error);
       return { entries: new Map(), needsRewrite: true };
     }
   }
@@ -1197,46 +1229,55 @@ export class ArtifactStore {
     this.#searchIndexLoaded = true;
   }
 
+  #liveArtifactIdsByRecencyUnlocked(): string[] {
+    const newest = new Map<string, number>();
+    for (const metadata of this.#index.live.values()) {
+      newest.set(metadata.artifactId, Math.max(newest.get(metadata.artifactId) ?? 0, Date.parse(metadata.updatedAt)));
+    }
+    return [...newest]
+      .sort((left, right) => right[1] - left[1] || (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0))
+      .map(([artifactId]) => artifactId);
+  }
+
   async #publishArtifactSearchIndexUnlocked(): Promise<void> {
     if (!this.#searchIndexDirty) return;
-    const onDisk = await this.#readArtifactSearchIndexUnlocked();
-    if (onDisk !== undefined && !onDisk.needsRewrite) {
-      for (const [artifactId, entry] of onDisk.entries) {
-        if (
-          this.#artifactSearch.size < this.#searchIndexMaxEntries &&
-          this.#index.byArtifact.has(artifactId) &&
-          !this.#artifactSearch.has(artifactId)
-        ) {
-          this.#artifactSearch.set(artifactId, entry);
-        }
-      }
-    }
-    const liveByRecency = new Set([...this.#index.live.values()].reverse().map((metadata) => metadata.artifactId));
-    let artifacts = [...liveByRecency]
-      .map((artifactId) => [artifactId, this.#artifactSearch.get(artifactId)] as const)
+    const merged = new Map((await this.#readArtifactSearchIndexUnlocked())?.entries ?? []);
+    for (const [artifactId, entry] of this.#artifactSearch) merged.set(artifactId, entry);
+    let entries = this.#liveArtifactIdsByRecencyUnlocked()
+      .map((artifactId) => [artifactId, merged.get(artifactId)] as const)
       .filter((entry): entry is readonly [string, ArtifactSearchEntry] => entry[1] !== undefined)
       .slice(0, this.#searchIndexMaxEntries)
       .map(([artifactId, entry]) => ({ artifactId, bloom: Buffer.from(entry.bloom).toString("base64") }));
     let serialized = "";
     while (true) {
-      const checksum = artifactSearchSnapshotChecksum(artifacts);
+      const checksum = artifactSearchSnapshotChecksum(entries);
       const snapshot: ArtifactSearchIndexSnapshot = {
         schemaVersion: 1,
         algorithm: SEARCH_INDEX_ALGORITHM,
-        bloomBytes: SEARCH_BLOOM_BYTES,
         gramLength: SEARCH_GRAM_LENGTH,
-        artifacts,
+        bloomBytes: SEARCH_BLOOM_BYTES,
+        hashCount: SEARCH_BLOOM_HASHES,
+        maxEntries: SEARCH_INDEX_MAX_ENTRIES,
+        entries,
         checksum,
       };
       serialized = JSON.stringify(snapshot);
       if (Buffer.byteLength(serialized, "utf8") <= MAX_SEARCH_INDEX_BYTES) break;
-      artifacts = artifacts.slice(0, -1);
+      entries = entries.slice(0, -1);
     }
     this.#artifactSearch = new Map(
-      artifacts.map((entry) => [entry.artifactId, { bloom: new Uint8Array(Buffer.from(entry.bloom, "base64")) }]),
+      entries.map((entry) => [entry.artifactId, { bloom: new Uint8Array(Buffer.from(entry.bloom, "base64")) }]),
     );
-    await this.#atomicWriteFixedFile(this.#searchIndexPath, serialized);
-    this.#searchIndexDirty = false;
+    try {
+      await this.#faultHook?.("before-search-index-publication");
+      await this.#atomicWriteFixedFile(this.#searchIndexPath, serialized);
+      this.#searchIndexDirty = false;
+    } catch (error) {
+      if (isUnsafeStateError(error)) throw error;
+      this.#telemetry?.recordObservationSearchIndexWriteFailure();
+      this.#recordOperatorDiagnostic(error);
+      this.#searchIndexDirty = true;
+    }
   }
 
   #removeArtifactSearch(artifactId: string): void {
@@ -1245,12 +1286,11 @@ export class ArtifactStore {
 
   #indexArtifactSearch(artifactId: string, content: string): void {
     if (this.#artifactSearch.has(artifactId)) return;
-    if (this.#artifactSearch.size >= this.#searchIndexMaxEntries) {
-      let leastRecent: string | undefined;
-      for (const indexedArtifactId of this.#artifactSearch.keys()) leastRecent = indexedArtifactId;
-      if (leastRecent !== undefined) this.#artifactSearch.delete(leastRecent);
+    this.#artifactSearch.set(artifactId, { bloom: buildSearchBloom(content) });
+    const allowed = new Set(this.#liveArtifactIdsByRecencyUnlocked().slice(0, this.#searchIndexMaxEntries));
+    for (const indexedArtifactId of this.#artifactSearch.keys()) {
+      if (!allowed.has(indexedArtifactId)) this.#artifactSearch.delete(indexedArtifactId);
     }
-    this.#artifactSearch = new Map([[artifactId, { bloom: buildSearchBloom(content) }], ...this.#artifactSearch]);
     this.#unavailableSearchArtifacts.delete(artifactId);
     this.#searchIndexDirty = true;
   }

@@ -673,6 +673,19 @@ describe("observation virtualization", () => {
     expect(fetched.matches).toEqual([]);
   });
 
+  it("preserves Unicode case-fold equivalence in phrase fallback", async () => {
+    const { runtime } = await setup({ threshold: 1_000_000 });
+    const archived = await runtime.virtualize({
+      toolCallId: "unicode-phrase-fold",
+      toolName: "read",
+      text: "ſay the phrase marker",
+      isError: false,
+    });
+    await expect(runtime.search({ query: "say", matchMode: "phrase" })).resolves.toMatchObject({
+      results: [{ observationId: archived.observationId }],
+    });
+  });
+
   it("treats punctuation and identifiers as escaped literal terms", async () => {
     const { runtime } = await setup({ threshold: 1 });
     const archived = await runtime.virtualize({

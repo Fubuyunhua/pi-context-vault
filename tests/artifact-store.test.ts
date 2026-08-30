@@ -202,7 +202,12 @@ describe("artifact store", () => {
     const root = await tempRoot();
     const artifactsRoot = join(root, "artifacts");
     const metadataRoot = join(root, "metadata");
-    const store = new ArtifactStore({ artifactsRoot, metadataRoot, searchIndexMaxEntries: 2 });
+    const store = new ArtifactStore({
+      artifactsRoot,
+      metadataRoot,
+      searchIndexMaxEntries: 2,
+      now: () => new Date("2026-08-30T00:00:00.000Z"),
+    });
     const artifacts = [];
     for (let index = 0; index < 3; index += 1) {
       artifacts.push(
@@ -218,16 +223,22 @@ describe("artifact store", () => {
     const persisted = JSON.parse(await readFile(join(metadataRoot, "observation-search-index-v1.json"), "utf8")) as {
       schemaVersion: number;
       algorithm: string;
+      hashCount: number;
+      maxEntries: number;
       checksum: string;
-      artifacts: Array<{ artifactId: string; bloom: string }>;
+      entries: Array<{ artifactId: string; bloom: string }>;
     };
     expect(persisted).toMatchObject({
       schemaVersion: 1,
       algorithm: "cv-search-bloom-v1",
+      hashCount: 3,
+      maxEntries: 10_000,
       checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
-    expect(persisted.artifacts).toHaveLength(2);
-    expect(persisted.artifacts.every((entry) => Buffer.from(entry.bloom, "base64").length === 2_048)).toBe(true);
+    expect(persisted.entries).toHaveLength(2);
+    expect(persisted.entries.every((entry) => Buffer.from(entry.bloom, "base64").length === 2_048)).toBe(true);
+    const orderedIds = artifacts.map((artifact) => artifact.artifactId).sort();
+    expect(persisted.entries.map((entry) => entry.artifactId)).toEqual(orderedIds.slice(0, 2));
 
     const coldReads: string[] = [];
     const restarted = new ArtifactStore({
@@ -239,8 +250,107 @@ describe("artifact store", () => {
     const snapshot = await restarted.searchArtifacts([
       { value: "missing-bound-query", collapseIdentifierSeparators: false },
     ]);
-    expect(coldReads).toEqual([artifacts[0]?.artifactId]);
-    expect(snapshot.candidateArtifactIds).toEqual(new Set([artifacts[0]?.artifactId]));
+    expect(coldReads).toEqual([orderedIds[2]]);
+    expect(snapshot.candidateArtifactIds).toEqual(new Set([orderedIds[2]]));
+  });
+
+  it("merges full-capacity concurrent snapshots using metadata recency", async () => {
+    const root = await tempRoot();
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    let time = new Date("2026-08-30T00:00:00.000Z");
+    const options = { artifactsRoot, metadataRoot, searchIndexMaxEntries: 2, now: () => time };
+    const first = new ArtifactStore(options);
+    await first.archive({ observationId: "merge-a", toolName: "read", sessionId: "session", content: "merge a" });
+    await first.archive({ observationId: "merge-b", toolName: "read", sessionId: "session", content: "merge b" });
+    await first.searchArtifacts([{ value: "merge", collapseIdentifierSeparators: false }]);
+
+    time = new Date("2026-08-30T00:01:00.000Z");
+    const second = new ArtifactStore(options);
+    const third = await second.archive({
+      observationId: "merge-c",
+      toolName: "read",
+      sessionId: "session",
+      content: "merge c",
+    });
+    await second.searchArtifacts([{ value: "merge", collapseIdentifierSeparators: false }]);
+
+    time = new Date("2026-08-30T00:02:00.000Z");
+    const fourth = await first.archive({
+      observationId: "merge-d",
+      toolName: "read",
+      sessionId: "session",
+      content: "merge d",
+    });
+    await first.searchArtifacts([{ value: "merge", collapseIdentifierSeparators: false }]);
+    const persisted = JSON.parse(await readFile(join(metadataRoot, "observation-search-index-v1.json"), "utf8")) as {
+      entries: Array<{ artifactId: string }>;
+    };
+    expect(persisted.entries.map((entry) => entry.artifactId)).toEqual([fourth.artifactId, third.artifactId]);
+  });
+
+  it("keeps search available when derived-index publication fails", async () => {
+    const root = await tempRoot();
+    const telemetry = new Telemetry();
+    const store = new ArtifactStore({
+      artifactsRoot: join(root, "artifacts"),
+      metadataRoot: join(root, "metadata"),
+      telemetry,
+      faultHook: (point) => {
+        if (point === "before-search-index-publication") throw new Error("operator-only index write failure");
+      },
+    });
+    const archived = await store.archive({
+      observationId: "write-failure",
+      toolName: "read",
+      sessionId: "session",
+      content: "write-failure searchable evidence",
+    });
+    const batch = await store.searchArtifacts([{ value: "searchable", collapseIdentifierSeparators: false }]);
+    expect(batch.contentByArtifact.get(archived.artifactId)).toContain("searchable evidence");
+    expect(telemetry.snapshot().observationSearchIndexWriteFailureCount).toBe(1);
+    expect(store.operatorDiagnostics()).toEqual(["operator-only index write failure"]);
+    expect(await store.getMetadata("write-failure")).toEqual(archived.metadata);
+  });
+
+  it("rejects noncanonical Bloom encodings and rewrites them from evidence", async () => {
+    const root = await tempRoot();
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    const first = new ArtifactStore({ artifactsRoot, metadataRoot });
+    await first.archive({
+      observationId: "canonical-bloom",
+      toolName: "read",
+      sessionId: "session",
+      content: "canonical Bloom evidence",
+    });
+    await first.searchArtifacts([{ value: "canonical", collapseIdentifierSeparators: false }]);
+    const indexPath = join(metadataRoot, "observation-search-index-v1.json");
+    const snapshot = JSON.parse(await readFile(indexPath, "utf8")) as Record<string, unknown> & {
+      entries: Array<{ artifactId: string; bloom: string }>;
+    };
+    const firstEntry = snapshot.entries[0];
+    if (firstEntry === undefined) throw new Error("expected persisted Bloom entry");
+    snapshot.entries[0] = { ...firstEntry, bloom: firstEntry.bloom.replace(/=+$/u, "") };
+    const { checksum: _checksum, ...payload } = snapshot;
+    snapshot.checksum = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+    await writeFile(indexPath, JSON.stringify(snapshot));
+
+    let reads = 0;
+    const telemetry = new Telemetry();
+    const restarted = new ArtifactStore({
+      artifactsRoot,
+      metadataRoot,
+      telemetry,
+      onArtifactRead: () => {
+        reads += 1;
+      },
+    });
+    await restarted.searchArtifacts([{ value: "definitely-missing", collapseIdentifierSeparators: false }]);
+    expect(reads).toBe(1);
+    expect(telemetry.snapshot().observationSearchIndexLoadFailureCount).toBeGreaterThanOrEqual(1);
+    const repaired = JSON.parse(await readFile(indexPath, "utf8")) as { entries: Array<{ bloom: string }> };
+    expect(repaired.entries[0]?.bloom.endsWith("=")).toBe(true);
   });
 
   it("publishes on flush and repairs stale snapshots while ignoring crash temp files", async () => {

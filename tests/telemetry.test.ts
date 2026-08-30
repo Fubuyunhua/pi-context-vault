@@ -29,6 +29,7 @@ describe("Vault-only telemetry", () => {
       artifactReads: 2,
       unavailable: 1,
       hydrationReads: 4,
+      fallbacks: 5,
     });
     telemetry.recordReduction({
       durationMs: 7,
@@ -57,6 +58,9 @@ describe("Vault-only telemetry", () => {
       observationSearchArtifactReadCount: 2,
       observationSearchUnavailableCount: 1,
       observationSearchHydrationReadCount: 4,
+      observationSearchFallbackCount: 5,
+      observationSearchIndexLoadFailureCount: 0,
+      observationSearchIndexWriteFailureCount: 0,
       observationSearchDurationMsTotal: 8,
       reductionInvocationCount: 1,
       reductionTriggeredCount: 1,
