@@ -395,7 +395,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
     description: `Search sanitized archived observations within a total UTF-8 payload budget (default ${DEFAULT_SEARCH_PAYLOAD_BYTES} bytes). Default terms mode ranks observations that match at least one of up to ${MAX_SEARCH_TERMS} Unicode-whitespace-separated terms by relevance score, normalizing common code-identifier separators; phrase mode requires a contiguous literal match within one line. Identical artifacts collapse to the newest Observation with an occurrence count and recent Observation IDs. Ranked IDs and executable next actions are retained before bounded matching-line previews.`,
     promptSnippet: "Search archived observations by ranked code-aware terms or a contiguous literal phrase",
     promptGuidelines: [
-      "Use context_vault_obs_search to find archived evidence, then execute its returned nextAction by calling context_vault_obs_get with nextAction.arguments.id for more bounded evidence; phrase mode is only for contiguous literal matching.",
+      "Use context_vault_obs_search to find archived evidence, then execute its returned nextAction by calling context_vault_obs_get with all of nextAction.arguments for more bounded evidence; if a matched span exceeds one bounded get page, issue additional bounded get requests as needed; phrase mode is only for contiguous literal matching.",
     ],
     parameters: Type.Object(
       {
