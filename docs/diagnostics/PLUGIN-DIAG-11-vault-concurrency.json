@@ -1,0 +1,40 @@
+{
+  "generatedAt": "2026-08-30T17:38:33.898Z",
+  "uniqueMs": 4617.17,
+  "duplicateMs": 888.52,
+  "metadataCount": 80,
+  "expectedMetadataCount": 80,
+  "uniqueObservationIds": 64,
+  "duplicateObservationIds": 16,
+  "duplicateArtifactIds": 1,
+  "duplicateOccurrenceCount": 16,
+  "searches": [
+    {
+      "marker": 0,
+      "results": 1,
+      "contains": true
+    },
+    {
+      "marker": 31,
+      "results": 1,
+      "contains": true
+    },
+    {
+      "marker": 63,
+      "results": 1,
+      "contains": true
+    }
+  ],
+  "duplicateSearchResults": 1,
+  "stateBytes": 1267511,
+  "status": {
+    "projectId": "project",
+    "projectRoot": "C:\\Users\\caiwei\\AppData\\Local\\Temp\\vault-concurrency-8g3Ny8",
+    "sessionId": "concurrent",
+    "archived": 80,
+    "replaced": 80,
+    "degraded": false,
+    "failures": []
+  },
+  "accepted": true
+}

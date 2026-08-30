@@ -1,0 +1,51 @@
+{
+  "generatedAt": "2026-08-30T17:41:02.335Z",
+  "durationMs": 4738.39,
+  "workers": [
+    {
+      "code": 0,
+      "stdout": "{\"worker\":0,\"archived\":20}",
+      "stderr": ""
+    },
+    {
+      "code": 0,
+      "stdout": "{\"worker\":1,\"archived\":20}",
+      "stderr": ""
+    },
+    {
+      "code": 0,
+      "stdout": "{\"worker\":2,\"archived\":20}",
+      "stderr": ""
+    },
+    {
+      "code": 0,
+      "stdout": "{\"worker\":3,\"archived\":20}",
+      "stderr": ""
+    }
+  ],
+  "metadataCount": 80,
+  "uniqueObservations": 80,
+  "searches": [
+    {
+      "query": "MULTIPROCESS_MARKER_0_0",
+      "results": 1,
+      "contains": true
+    },
+    {
+      "query": "MULTIPROCESS_MARKER_1_19",
+      "results": 1,
+      "contains": true
+    },
+    {
+      "query": "MULTIPROCESS_MARKER_2_10",
+      "results": 1,
+      "contains": true
+    },
+    {
+      "query": "MULTIPROCESS_MARKER_3_19",
+      "results": 1,
+      "contains": true
+    }
+  ],
+  "accepted": true
+}

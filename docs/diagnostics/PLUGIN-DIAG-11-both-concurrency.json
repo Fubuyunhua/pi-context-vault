@@ -1,0 +1,21 @@
+{
+  "generatedAt": "2026-08-30T17:39:59.973Z",
+  "durationMs": 3847.25,
+  "archives": 32,
+  "replaced": 32,
+  "repoLifecycle": "ready",
+  "repoResults": 10,
+  "repoTop": "src/file-0999.ts",
+  "vaultSearchResults": 1,
+  "tools": [
+    "context_vault_obs_get",
+    "context_vault_obs_search",
+    "context_vault_repo_map",
+    "context_vault_status",
+    "repo_context_search",
+    "repo_context_status"
+  ],
+  "duplicateTools": [],
+  "agentStateBytes": 1107658,
+  "accepted": true
+}
