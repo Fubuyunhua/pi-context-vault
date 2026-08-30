@@ -221,6 +221,24 @@ function matchingExcerpt(line: string, pattern: RegExp, maxBytes: number): Match
     : { text: matchingExcerptAt(line, match.index, match[0].length, maxBytes), matchIndex: match.index };
 }
 
+function originalIndexAtNormalizedOffset(
+  value: string,
+  normalizedOffset: number,
+  edge: "start" | "end",
+): number {
+  let originalIndex = 0;
+  let normalizedIndex = 0;
+  for (const character of value) {
+    const nextOriginalIndex = originalIndex + character.length;
+    const nextNormalizedIndex = normalizedIndex + character.toLocaleLowerCase("en-US").length;
+    if (normalizedOffset < nextNormalizedIndex) return edge === "start" ? originalIndex : nextOriginalIndex;
+    if (normalizedOffset === nextNormalizedIndex) return nextOriginalIndex;
+    originalIndex = nextOriginalIndex;
+    normalizedIndex = nextNormalizedIndex;
+  }
+  return value.length;
+}
+
 function matchingTermExcerpt(line: string, terms: SearchTerm[], maxBytes: number): MatchExcerpt | undefined {
   const normalizedLine = line.toLocaleLowerCase("en-US");
   const searchable = normalizedSearchText(line);
@@ -228,9 +246,11 @@ function matchingTermExcerpt(line: string, terms: SearchTerm[], maxBytes: number
   if (matchedTerms.length === 0) return undefined;
   const match = separatorNormalizedPattern(matchedTerms, false).exec(normalizedLine);
   if (match === null) return { text: line, matchIndex: 0 };
+  const matchIndex = originalIndexAtNormalizedOffset(line, match.index, "start");
+  const matchEnd = originalIndexAtNormalizedOffset(line, match.index + match[0].length, "end");
   return {
-    text: matchingExcerptAt(line, match.index, match[0].length, maxBytes),
-    matchIndex: match.index,
+    text: matchingExcerptAt(line, matchIndex, matchEnd - matchIndex, maxBytes),
+    matchIndex,
   };
 }
 

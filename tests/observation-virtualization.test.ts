@@ -289,29 +289,48 @@ describe("observation virtualization", () => {
     });
   });
 
-  it("returns match-centered executable next actions for deep terms and phrase evidence", async () => {
+  it("returns exact match-centered actions for deep terms, phrase, Unicode, CRLF, and clipped lines", async () => {
     const { runtime } = await setup({ threshold: 1_000_000 });
-    const deepPrefix = "前🙂".repeat(3_000);
     const cases = [
       {
-        toolCallId: "deep-single-term",
-        text: `${deepPrefix} DEEP-SINGLE-MARKER authoritative evidence`,
+        toolCallId: "deep-one-line-clipped",
+        text: `${"x".repeat(18 * 1024)}DEEP-SINGLE-MARKER${"z".repeat(4 * 1024)}`,
         query: "deep_single_marker",
         matchMode: "terms" as const,
+        anchor: "DEEP-SINGLE-MARKER",
         expectedEvidence: ["DEEP-SINGLE-MARKER"],
+        clipped: true,
+      },
+      {
+        toolCallId: "deep-case-fold-expansion",
+        text: `${"İ前🙂".repeat(4_000)}CASE-FOLD-ANCHOR${"尾".repeat(10_000)}`,
+        query: "case_fold_anchor",
+        matchMode: "terms" as const,
+        anchor: "CASE-FOLD-ANCHOR",
+        expectedEvidence: ["CASE-FOLD-ANCHOR"],
       },
       {
         toolCallId: "deep-phrase",
-        text: `${deepPrefix} deep phrase marker authoritative evidence`,
+        text: `${"前🙂".repeat(3_000)}deep phrase marker authoritative evidence`,
         query: "deep phrase marker",
         matchMode: "phrase" as const,
+        anchor: "deep phrase marker",
         expectedEvidence: ["deep phrase marker"],
       },
       {
+        toolCallId: "deep-crlf",
+        text: `${"decoy\r\n".repeat(3_000)}CRLF-DEEP-MARKER\r\nauthoritative evidence`,
+        query: "crlf_deep_marker",
+        matchMode: "terms" as const,
+        anchor: "CRLF-DEEP-MARKER",
+        expectedEvidence: ["CRLF-DEEP-MARKER"],
+      },
+      {
         toolCallId: "deep-non-contiguous-terms",
-        text: `${deepPrefix}\nfirst-deep-term evidence\n${"nearby context\n".repeat(10)}second-deep-term evidence`,
+        text: `${"前🙂".repeat(3_000)}\nfirst-deep-term evidence\r\n${"nearby context\r\n".repeat(10)}second-deep-term evidence`,
         query: "first_deep_term second_deep_term",
         matchMode: "terms" as const,
+        anchor: "first-deep-term",
         expectedEvidence: ["first-deep-term", "second-deep-term"],
       },
     ];
@@ -327,12 +346,42 @@ describe("observation virtualization", () => {
       const hit = searched.results.find((result) => result.observationId === archived.observationId);
       if (hit === undefined) throw new Error(`expected search hit for ${fixture.toolCallId}`);
 
-      expect(hit.nextAction.arguments.offset).toBeGreaterThan(8 * 1024);
+      const anchorIndex = fixture.text.indexOf(fixture.anchor);
+      const expectedOffset = Buffer.byteLength(fixture.text.slice(0, anchorIndex), "utf8") - 4 * 1024;
+      expect(hit.nextAction.arguments.offset).toBe(expectedOffset);
+      expect(hit.matches.some((match) => match.text.includes(fixture.anchor))).toBe(true);
+      if (fixture.clipped === true) {
+        expect(Buffer.byteLength(hit.matches[0]?.text ?? "", "utf8")).toBeLessThanOrEqual(1024);
+      }
+
       const replay = await runtime.get(hit.nextAction.arguments);
       expect(Buffer.byteLength(replay.evidence?.text ?? "", "utf8")).toBeLessThanOrEqual(8 * 1024);
       expect(replay.evidence?.text).not.toContain("�");
       for (const evidence of fixture.expectedEvidence) expect(replay.evidence?.text).toContain(evidence);
     }
+  });
+
+  it("preserves a deep executable next action when its search preview is omitted", async () => {
+    const { runtime } = await setup({ threshold: 1_000_000 });
+    const deepPrefix = "x".repeat(18 * 1024);
+    for (let index = 0; index < 10; index += 1) {
+      await runtime.virtualize({
+        toolCallId: `preview-omission-${index}`,
+        toolName: "read",
+        text: `${deepPrefix} preview-omission-marker artifact-${index} ${"tail ".repeat(500)}`,
+        isError: false,
+      });
+    }
+
+    const searched = await runtime.search({ query: "preview-omission-marker", maxBytes: MIN_SEARCH_PAYLOAD_BYTES });
+    const hit = searched.results.find((result) => result.matches.length === 0);
+    if (hit === undefined) throw new Error("expected a bounded result whose preview was omitted");
+    expect(searched.omittedMatches).toBeGreaterThan(0);
+    expect(hit.nextAction.arguments.offset).toBe(Buffer.byteLength(deepPrefix, "utf8") + 1 - 4 * 1024);
+
+    const replay = await runtime.get(hit.nextAction.arguments);
+    expect(replay.evidence?.text).toContain("preview-omission-marker");
+    expect(Buffer.byteLength(replay.evidence?.text ?? "", "utf8")).toBeLessThanOrEqual(8 * 1024);
   });
 
   it("preserves ranked recall across 39 bounded queries", async () => {
@@ -922,25 +971,32 @@ describe("observation virtualization", () => {
     expect(searched.results[0]?.matches.map((match) => match.line)).toEqual([1, 2]);
   });
 
-  it("uses an artifact ID for a retrievable legacy observation next action", async () => {
+  it("uses an artifact ID and exact deep offset for a retrievable legacy observation next action", async () => {
     const { runtime, store } = await setup({ threshold: 1 });
+    const prefix = "legacy-prefix🙂".repeat(1_500);
+    const marker = "legacy-searchable-evidence";
     const legacy = await store.archive({
       observationId: "legacy-observation-id",
       toolName: "read",
       sessionId: "legacy-session",
-      content: "legacy searchable evidence",
+      content: `${prefix}${marker}`,
     });
+    const expectedOffset = Buffer.byteLength(prefix, "utf8") - 4 * 1024;
 
-    const searched = await runtime.search({ query: "searchable legacy" });
+    const searched = await runtime.search({ query: "legacy_searchable_evidence" });
     const hit = searched.results[0];
     expect(hit).toMatchObject({
       observationId: "legacy-observation-id",
       observation: { observationId: "legacy-observation-id" },
-      nextAction: { tool: "context_vault_obs_get", arguments: { id: legacy.artifactId, offset: 0 } },
+      nextAction: {
+        tool: "context_vault_obs_get",
+        arguments: { id: legacy.artifactId, offset: expectedOffset },
+      },
     });
     if (hit === undefined) throw new Error("expected legacy search hit");
     const fetched = await runtime.get(hit.nextAction.arguments);
-    expect(fetched.evidence?.text).toBe("legacy searchable evidence");
+    expect(fetched.evidence?.text).toContain(marker);
+    expect(Buffer.byteLength(fetched.evidence?.text ?? "", "utf8")).toBeLessThanOrEqual(8 * 1024);
   });
 
   it("bounds terms and match lines while preserving observation truncation and get handoff", async () => {
