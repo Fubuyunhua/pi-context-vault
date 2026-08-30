@@ -70,6 +70,31 @@ describe("artifact store", () => {
     await expect(store.garbageCollect({ retentionDays: 1, quotaBytes: -1 })).rejects.toThrow("quotaBytes");
   });
 
+  it("reports physical deduplicated artifact storage usage without changing evidence", async () => {
+    const root = await tempRoot();
+    const store = storeAt(root);
+    const content = "shared quota evidence";
+    const first = await store.archive({
+      observationId: "usage-1",
+      toolName: "read",
+      sessionId: "session-1",
+      content,
+    });
+    await store.archive({
+      observationId: "usage-2",
+      toolName: "read",
+      sessionId: "session-2",
+      content,
+    });
+
+    await expect(store.storageUsage()).resolves.toEqual({
+      artifactCount: 1,
+      usedBytes: Buffer.byteLength(content),
+    });
+    await expect(store.read(first.artifactId)).resolves.toBe(content);
+    expect(await store.listMetadata()).toHaveLength(2);
+  });
+
   it("redacts before hashing and persistence and records evidence metadata", async () => {
     const root = await tempRoot();
     const store = storeAt(root);

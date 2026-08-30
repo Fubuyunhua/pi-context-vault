@@ -108,6 +108,9 @@ pi -e ./extensions/index.ts
 ```
 
 `gc` 只清理 Vault artifacts 和 metadata，并遵守 lease/reference 安全规则；它不会触碰旧仓库状态或 Repo Context 状态。
+归档不会自动运行 GC：`projectQuotaBytes` 是物理去重 artifact payload bytes 的手工 GC target，`retentionDays`
+也只在调用 `gc` 时应用。Metadata 和文件系统开销不计入该 target。Status 会返回 artifact `usedBytes`、
+`targetBytes` 和 `overBudget`；超过 target 时 Vault 会标记为 degraded 并发出 warning，但不会删除或迁移任何证据。
 
 `rebuild` 是不执行操作的迁移提示，精确返回：
 

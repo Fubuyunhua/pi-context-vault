@@ -19,6 +19,9 @@ export const EXTENSION_ID = "context-vault" as const;
 export const EXTENSION_VERSION = "0.3.0" as const;
 export const REBUILD_MIGRATION_MESSAGE =
   "Repository rebuild has moved to pi-repo-context.\nInstall pi-repo-context and use /repo-context rebuild." as const;
+export const PROJECT_QUOTA_EXCEEDED_WARNING =
+  "Context Vault artifact storage exceeds the manual GC target; run /context-vault gc." as const;
+const STORAGE_USAGE_UNAVAILABLE_WARNING = "Context Vault artifact storage usage is unavailable." as const;
 
 export interface RegisterContextVaultOptions {
   env?: NodeJS.ProcessEnv;
@@ -104,9 +107,33 @@ function stateOutsideProjectTree(state: ProjectStatePaths): boolean {
   return isAbsolute(path) || path === ".." || path.startsWith(`..${sep}`);
 }
 
-export function runtimeStatus(runtime: RuntimeState) {
+async function storageStatus(runtime: RuntimeState) {
+  if (runtime.store === undefined || runtime.config === undefined) return undefined;
+  try {
+    const usage = await runtime.store.storageUsage();
+    return {
+      available: true as const,
+      enforcement: "manual-gc" as const,
+      ...usage,
+      targetBytes: runtime.config.projectQuotaBytes,
+      retentionDays: runtime.config.retentionDays,
+      overBudget: usage.usedBytes > runtime.config.projectQuotaBytes,
+    };
+  } catch (error) {
+    return { available: false as const, error: errorMessage(error) };
+  }
+}
+
+export async function runtimeStatus(runtime: RuntimeState) {
   const observation = runtime.observations?.status();
-  const degraded = runtime.failures.length > 0 || observation?.degraded === true;
+  const storage = await storageStatus(runtime);
+  const storageDegraded = storage?.available === false || storage?.overBudget === true;
+  const warnings = [
+    ...runtime.warnings,
+    ...(storage?.available === true && storage.overBudget ? [PROJECT_QUOTA_EXCEEDED_WARNING] : []),
+    ...(storage?.available === false ? [STORAGE_USAGE_UNAVAILABLE_WARNING] : []),
+  ];
+  const degraded = runtime.failures.length > 0 || observation?.degraded === true || storageDegraded;
   return {
     extension: { id: EXTENSION_ID, version: EXTENSION_VERSION },
     initialized: runtime.initialized,
@@ -114,6 +141,7 @@ export function runtimeStatus(runtime: RuntimeState) {
     project: runtime.state
       ? { id: runtime.state.projectId, root: runtime.state.projectRoot, stateRoot: runtime.state.stateRoot }
       : undefined,
+    storage,
     components: {
       observations: observation
         ? { available: true, ...observation }
@@ -122,7 +150,7 @@ export function runtimeStatus(runtime: RuntimeState) {
             error: runtime.failures.find((failure) => failure.component === "initialization")?.error,
           },
     },
-    warnings: [...runtime.warnings],
+    warnings,
     telemetry: runtime.telemetry.snapshot(),
     failures: runtime.failures.map((failure) => ({ ...failure })),
   };
@@ -165,14 +193,19 @@ function modelVisibleTelemetry(telemetry: TelemetrySnapshot): TelemetrySnapshot 
   };
 }
 
-function modelVisibleStatus(runtime: RuntimeState) {
+async function modelVisibleStatus(runtime: RuntimeState) {
+  const status = await runtimeStatus(runtime);
   const observation = runtime.observations?.status();
   const initializationFailure = runtime.failures.some((failure) => failure.component === "initialization");
   return {
     extension: { id: EXTENSION_ID, version: EXTENSION_VERSION },
     initialized: runtime.initialized,
-    degraded: runtime.failures.length > 0 || observation?.degraded === true,
+    degraded: status.degraded,
     project: runtime.state ? { id: runtime.state.projectId } : undefined,
+    storage:
+      status.storage?.available === false
+        ? { available: false, error: STORAGE_USAGE_UNAVAILABLE_WARNING }
+        : status.storage,
     components: {
       observations: observation
         ? {
@@ -192,7 +225,7 @@ function modelVisibleStatus(runtime: RuntimeState) {
             error: initializationFailure ? MODEL_INITIALIZATION_ERROR : undefined,
           },
     },
-    warnings: runtime.warnings.map((warning) => warning),
+    warnings: status.warnings.map((warning) => warning),
     telemetry: modelVisibleTelemetry(runtime.telemetry.snapshot()),
     failures: runtime.failures.map((failure) => ({
       component: failure.component,
@@ -264,7 +297,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
     if (ctx.hasUI) {
       ctx.ui.setStatus(
         EXTENSION_ID,
-        `vault v${EXTENSION_VERSION}${runtimeStatus(runtime).degraded ? " degraded" : ""}`,
+        `vault v${EXTENSION_VERSION}${(await runtimeStatus(runtime)).degraded ? " degraded" : ""}`,
       );
     }
   });
@@ -315,7 +348,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
 
   pi.on("session_shutdown", async (_event, ctx) => {
     if (!ctx.hasUI && !telemetryFrameEmitted) {
-      console.log(frameTelemetry(runtimeStatus(runtime)));
+      console.log(frameTelemetry(await runtimeStatus(runtime)));
       telemetryFrameEmitted = true;
     }
     await dispose();
@@ -375,7 +408,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
     description: "Report Context Vault Observation storage, reduction, and lifecycle status.",
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute() {
-      return toolResponse(async () => modelVisibleStatus(runtime));
+      return toolResponse(() => modelVisibleStatus(runtime));
     },
   });
 
@@ -394,13 +427,13 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
     async handler(args, ctx) {
       const subcommand = args.trim().split(/\s+/u)[0] || "status";
       if (subcommand === "status") {
-        const status = runtimeStatus(runtime);
+        const status = await runtimeStatus(runtime);
         notify(ctx, status, status.degraded ? "warning" : "info");
         return;
       }
       if (subcommand === "status-json") {
         if (!telemetryFrameEmitted) {
-          notify(ctx, frameTelemetry(runtimeStatus(runtime)));
+          notify(ctx, frameTelemetry(await runtimeStatus(runtime)));
           telemetryFrameEmitted = true;
         }
         return;
@@ -425,7 +458,7 @@ export function registerContextVault(pi: ExtensionAPI, options: RegisterContextV
         return;
       }
       if (subcommand === "doctor") {
-        const status = runtimeStatus(runtime);
+        const status = await runtimeStatus(runtime);
         const report = {
           status: status.degraded ? "degraded" : "healthy",
           stateOutsideProjectTree: runtime.state ? stateOutsideProjectTree(runtime.state) : undefined,
