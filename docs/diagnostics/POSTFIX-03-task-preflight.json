@@ -1,0 +1,60 @@
+{
+  "generatedAt": "2026-08-30T20:09:57.454Z",
+  "network": "none",
+  "tasks": [
+    "sphinx-doc__sphinx-8035",
+    "django__django-12262"
+  ],
+  "pressureV2": {
+    "source": "postfix-02-pressure-v2-postfix.json",
+    "accepted": true,
+    "receiptVisibilityAccepted": true
+  },
+  "accepted": true,
+  "rows": [
+    {
+      "role": "repo-localization",
+      "task": "sphinx-doc__sphinx-8035",
+      "mode": "base",
+      "exitCode": 1,
+      "timedOut": false,
+      "durationMs": 3070,
+      "expected": "fail",
+      "accepted": true,
+      "outputTail": "tps://setuptools.pypa.io/en/latest/pkg_resources.html\n    from pkg_resources import iter_entry_points\n\n../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154\n../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154\n../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154\n../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154\n  /opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('sphinxcontrib')`.\n  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages\n    declare_namespace(pkg)\n\nsphinx/directives/patches.py:15\n  /testbed/sphinx/directives/patches.py:15: DeprecationWarning: The `docutils.parsers.rst.directive.html` module will be removed in Docutils 2.0. Since Docutils 0.18, the \"Meta\" node is defined in `docutils.parsers.rst.directives.misc`.\n    from docutils.parsers.rst.directives import images, html, tables\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED tests/test_ext_autodoc_private_members.py::test_private_members - Asse...\n1 failed, 2 passed, 7 warnings in 0.56s\n\n"
+    },
+    {
+      "role": "repo-localization",
+      "task": "sphinx-doc__sphinx-8035",
+      "mode": "gold",
+      "exitCode": 0,
+      "timedOut": false,
+      "durationMs": 2043,
+      "expected": "pass",
+      "accepted": true,
+      "outputTail": "tuple(LooseVersion(docutils.__version__).version)\n\nsphinx/registry.py:22\n  /testbed/sphinx/registry.py:22: DeprecationWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html\n    from pkg_resources import iter_entry_points\n\n../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154\n../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154\n../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154\n../opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154\n  /opt/miniconda3/envs/testbed/lib/python3.9/site-packages/pkg_resources/__init__.py:3154: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('sphinxcontrib')`.\n  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages\n    declare_namespace(pkg)\n\nsphinx/directives/patches.py:15\n  /testbed/sphinx/directives/patches.py:15: DeprecationWarning: The `docutils.parsers.rst.directive.html` module will be removed in Docutils 2.0. Since Docutils 0.18, the \"Meta\" node is defined in `docutils.parsers.rst.directives.misc`.\n    from docutils.parsers.rst.directives import images, html, tables\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n3 passed, 7 warnings in 0.44s\n\n"
+    },
+    {
+      "role": "local-control",
+      "task": "django__django-12262",
+      "mode": "base",
+      "exitCode": 1,
+      "timedOut": false,
+      "durationMs": 5108,
+      "expected": "fail",
+      "accepted": true,
+      "outputTail": "ceived unexpected keyword argument 'kwarg'\"\n\n======================================================================\nFAIL: test_simple_tag_errors (template_tests.test_custom.SimpleTagTests)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/opt/miniconda3/envs/testbed/lib/python3.6/unittest/case.py\", line 59, in testPartExecutor\n    yield\n  File \"/opt/miniconda3/envs/testbed/lib/python3.6/unittest/case.py\", line 605, in run\n    testMethod()\n  File \"/testbed/tests/template_tests/test_custom.py\", line 124, in test_simple_tag_errors\n    self.engine.from_string(entry[1])\n  File \"/opt/miniconda3/envs/testbed/lib/python3.6/contextlib.py\", line 99, in __exit__\n    self.gen.throw(type, value, traceback)\n  File \"/testbed/django/test/testcases.py\", line 683, in _assert_raises_or_warns_cm\n    self.assertIn(expected_message, str(getattr(cm, cm_attr)))\n  File \"/opt/miniconda3/envs/testbed/lib/python3.6/unittest/case.py\", line 1089, in assertIn\n    self.fail(self._formatMessage(msg, standardMsg))\n  File \"/opt/miniconda3/envs/testbed/lib/python3.6/unittest/case.py\", line 670, in fail\n    raise self.failureException(msg)\nAssertionError: \"'simple_keyword_only_param' received multiple values for keyword argument 'kwarg'\" not found in \"'simple_keyword_only_param' received unexpected keyword argument 'kwarg'\"\n\n----------------------------------------------------------------------\nRan 22 tests in 0.144s\n\nFAILED (failures=2, errors=2)\n"
+    },
+    {
+      "role": "local-control",
+      "task": "django__django-12262",
+      "mode": "gold",
+      "exitCode": 0,
+      "timedOut": false,
+      "durationMs": 3336,
+      "expected": "pass",
+      "accepted": true,
+      "outputTail": "Testing against Django installed in '/testbed/django' with up to 16 processes\nSystem check identified no issues (0 silenced).\n\n......................\n----------------------------------------------------------------------\nRan 22 tests in 0.132s\n\nOK\n"
+    }
+  ]
+}
