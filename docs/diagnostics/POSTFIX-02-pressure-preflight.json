@@ -1,0 +1,28 @@
+{
+  "generatedAt": "2026-08-30T07:40:49.122Z",
+  "accepted": true,
+  "rows": [
+    {
+      "arm": "none",
+      "chunks": 12,
+      "originalBytes": 786432,
+      "modelVisibleBytes": 786432,
+      "replacedResults": 0,
+      "ratio": 1,
+      "searchBytes": 0,
+      "searchResults": 0,
+      "getContainsContract": false
+    },
+    {
+      "arm": "vault",
+      "chunks": 12,
+      "originalBytes": 786432,
+      "modelVisibleBytes": 49152,
+      "replacedResults": 12,
+      "ratio": 0.0625,
+      "searchBytes": 1772,
+      "searchResults": 1,
+      "getContainsContract": true
+    }
+  ]
+}
