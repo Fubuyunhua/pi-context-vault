@@ -113,7 +113,10 @@ Tool results whose names start with `context_vault_` or `repo_context_` are inte
 ```
 
 `gc` collects only Vault artifacts and metadata under existing lease/reference safety rules. It never touches legacy or
-Repo Context repository state.
+Repo Context repository state. Archival never runs GC automatically: `projectQuotaBytes` is a manual GC target for
+physical, deduplicated artifact payload bytes, and `retentionDays` is applied only when `gc` is invoked. Metadata and
+filesystem overhead are not counted toward that target. Status reports artifact `usedBytes`, `targetBytes`, and
+`overBudget`; an over-budget vault is degraded and emits a warning without deleting or migrating any evidence.
 
 `rebuild` is an inert migration stub and returns exactly:
 

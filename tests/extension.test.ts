@@ -6,7 +6,12 @@ import { join, relative } from "node:path";
 import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "../src/artifacts/store.js";
-import { REBUILD_MIGRATION_MESSAGE, type RegisterContextVaultOptions, registerContextVault } from "../src/extension.js";
+import {
+  PROJECT_QUOTA_EXCEEDED_WARNING,
+  REBUILD_MIGRATION_MESSAGE,
+  type RegisterContextVaultOptions,
+  registerContextVault,
+} from "../src/extension.js";
 import { LEGACY_REPO_CONFIG_WARNING } from "../src/state/config.js";
 import { resolveProjectState } from "../src/state/project-state.js";
 import { extractTelemetryFrame } from "../src/telemetry-frame.js";
@@ -175,7 +180,59 @@ describe("observation-only extension", () => {
     const result = await executeStatus(target);
     const parsed = expectModelStatusPrivate(result, ["private-home-marker", target.project, target.piRoot]);
     expect(parsed.project).toEqual({ id: expect.any(String) });
+    expect(parsed.storage).toEqual({
+      available: true,
+      enforcement: "manual-gc",
+      artifactCount: 0,
+      usedBytes: 0,
+      targetBytes: 512 * 1024 * 1024,
+      retentionDays: 30,
+      overBudget: false,
+    });
     expect(parsed.components.observations).toMatchObject({ available: true, degraded: false, failures: [] });
+  });
+
+  it("reports a manual GC target breach without deleting Observation evidence", async () => {
+    const target = await harness({
+      archivePolicy: "all",
+      archiveMinBytes: 0,
+      replacementThresholdBytes: 1,
+      projectQuotaBytes: 32,
+      retentionDays: 7,
+    });
+    await target.handlers.get("session_start")?.({}, target.ctx);
+    await target.handlers.get("tool_result")?.(toolEvent("read", "quota evidence ".repeat(20)), target.ctx);
+
+    const projects = join(target.piRoot, "context-vault", "projects");
+    const [projectId] = await readdir(projects);
+    const stateRoot = join(projects, projectId as string);
+    const store = new ArtifactStore({
+      artifactsRoot: join(stateRoot, "artifacts"),
+      metadataRoot: join(stateRoot, "metadata"),
+    });
+    const [metadata] = await store.listMetadata();
+    expect(metadata).toBeDefined();
+    if (metadata === undefined) throw new Error("archived Observation metadata is missing");
+    const evidenceBeforeStatus = await store.read(metadata.artifactId);
+
+    const result = await executeStatus(target);
+    const parsed = expectModelStatusPrivate(result, ["private-home-marker", target.project, target.piRoot]);
+    expect(parsed).toMatchObject({ degraded: true, warnings: [PROJECT_QUOTA_EXCEEDED_WARNING] });
+    expect(parsed.storage).toEqual({
+      available: true,
+      enforcement: "manual-gc",
+      artifactCount: 1,
+      usedBytes: Buffer.byteLength(evidenceBeforeStatus),
+      targetBytes: 32,
+      retentionDays: 7,
+      overBudget: true,
+    });
+    await expect(store.read(metadata.artifactId)).resolves.toBe(evidenceBeforeStatus);
+
+    await target.commands.get("context-vault")?.handler("status", target.ctx);
+    const localStatus = JSON.parse(target.notifications.at(-1)?.text ?? "null");
+    expect(target.notifications.at(-1)?.type).toBe("warning");
+    expect(localStatus.storage).toEqual(parsed.storage);
   });
 
   it("replaces initialization errors in model status while retaining raw local diagnostics", async () => {

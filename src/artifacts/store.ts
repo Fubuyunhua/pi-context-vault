@@ -114,6 +114,11 @@ export interface GarbageCollectResult {
   quotaSatisfied: boolean;
 }
 
+export interface ArtifactStorageUsage {
+  artifactCount: number;
+  usedBytes: number;
+}
+
 interface OwnedDirectoryIdentity {
   path: string;
   canonicalPath: string;
@@ -716,6 +721,16 @@ export class ArtifactStore {
       let latest: ArtifactMetadata | undefined;
       for (const value of values.values()) latest = value;
       return latest;
+    });
+  }
+
+  async storageUsage(): Promise<ArtifactStorageUsage> {
+    return this.#withStoreLock(async () => {
+      const artifacts = await this.#listArtifactsUnlocked();
+      return {
+        artifactCount: artifacts.size,
+        usedBytes: [...artifacts.values()].reduce((sum, artifact) => sum + artifact.size, 0),
+      };
     });
   }
 
