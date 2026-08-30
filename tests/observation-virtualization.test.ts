@@ -217,7 +217,7 @@ describe("observation virtualization", () => {
       expect(hit.observationId).toMatch(/^obs_/);
       expect(hit.nextAction).toEqual({
         tool: "context_vault_obs_get",
-        arguments: { id: hit.observationId },
+        arguments: { id: hit.observationId, offset: 0 },
       });
     }
     const replay = await runtime.get(first.results[0]?.nextAction.arguments ?? { id: "missing" });
@@ -287,6 +287,52 @@ describe("observation virtualization", () => {
       observationSearchPayloadBytesTotal:
         minimumBase.serializedBytes + first.serializedBytes + second.serializedBytes + roomy.serializedBytes,
     });
+  });
+
+  it("returns match-centered executable next actions for deep terms and phrase evidence", async () => {
+    const { runtime } = await setup({ threshold: 1_000_000 });
+    const deepPrefix = "前🙂".repeat(3_000);
+    const cases = [
+      {
+        toolCallId: "deep-single-term",
+        text: `${deepPrefix} DEEP-SINGLE-MARKER authoritative evidence`,
+        query: "deep_single_marker",
+        matchMode: "terms" as const,
+        expectedEvidence: ["DEEP-SINGLE-MARKER"],
+      },
+      {
+        toolCallId: "deep-phrase",
+        text: `${deepPrefix} deep phrase marker authoritative evidence`,
+        query: "deep phrase marker",
+        matchMode: "phrase" as const,
+        expectedEvidence: ["deep phrase marker"],
+      },
+      {
+        toolCallId: "deep-non-contiguous-terms",
+        text: `${deepPrefix}\nfirst-deep-term evidence\n${"nearby context\n".repeat(10)}second-deep-term evidence`,
+        query: "first_deep_term second_deep_term",
+        matchMode: "terms" as const,
+        expectedEvidence: ["first-deep-term", "second-deep-term"],
+      },
+    ];
+
+    for (const fixture of cases) {
+      const archived = await runtime.virtualize({
+        toolCallId: fixture.toolCallId,
+        toolName: "read",
+        text: fixture.text,
+        isError: false,
+      });
+      const searched = await runtime.search({ query: fixture.query, matchMode: fixture.matchMode });
+      const hit = searched.results.find((result) => result.observationId === archived.observationId);
+      if (hit === undefined) throw new Error(`expected search hit for ${fixture.toolCallId}`);
+
+      expect(hit.nextAction.arguments.offset).toBeGreaterThan(8 * 1024);
+      const replay = await runtime.get(hit.nextAction.arguments);
+      expect(Buffer.byteLength(replay.evidence?.text ?? "", "utf8")).toBeLessThanOrEqual(8 * 1024);
+      expect(replay.evidence?.text).not.toContain("�");
+      for (const evidence of fixture.expectedEvidence) expect(replay.evidence?.text).toContain(evidence);
+    }
   });
 
   it("preserves ranked recall across 39 bounded queries", async () => {
@@ -890,7 +936,7 @@ describe("observation virtualization", () => {
     expect(hit).toMatchObject({
       observationId: "legacy-observation-id",
       observation: { observationId: "legacy-observation-id" },
-      nextAction: { tool: "context_vault_obs_get", arguments: { id: legacy.artifactId } },
+      nextAction: { tool: "context_vault_obs_get", arguments: { id: legacy.artifactId, offset: 0 } },
     });
     if (hit === undefined) throw new Error("expected legacy search hit");
     const fetched = await runtime.get(hit.nextAction.arguments);
@@ -919,7 +965,7 @@ describe("observation virtualization", () => {
       observationId: newest.observationId,
       observation: { observationId: newest.observationId },
       matchesTruncated: false,
-      nextAction: { tool: "context_vault_obs_get", arguments: { id: newest.observationId } },
+      nextAction: { tool: "context_vault_obs_get", arguments: { id: newest.observationId, offset: 0 } },
     });
     expect(bounded.results[0]?.nextAction.arguments).not.toHaveProperty("query");
 

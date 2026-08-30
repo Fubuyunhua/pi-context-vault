@@ -384,7 +384,7 @@ describe("observation-only extension", () => {
     expect(getTool?.promptSnippet).toContain("observation or artifact ID");
     expect(searchTool?.promptGuidelines).toEqual([expect.stringContaining("context_vault_obs_search")]);
     expect(searchTool?.promptGuidelines?.[0]).toContain("context_vault_obs_get");
-    expect(searchTool?.promptGuidelines?.[0]).toContain("nextAction.arguments.id");
+    expect(searchTool?.promptGuidelines?.[0]).toContain("all of nextAction.arguments");
     expect(searchTool?.promptGuidelines?.[0]).toContain("phrase mode is only for contiguous literal matching");
     expect(searchTool?.parameters.properties.matchMode).toMatchObject({ default: "terms" });
     expect(searchTool?.parameters.properties.matchMode.anyOf).toEqual([
@@ -422,7 +422,7 @@ describe("observation-only extension", () => {
     });
     expect(hit.nextAction).toEqual({
       tool: "context_vault_obs_get",
-      arguments: { id: hit.observationId },
+      arguments: { id: hit.observationId, offset: 0 },
     });
     const fetched = await getTool?.execute("get", hit.nextAction.arguments, undefined, undefined, target.ctx);
     expect(fetched.isError).toBeUndefined();
