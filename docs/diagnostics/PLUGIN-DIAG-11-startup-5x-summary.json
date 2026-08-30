@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-30T17:47:47.341Z",
+  "generatedAt": "2026-08-30T17:50:00.391Z",
   "repeats": 5,
   "arms": {
     "none": {
@@ -14,6 +14,17 @@
         "median": 46.5,
         "p95": 47.93
       },
+      "startupCpuMs": {
+        "values": [
+          31,
+          47,
+          63,
+          47,
+          47
+        ],
+        "median": 47,
+        "p95": 63
+      },
       "firstSearchMs": {
         "values": [
           0.22,
@@ -24,6 +35,17 @@
         ],
         "median": 0.22,
         "p95": 0.27
+      },
+      "firstSearchCpuMs": {
+        "values": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "p95": 0
       },
       "peakRssMb": {
         "values": [
@@ -89,6 +111,17 @@
         "median": 199.89,
         "p95": 211.4
       },
+      "startupCpuMs": {
+        "values": [
+          249,
+          329,
+          202,
+          203,
+          204
+        ],
+        "median": 204,
+        "p95": 329
+      },
       "firstSearchMs": {
         "values": [
           0.18,
@@ -99,6 +132,17 @@
         ],
         "median": 0.18,
         "p95": 0.26
+      },
+      "firstSearchCpuMs": {
+        "values": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "median": 0,
+        "p95": 0
       },
       "peakRssMb": {
         "values": [
@@ -167,6 +211,17 @@
         "median": 56.27,
         "p95": 62.08
       },
+      "startupCpuMs": {
+        "values": [
+          125,
+          47,
+          109,
+          79,
+          110
+        ],
+        "median": 109,
+        "p95": 125
+      },
       "firstSearchMs": {
         "values": [
           2402.13,
@@ -177,6 +232,17 @@
         ],
         "median": 2409.35,
         "p95": 2440.97
+      },
+      "firstSearchCpuMs": {
+        "values": [
+          3811,
+          4125,
+          4047,
+          3860,
+          4141
+        ],
+        "median": 4047,
+        "p95": 4141
       },
       "peakRssMb": {
         "values": [
@@ -244,6 +310,17 @@
         "median": 216.22,
         "p95": 224.73
       },
+      "startupCpuMs": {
+        "values": [
+          281,
+          203,
+          265,
+          156,
+          282
+        ],
+        "median": 265,
+        "p95": 282
+      },
       "firstSearchMs": {
         "values": [
           2472.89,
@@ -254,6 +331,17 @@
         ],
         "median": 2473.88,
         "p95": 2503.02
+      },
+      "firstSearchCpuMs": {
+        "values": [
+          3922,
+          4000,
+          3687,
+          4250,
+          4125
+        ],
+        "median": 4000,
+        "p95": 4250
       },
       "peakRssMb": {
         "values": [

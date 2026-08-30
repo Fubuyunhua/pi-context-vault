@@ -20,7 +20,7 @@ Fixture: fresh Git repository with 1,000 TypeScript files; separate process and 
 | REPO | 56.3 / 62.1ms | 2.409 / 2.441s | 352.5MB | 323.0MB | 53.8MB | 0.44MB | 6 |
 | BOTH | 216.2 / 224.7ms | 2.474 / 2.503s | 355.2MB | 331.3MB | 55.3MB | 0.44MB | 9 |
 
-All 20 startup runs returned the expected behavior. Repo remains lazy at startup; most of its cost is paid on first search. BOTH approximately combines Vault bind overhead with Repo first-search/RSS cost.
+All 20 startup runs returned the expected behavior. Median startup CPU was 47ms NONE, 204ms VAULT, 109ms REPO, and 265ms BOTH. Median first-search CPU was about 4.05s REPO and 4.00s BOTH (CPU exceeds wall because indexing uses concurrent work). Repo remains lazy at startup; most of its cost is paid on first search. BOTH approximately combines Vault bind overhead with Repo first-search/RSS cost.
 
 The deprecated `context_vault_repo_map` alias is registered for compatibility but inactive. Active tool counts are exactly native 4 + Vault 3 + Repo 2; there are no active duplicate names.
 
