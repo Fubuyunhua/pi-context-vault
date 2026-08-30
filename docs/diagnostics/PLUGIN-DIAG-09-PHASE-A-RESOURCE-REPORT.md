@@ -94,19 +94,30 @@ target reached: true
 reduction time: 25ms
 ```
 
-### 1MB archive blocker
+### 1MB archive post-fix verification
 
-The planned 1MB gate could not complete because no-match secret redaction is quadratic on long lines. Clean direct timings:
+The original gate exposed quadratic no-match secret redaction on long lines:
 
-| Single-line bytes | Redaction time |
-|---:|---:|
-| 16KB | 244ms |
-| 64KB | 4.02s |
-| 128KB | 16.40s |
-| 256KB | 65.75s |
-| 256KB split into 1KB lines | 280ms |
+| Single-line bytes | Before #70 | After #70 |
+|---:|---:|---:|
+| 16KB | 244ms | 0.62ms |
+| 64KB | 4.02s | 0.86ms |
+| 128KB | 16.40s | 0.83ms |
+| 256KB | 65.75s | 1.68ms |
+| 256KB split into 1KB lines | 280ms | 1.78ms |
 
-A 1MB archive exceeded both 300s and 600s attempts. Tracked as Context Vault #70. The 1MB/duplicate Phase A gate remains blocked until this is fixed.
+Context Vault #70 fixed the scaling on main `cba6f87`. The formerly blocked payload gate now passes:
+
+```text
+1MB unique archive:       477ms
+1MB first duplicate:      446ms
+1MB repeated duplicate:    25ms
+same artifact ID:         true
+second state growth:      491 bytes
+receipt:                  512 bytes
+```
+
+Secret persistence, compatibility tests, and reduction remained correct. Full CI passed: 223 tests, 1 skipped, package smoke passed.
 
 ## Search→get handoff follow-up
 
@@ -148,17 +159,15 @@ Passed:
 - 100/1,000/5,000 Repo cold/warm/1-file scale;
 - Repo/BOTH first-search startup and exact tool surface;
 - 100/1,000/5,000 Vault archive/search scale;
-- Vault redaction correctness, 64KB deduplication, and context reduction;
+- Vault redaction correctness, 1MB unique/duplicate archive, and context reduction;
 - dual shutdown without duplicate tools or process hang after explicit lifecycle shutdown;
 - forced BOTH crash/restart recovery with Vault evidence and Repo fallback intact;
 - retrieval-required pressure v2 and exact deep search→get handoff after Context Vault #69.
 
-Open deterministic defects:
+Open deterministic defect:
 
-- Context Vault #70: quadratic long-line secret redaction;
-- Repo Context #17: first stale incremental search misses exact pending-file evidence.
+- Repo Context #17 remains open after post-fix verification: its Windows regression test uses a POSIX-only path predicate, and the real default-scheduler reproduction still misses exact pending-file evidence on the first query.
 
-Remaining gates:
+Remaining gate:
 
-- rerun 1MB unique/duplicate Vault archive after #70;
-- rerun 5,000-file/100-change first query after #17.
+- rerun the Windows focused test and 5,000-file/100-change default-scheduler first query after the revised #17 fix.

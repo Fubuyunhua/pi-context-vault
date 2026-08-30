@@ -1,0 +1,75 @@
+{
+  "generatedAt": "2026-08-30T17:02:26.159Z",
+  "runtime": "Bun 1.3.14",
+  "rows": [
+    {
+      "shape": "single-line",
+      "bytes": 1024,
+      "durationMs": 0.93,
+      "redactionCount": 0,
+      "unchanged": true
+    },
+    {
+      "shape": "single-line",
+      "bytes": 16384,
+      "durationMs": 0.62,
+      "redactionCount": 0,
+      "unchanged": true
+    },
+    {
+      "shape": "single-line",
+      "bytes": 65536,
+      "durationMs": 0.86,
+      "redactionCount": 0,
+      "unchanged": true
+    },
+    {
+      "shape": "single-line",
+      "bytes": 131072,
+      "durationMs": 0.83,
+      "redactionCount": 0,
+      "unchanged": true
+    },
+    {
+      "shape": "single-line",
+      "bytes": 262144,
+      "durationMs": 1.68,
+      "redactionCount": 0,
+      "unchanged": true
+    },
+    {
+      "shape": "1KB-lines",
+      "bytes": 262144,
+      "durationMs": 1.78,
+      "redactionCount": 0,
+      "unchanged": true
+    }
+  ],
+  "ratios": [
+    {
+      "fromBytes": 1024,
+      "toBytes": 16384,
+      "sizeRatio": 16,
+      "durationRatio": 0.67
+    },
+    {
+      "fromBytes": 16384,
+      "toBytes": 65536,
+      "sizeRatio": 4,
+      "durationRatio": 1.39
+    },
+    {
+      "fromBytes": 65536,
+      "toBytes": 131072,
+      "sizeRatio": 2,
+      "durationRatio": 0.97
+    },
+    {
+      "fromBytes": 131072,
+      "toBytes": 262144,
+      "sizeRatio": 2,
+      "durationRatio": 2.02
+    }
+  ],
+  "reproduced": false
+}

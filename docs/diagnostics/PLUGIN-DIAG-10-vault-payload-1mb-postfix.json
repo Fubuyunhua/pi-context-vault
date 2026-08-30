@@ -1,0 +1,83 @@
+{
+  "generatedAt": "2026-08-30T17:02:43.565Z",
+  "sizes": [
+    {
+      "name": "unique-1024",
+      "elapsedMs": 62.59,
+      "cpuMs": 47,
+      "rssAfterGc": 72171520,
+      "heapUsedAfterGc": 1750035,
+      "maxRssKb": 70500,
+      "value": {
+        "observationId": "obs_af6dd31b71046a1eb6fb57b8",
+        "receiptBytes": 512,
+        "stateGrowthBytes": 1507
+      }
+    },
+    {
+      "name": "unique-16384",
+      "elapsedMs": 53,
+      "cpuMs": 32,
+      "rssAfterGc": 86700032,
+      "heapUsedAfterGc": 2006997,
+      "maxRssKb": 84668,
+      "value": {
+        "observationId": "obs_58b656399351346ec9f352a7",
+        "receiptBytes": 512,
+        "stateGrowthBytes": 16871
+      }
+    },
+    {
+      "name": "unique-65536",
+      "elapsedMs": 97.11,
+      "cpuMs": 62,
+      "rssAfterGc": 108240896,
+      "heapUsedAfterGc": 2317845,
+      "maxRssKb": 105704,
+      "value": {
+        "observationId": "obs_3a7058097a218c9de5decc14",
+        "receiptBytes": 512,
+        "stateGrowthBytes": 66023
+      }
+    },
+    {
+      "name": "unique-1048576",
+      "elapsedMs": 476.54,
+      "cpuMs": 422,
+      "rssAfterGc": 157777920,
+      "heapUsedAfterGc": 12610288,
+      "maxRssKb": 154636,
+      "value": {
+        "observationId": "obs_0d1ddf38ab34ead63fcd9cfa",
+        "receiptBytes": 512,
+        "stateGrowthBytes": 1049071
+      }
+    }
+  ],
+  "duplicate": {
+    "firstMs": 446.4,
+    "secondMs": 25.21,
+    "firstArtifactId": "f6824c3fa84685a5053d01853ca8342a256a4ddac6a5e832e6026c4834fb3fd3",
+    "secondArtifactId": "f6824c3fa84685a5053d01853ca8342a256a4ddac6a5e832e6026c4834fb3fd3",
+    "firstStateGrowthBytes": 1049085,
+    "secondStateGrowthBytes": 491,
+    "deduplicated": true
+  },
+  "redaction": {
+    "count": 1,
+    "persistedContainsSecret": false,
+    "persistedContainsMarker": true
+  },
+  "reduction": {
+    "elapsedMs": 21.52,
+    "cpuMs": 31,
+    "rssAfterGc": 131768320,
+    "maxRssKb": 162800,
+    "triggered": true,
+    "targetReached": true,
+    "reducedCount": 10,
+    "tokensBefore": 263966,
+    "tokensAfter": 47336
+  },
+  "finalStateBytes": 2975879
+}
