@@ -7,6 +7,9 @@ export const MAX_QUERY_LENGTH = 512;
 export const MAX_RETRIEVAL_BYTES = 32 * 1024;
 export const MAX_SEARCH_RESULTS = 20;
 export const MAX_SEARCH_TERMS = 32;
+export const MIN_SEARCH_PAYLOAD_BYTES = 4 * 1024;
+export const DEFAULT_SEARCH_PAYLOAD_BYTES = 12 * 1024;
+export const MAX_SEARCH_PAYLOAD_BYTES = 32 * 1024;
 const MAX_RECENT_OBSERVATION_IDS = 5;
 
 export type ObservationSearchMatchMode = "terms" | "phrase";
@@ -87,6 +90,18 @@ export interface ObservationSearchResult {
   matchMode: ObservationSearchMatchMode;
   results: ObservationSearchHit[];
   truncated: boolean;
+  omittedResults: number;
+  omittedMatches: number;
+  partial: boolean;
+  warnings: string[];
+  byteBudget: number;
+  serializedBytes: number;
+}
+
+interface UnboundedObservationSearchResult {
+  query: string;
+  matchMode: ObservationSearchMatchMode;
+  results: ObservationSearchHit[];
   partial: boolean;
   warnings: string[];
 }
@@ -248,6 +263,87 @@ function matchingTermLines(
   excerptBytes: number,
 ): { matches: Array<{ line: number; text: string }>; truncated: boolean } {
   return matchingLinesWithExcerpt(content, (line) => matchingTermExcerpt(line, terms, excerptBytes), offset, limit);
+}
+
+function searchResultSerializedBytes(result: ObservationSearchResult): number {
+  return Buffer.byteLength(JSON.stringify(result, null, 2), "utf8");
+}
+
+function withStableSerializedBytes(result: Omit<ObservationSearchResult, "serializedBytes">): ObservationSearchResult {
+  let finalized: ObservationSearchResult = { ...result, serializedBytes: 0 };
+  for (let iteration = 0; iteration < 8; iteration += 1) {
+    const serializedBytes = searchResultSerializedBytes(finalized);
+    if (serializedBytes === finalized.serializedBytes) return finalized;
+    finalized = { ...finalized, serializedBytes };
+  }
+  throw new Error("search payload size did not stabilize");
+}
+
+export function boundObservationSearchResult(
+  input: UnboundedObservationSearchResult,
+  limit: number,
+  byteBudget: number,
+): ObservationSearchResult {
+  const limited = input.results.slice(0, limit);
+  const totalPreviewMatches = input.results.reduce((sum, hit) => sum + hit.matches.length, 0);
+  const anySourceMatchesTruncated = input.results.some((hit) => hit.matchesTruncated);
+  let rows: ObservationSearchHit[] = [];
+
+  const build = (candidateRows: ObservationSearchHit[]): ObservationSearchResult => {
+    const includedMatches = candidateRows.reduce((sum, hit) => sum + hit.matches.length, 0);
+    const omittedResults = input.results.length - candidateRows.length;
+    const omittedMatches = totalPreviewMatches - includedMatches;
+    return withStableSerializedBytes({
+      query: input.query,
+      matchMode: input.matchMode,
+      results: candidateRows,
+      truncated: omittedResults > 0 || omittedMatches > 0 || anySourceMatchesTruncated,
+      omittedResults,
+      omittedMatches,
+      partial: input.partial,
+      warnings: [...input.warnings],
+      byteBudget,
+    });
+  };
+  const fits = (candidateRows: ObservationSearchHit[]): boolean => build(candidateRows).serializedBytes <= byteBudget;
+
+  for (const hit of limited) {
+    const core = {
+      ...hit,
+      recentObservationIds: [...hit.recentObservationIds],
+      matchedTerms: [...hit.matchedTerms],
+      matches: [],
+      matchesTruncated: hit.matchesTruncated || hit.matches.length > 0,
+      nextAction: { tool: hit.nextAction.tool, arguments: { ...hit.nextAction.arguments } },
+    };
+    const candidate = [...rows, core];
+    if (!fits(candidate)) break;
+    rows = candidate;
+  }
+
+  for (const [rowIndex] of rows.entries()) {
+    const source = limited[rowIndex];
+    if (source === undefined) break;
+    for (const match of source.matches) {
+      const candidateRows = rows.map((current, index) =>
+        index === rowIndex
+          ? {
+              ...current,
+              matches: [...current.matches, { ...match }],
+              matchesTruncated: source.matchesTruncated || current.matches.length + 1 < source.matches.length,
+            }
+          : current,
+      );
+      if (!fits(candidateRows)) break;
+      rows = candidateRows;
+    }
+  }
+
+  const result = build(rows);
+  if (result.serializedBytes > byteBudget) {
+    throw new Error("search byte budget cannot contain the base response");
+  }
+  return result;
 }
 
 export function observationId(sessionId: string, toolCallId: string): string {
@@ -469,6 +565,7 @@ export class ObservationRuntime {
     matchMode?: ObservationSearchMatchMode;
     toolName?: string;
     limit?: number;
+    maxBytes?: number;
   }): Promise<ObservationSearchResult> {
     const query = validateQuery(params.query);
     if (query === undefined) throw new Error("query is required");
@@ -482,7 +579,18 @@ export class ObservationRuntime {
     if (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit <= 0)) {
       throw new Error("limit must be a positive integer");
     }
+    if (
+      params.maxBytes !== undefined &&
+      (!Number.isSafeInteger(params.maxBytes) ||
+        params.maxBytes < MIN_SEARCH_PAYLOAD_BYTES ||
+        params.maxBytes > MAX_SEARCH_PAYLOAD_BYTES)
+    ) {
+      throw new Error(
+        `maxBytes must be an integer between ${MIN_SEARCH_PAYLOAD_BYTES} and ${MAX_SEARCH_PAYLOAD_BYTES}`,
+      );
+    }
     const limit = Math.min(params.limit ?? 10, MAX_SEARCH_RESULTS);
+    const maxBytes = params.maxBytes ?? DEFAULT_SEARCH_PAYLOAD_BYTES;
     if (matchMode === "terms" && query.split(/\s+/u).length > MAX_SEARCH_TERMS) {
       throw new Error(`query must not contain more than ${MAX_SEARCH_TERMS} terms in terms mode`);
     }
@@ -561,13 +669,18 @@ export class ObservationRuntime {
       });
     }
     ranked.sort((left, right) => right.relevance - left.relevance || left.recency - right.recency);
-    return {
-      query,
-      matchMode,
-      results: ranked.slice(0, limit).map((candidate) => candidate.hit),
-      truncated: ranked.length > limit,
-      partial: searchBatch.partial,
-      warnings: searchBatch.partial ? ["Some archived evidence was unavailable."] : [],
-    };
+    const result = boundObservationSearchResult(
+      {
+        query,
+        matchMode,
+        results: ranked.map((candidate) => candidate.hit),
+        partial: searchBatch.partial,
+        warnings: searchBatch.partial ? ["Some archived evidence was unavailable."] : [],
+      },
+      limit,
+      maxBytes,
+    );
+    this.#telemetry?.recordObservationSearchPayload(result.serializedBytes, result.truncated);
+    return result;
   }
 }
