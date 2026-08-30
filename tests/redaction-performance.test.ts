@@ -38,6 +38,27 @@ describe("bounded secret redaction", () => {
     }
   });
 
+  it("scales approximately linearly across repeated unmatched private-key markers", { timeout: 20_000 }, () => {
+    const marker = "-----BEGIN PRIVATE KEY-----";
+    const counts = [2_048, 4_096, 8_192, 16_384, 32_768];
+    const durations = counts.map((count) => medianDuration(marker.repeat(count)));
+
+    expect(durations.at(-1)).toBeLessThan(8_000);
+    for (let index = 1; index < durations.length; index += 1) {
+      expect(durations[index]).toBeLessThan((durations[index - 1] as number) * 3.5 + 50);
+    }
+  });
+
+  it("bounds adversarial separators, near-miss keys, and an unterminated quoted value", { timeout: 20_000 }, () => {
+    const inputs = [
+      "not_a_secretish=value;".repeat(Math.ceil(MEBIBYTE / 23)).slice(0, MEBIBYTE),
+      "near-miss-key=value:=;".repeat(Math.ceil(MEBIBYTE / 22)).slice(0, MEBIBYTE),
+      `TOKEN="${"x".repeat(MEBIBYTE)}`,
+    ];
+
+    for (const input of inputs) expect(medianDuration(input)).toBeLessThan(8_000);
+  });
+
   it("redacts secret assignments near the end of a long single line without weakening key grammar", () => {
     const unicodeEvidence = "🙂漢字 remains visible";
     const prefix = `${"x".repeat(MEBIBYTE - 512)};message=${unicodeEvidence};`;

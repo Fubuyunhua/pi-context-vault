@@ -4,9 +4,15 @@ export interface RedactionResult {
 }
 
 const REDACTED = "[REDACTED]";
-const SECRET_KEY_SUFFIX =
-  /(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|secret|client[_-]?secret|private[_-]?key)$/i;
+const PRIVATE_KEY_TYPES = ["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "OPENSSH PRIVATE KEY"] as const;
+const PRIVATE_KEY_BEGIN_PREFIX = "-----BEGIN ";
+const PRIVATE_KEY_END_PREFIX = "-----END ";
+const SECRET_KEY_EXACT =
+  /^(?:api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|secret|client[_-]?secret|private[_-]?key)$/i;
+const MAX_SECRET_KEY_TERMINAL_LENGTH = 32;
 const WHITESPACE = /\s/u;
+
+type PrivateKeyType = (typeof PRIVATE_KEY_TYPES)[number];
 
 interface AssignmentKey {
   key: string;
@@ -51,23 +57,86 @@ function assignmentKeyBefore(input: string, separatorIndex: number): AssignmentK
 }
 
 /**
- * Return the earliest start within an ASCII assignment key accepted by the
- * legacy secret-key grammar. A terminal secret name is always accepted; it
- * may extend left through separator-delimited alphanumeric namespace parts.
+ * Return every start within an ASCII assignment key accepted by the legacy
+ * secret-key grammar. Retaining the less-greedy starts is required because
+ * the unquoted legacy regex retries a terminal suffix when a greedy namespace
+ * extension does not begin at a word boundary (for example `_foo-token`).
  */
-function secretKeyStart(key: string): number | undefined {
-  const suffix = SECRET_KEY_SUFFIX.exec(key);
-  if (suffix === null) return undefined;
+function secretKeyStarts(key: string): number[] {
+  const starts = new Set<number>();
+  const firstPossibleTerminal = Math.max(0, key.length - MAX_SECRET_KEY_TERMINAL_LENGTH);
+  for (let terminalStart = firstPossibleTerminal; terminalStart < key.length; terminalStart += 1) {
+    if (!SECRET_KEY_EXACT.test(key.slice(terminalStart))) continue;
 
-  let start = suffix.index;
-  while (start > 0 && (key[start - 1] === "_" || key[start - 1] === "-")) {
-    const segmentEnd = start - 1;
-    let segmentStart = segmentEnd;
-    while (segmentStart > 0 && isAsciiAlphaNumeric(key[segmentStart - 1] as string)) segmentStart -= 1;
-    if (segmentStart === segmentEnd) break;
-    start = segmentStart;
+    let start = terminalStart;
+    starts.add(start);
+    while (start > 0 && (key[start - 1] === "_" || key[start - 1] === "-")) {
+      const segmentEnd = start - 1;
+      let segmentStart = segmentEnd;
+      while (segmentStart > 0 && isAsciiAlphaNumeric(key[segmentStart - 1] as string)) segmentStart -= 1;
+      if (segmentStart === segmentEnd) break;
+      start = segmentStart;
+      starts.add(start);
+    }
   }
-  return start;
+  return [...starts].sort((left, right) => left - right);
+}
+
+function privateKeyTypeAt(input: string, markerIndex: number, prefix: string): PrivateKeyType | undefined {
+  for (const keyType of PRIVATE_KEY_TYPES) {
+    if (input.startsWith(`${prefix}${keyType}-----`, markerIndex)) return keyType;
+  }
+  return undefined;
+}
+
+function replacePrivateKeys(input: string): { content: string; count: number } {
+  const endPositions = new Map<PrivateKeyType, number[]>(PRIVATE_KEY_TYPES.map((keyType) => [keyType, []]));
+  let markerCursor = 0;
+  while (markerCursor < input.length) {
+    const markerIndex = input.indexOf(PRIVATE_KEY_END_PREFIX, markerCursor);
+    if (markerIndex < 0) break;
+    const keyType = privateKeyTypeAt(input, markerIndex, PRIVATE_KEY_END_PREFIX);
+    if (keyType !== undefined) endPositions.get(keyType)?.push(markerIndex);
+    markerCursor = markerIndex + PRIVATE_KEY_END_PREFIX.length;
+  }
+
+  const endCursors = new Map<PrivateKeyType, number>(PRIVATE_KEY_TYPES.map((keyType) => [keyType, 0]));
+  const output: string[] = [];
+  let outputStart = 0;
+  let count = 0;
+  let cursor = 0;
+  while (cursor < input.length) {
+    const beginIndex = input.indexOf(PRIVATE_KEY_BEGIN_PREFIX, cursor);
+    if (beginIndex < 0) break;
+    const keyType = privateKeyTypeAt(input, beginIndex, PRIVATE_KEY_BEGIN_PREFIX);
+    if (keyType === undefined) {
+      cursor = beginIndex + PRIVATE_KEY_BEGIN_PREFIX.length;
+      continue;
+    }
+
+    const beginMarker = `${PRIVATE_KEY_BEGIN_PREFIX}${keyType}-----`;
+    const endMarker = `${PRIVATE_KEY_END_PREFIX}${keyType}-----`;
+    const positions = endPositions.get(keyType) as number[];
+    let endCursor = endCursors.get(keyType) as number;
+    const contentStart = beginIndex + beginMarker.length;
+    while (endCursor < positions.length && (positions[endCursor] as number) < contentStart) endCursor += 1;
+    endCursors.set(keyType, endCursor);
+    const endIndex = positions[endCursor];
+    if (endIndex === undefined) {
+      cursor = beginIndex + PRIVATE_KEY_BEGIN_PREFIX.length;
+      continue;
+    }
+
+    const matchEnd = endIndex + endMarker.length;
+    output.push(input.slice(outputStart, beginIndex), `${beginMarker}\n${REDACTED}\n${endMarker}`);
+    outputStart = matchEnd;
+    count += 1;
+    cursor = matchEnd;
+  }
+
+  if (count === 0) return { content: input, count: 0 };
+  output.push(input.slice(outputStart));
+  return { content: output.join(""), count };
 }
 
 function skipWhitespace(input: string, start: number): number {
@@ -90,7 +159,7 @@ function replaceQuotedAssignments(input: string): { content: string; count: numb
     }
 
     const assignment = assignmentKeyBefore(input, cursor);
-    if (assignment === undefined || secretKeyStart(assignment.key) === undefined) {
+    if (assignment === undefined || secretKeyStarts(assignment.key).length === 0) {
       cursor += 1;
       continue;
     }
@@ -141,17 +210,13 @@ function replaceUnquotedAssignments(input: string): { content: string; count: nu
     }
 
     const assignment = assignmentKeyBefore(input, cursor);
-    const relativeSecretStart = assignment === undefined ? undefined : secretKeyStart(assignment.key);
-    const secretStart =
-      assignment === undefined || relativeSecretStart === undefined
-        ? undefined
-        : assignment.keyStart + relativeSecretStart;
-    if (
-      assignment === undefined ||
-      secretStart === undefined ||
-      assignment.trailingQuote !== undefined ||
-      isWordCharacter(input[secretStart - 1])
-    ) {
+    let secretStart: number | undefined;
+    if (assignment !== undefined && assignment.trailingQuote === undefined) {
+      secretStart = secretKeyStarts(assignment.key)
+        .map((relativeStart) => assignment.keyStart + relativeStart)
+        .find((start) => !isWordCharacter(input[start - 1]));
+    }
+    if (secretStart === undefined) {
       cursor += 1;
       continue;
     }
@@ -198,10 +263,10 @@ export function redactSecrets(input: string): RedactionResult {
     });
   };
 
-  replace(
-    /-----BEGIN ((?:RSA |EC |OPENSSH )?PRIVATE KEY)-----[\s\S]*?-----END \1-----/g,
-    (_match, keyType) => `-----BEGIN ${keyType}-----\n${REDACTED}\n-----END ${keyType}-----`,
-  );
+  const privateKeys = replacePrivateKeys(content);
+  content = privateKeys.content;
+  redactionCount += privateKeys.count;
+
   replace(/(\bAuthorization\s*[:=]\s*["']?Bearer\s+)[^\s"',;]+/gi, (_match, prefix) => `${prefix}${REDACTED}`);
 
   const quotedAssignments = replaceQuotedAssignments(content);
