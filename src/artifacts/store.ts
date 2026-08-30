@@ -14,6 +14,9 @@ const DEFAULT_COMPACTION_OBSOLETE_RECORDS = 1024;
 const DEFAULT_COMPACTION_OBSOLETE_RATIO = 0.25;
 const METADATA_READ_CHUNK_BYTES = 64 * 1024;
 export const MAX_METADATA_RECORD_BYTES = 1024 * 1024;
+const MAX_SEARCH_GRAMS_PER_ARTIFACT = 4_096;
+const SEARCH_GRAM_LENGTH = 3;
+const SEARCH_IDENTIFIER_SEPARATOR_PATTERN = /[_./\\\p{Pd}]+/gu;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 export type ArtifactStoreFaultPoint =
@@ -117,6 +120,16 @@ export interface GarbageCollectResult {
 export interface ArtifactStorageUsage {
   artifactCount: number;
   usedBytes: number;
+}
+
+export interface ArtifactSearchNeedle {
+  value: string;
+  collapseIdentifierSeparators: boolean;
+}
+
+interface ArtifactSearchEntry {
+  complete: boolean;
+  grams: string[];
 }
 
 interface OwnedDirectoryIdentity {
@@ -378,6 +391,31 @@ function noFollowFlags(flags: number): number {
   return result;
 }
 
+function searchForm(value: string, collapseIdentifierSeparators: boolean): string {
+  const normalized = value.toLocaleLowerCase("en-US");
+  return collapseIdentifierSeparators ? normalized.replace(SEARCH_IDENTIFIER_SEPARATOR_PATTERN, "") : normalized;
+}
+
+function searchGrams(
+  value: string,
+  prefix: "collapsed" | "normalized",
+  allWidths = false,
+  maximumGrams = Number.POSITIVE_INFINITY,
+): string[] {
+  const characters = Array.from(value);
+  if (characters.length === 0) return [];
+  const maximumWidth = Math.min(SEARCH_GRAM_LENGTH, characters.length);
+  const minimumWidth = allWidths ? 1 : maximumWidth;
+  const grams = new Set<string>();
+  for (let width = minimumWidth; width <= maximumWidth; width += 1) {
+    for (let index = 0; index <= characters.length - width; index += 1) {
+      grams.add(`${prefix}:${characters.slice(index, index + width).join("")}`);
+      if (grams.size >= maximumGrams) return [...grams];
+    }
+  }
+  return [...grams];
+}
+
 export class ArtifactStore {
   readonly #artifactsRoot: string;
   readonly #metadataPath: string;
@@ -394,6 +432,8 @@ export class ArtifactStore {
   #namespaceInitialization?: Promise<void>;
   #index = emptyIndex();
   #indexMutex = Promise.resolve();
+  readonly #artifactSearch = new Map<string, ArtifactSearchEntry>();
+  readonly #searchPostings = new Map<string, Set<string>>();
 
   constructor(options: ArtifactStoreOptions) {
     this.#artifactsRoot = resolve(options.artifactsRoot);
@@ -680,6 +720,7 @@ export class ArtifactStore {
       await this.#faultHook?.("after-artifact-publication");
       await this.#withIndexMutex(async () => {
         await this.#appendRecordsUnlocked([record]);
+        this.#indexArtifactSearch(contentHash, sanitized.content);
         await this.#faultHook?.("after-metadata-sync");
         try {
           await this.#compactIfNeededUnlocked();
@@ -701,6 +742,43 @@ export class ArtifactStore {
     return this.#withIndexMutex(async () => {
       await this.#synchronizePathUnlocked();
       return [...this.#index.live.values()];
+    });
+  }
+
+  async findSearchCandidates(needles: readonly ArtifactSearchNeedle[]): Promise<Set<string>> {
+    await this.#validateNamespace();
+    return this.#withIndexMutex(async () => {
+      await this.#synchronizePathUnlocked();
+      const liveArtifactIds = new Set(this.#index.byArtifact.keys());
+      for (const artifactId of this.#artifactSearch.keys()) {
+        if (!liveArtifactIds.has(artifactId)) this.#removeArtifactSearch(artifactId);
+      }
+      for (const artifactId of liveArtifactIds) {
+        if (!this.#artifactSearch.has(artifactId)) {
+          this.#indexArtifactSearch(artifactId, await this.#readArtifactVerified(artifactId));
+        }
+      }
+
+      const candidates = new Set<string>();
+      for (const [artifactId, entry] of this.#artifactSearch) {
+        if (liveArtifactIds.has(artifactId) && !entry.complete) candidates.add(artifactId);
+      }
+      for (const needle of needles) {
+        const form = searchForm(needle.value, needle.collapseIdentifierSeparators);
+        const grams = searchGrams(form, needle.collapseIdentifierSeparators ? "collapsed" : "normalized");
+        if (grams.length === 0) continue;
+        const postings = grams
+          .map((gram) => this.#searchPostings.get(gram))
+          .sort((left, right) => (left?.size ?? 0) - (right?.size ?? 0));
+        const first = postings[0];
+        if (first === undefined) continue;
+        for (const artifactId of first) {
+          if (liveArtifactIds.has(artifactId) && postings.every((posting) => posting?.has(artifactId) === true)) {
+            candidates.add(artifactId);
+          }
+        }
+      }
+      return candidates;
     });
   }
 
@@ -856,6 +934,34 @@ export class ArtifactStore {
   async #readActiveSessionsUnlocked(): Promise<ActiveSessionRegistry> {
     const source = await this.#readRegularFile(this.#activeSessionsPath, "undefined");
     return source === undefined ? { schemaVersion: 1, leases: [] } : parseActiveSessions(source);
+  }
+
+  #removeArtifactSearch(artifactId: string): void {
+    const previous = this.#artifactSearch.get(artifactId);
+    if (previous === undefined) return;
+    for (const gram of previous.grams) {
+      const posting = this.#searchPostings.get(gram);
+      posting?.delete(artifactId);
+      if (posting?.size === 0) this.#searchPostings.delete(gram);
+    }
+    this.#artifactSearch.delete(artifactId);
+  }
+
+  #indexArtifactSearch(artifactId: string, content: string): void {
+    if (this.#artifactSearch.has(artifactId)) return;
+    const normalized = searchForm(content, false);
+    const collapsed = searchForm(content, true);
+    const normalizedGrams = searchGrams(normalized, "normalized", true, MAX_SEARCH_GRAMS_PER_ARTIFACT + 1);
+    const remaining = MAX_SEARCH_GRAMS_PER_ARTIFACT - normalizedGrams.length;
+    const collapsedGrams = remaining < 0 ? [] : searchGrams(collapsed, "collapsed", true, Math.max(1, remaining + 1));
+    const complete = normalizedGrams.length + collapsedGrams.length <= MAX_SEARCH_GRAMS_PER_ARTIFACT;
+    const indexedGrams = complete ? [...normalizedGrams, ...collapsedGrams] : [];
+    this.#artifactSearch.set(artifactId, { complete, grams: indexedGrams });
+    for (const gram of indexedGrams) {
+      const posting = this.#searchPostings.get(gram) ?? new Set<string>();
+      posting.add(artifactId);
+      this.#searchPostings.set(gram, posting);
+    }
   }
 
   async #parseRangeIntoIndex(

@@ -151,6 +151,51 @@ describe("artifact store", () => {
     expect(await restarted.read(artifactId)).toContain("[REDACTED]");
   });
 
+  it("keeps search candidates coherent across deduplication, upserts, and garbage-collection tombstones", async () => {
+    const root = await tempRoot();
+    const store = storeAt(root);
+    const shared = await store.archive({
+      observationId: "search-1",
+      toolName: "read",
+      sessionId: "session",
+      content: "shared indexed evidence",
+    });
+    await store.archive({
+      observationId: "search-2",
+      toolName: "read",
+      sessionId: "session",
+      content: "shared indexed evidence",
+    });
+    expect(await store.findSearchCandidates([{ value: "indexed", collapseIdentifierSeparators: false }])).toEqual(
+      new Set([shared.artifactId]),
+    );
+
+    const updated = await store.archive({
+      observationId: "search-1",
+      toolName: "read",
+      sessionId: "session",
+      content: "replacement searchable evidence",
+    });
+    expect(await store.findSearchCandidates([{ value: "shared", collapseIdentifierSeparators: false }])).toEqual(
+      new Set([shared.artifactId]),
+    );
+    expect(await store.findSearchCandidates([{ value: "replacement", collapseIdentifierSeparators: false }])).toEqual(
+      new Set([updated.artifactId]),
+    );
+
+    await store.garbageCollect({
+      retentionDays: 0,
+      quotaBytes: 0,
+      referencedArtifactIds: new Set([updated.artifactId]),
+    });
+    expect(await store.findSearchCandidates([{ value: "shared", collapseIdentifierSeparators: false }])).toEqual(
+      new Set(),
+    );
+    expect(await store.findSearchCandidates([{ value: "replacement", collapseIdentifierSeparators: false }])).toEqual(
+      new Set([updated.artifactId]),
+    );
+  });
+
   it("collects expired and over-quota artifacts while preserving referenced content", async () => {
     const root = await tempRoot();
     let time = new Date("2026-01-01T00:00:00.000Z");

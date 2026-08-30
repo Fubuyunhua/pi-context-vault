@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ArchivedArtifact, ArtifactMetadata, ArtifactStore } from "../artifacts/store.js";
+import type { ArchivedArtifact, ArtifactMetadata, ArtifactSearchNeedle, ArtifactStore } from "../artifacts/store.js";
 import type { ArchivePolicy } from "../state/config.js";
 import type { Telemetry } from "../telemetry.js";
 
@@ -455,6 +455,14 @@ export class ObservationRuntime {
     const terms = matchMode === "terms" ? searchTerms(query) : [];
     const linePattern =
       matchMode === "terms" ? separatorNormalizedPattern(terms) : literalAnyCaseInsensitivePattern([query]);
+    const needles: ArtifactSearchNeedle[] =
+      matchMode === "terms"
+        ? terms.map((term) => ({
+            value: term.collapsed.length === 0 ? term.normalized : term.collapsed,
+            collapseIdentifierSeparators: term.collapsed.length > 0,
+          }))
+        : [{ value: query, collapseIdentifierSeparators: false }];
+    const candidateArtifactIds = await this.#store.findSearchCandidates(needles);
     const ranked: Array<{ hit: ObservationSearchHit; relevance: number; recency: number }> = [];
     const artifacts = new Map<
       string,
@@ -462,6 +470,7 @@ export class ObservationRuntime {
     >();
     const entries = (await this.#store.listMetadata()).reverse();
     for (const metadata of entries) {
+      if (!candidateArtifactIds.has(metadata.artifactId)) continue;
       if (params.toolName !== undefined && metadata.toolName !== params.toolName) continue;
       const artifact = artifacts.get(metadata.artifactId);
       if (artifact === undefined) {

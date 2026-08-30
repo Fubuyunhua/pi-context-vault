@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -244,6 +245,60 @@ describe("observation virtualization", () => {
     expect(pastEnd.matches).toEqual([]);
     expect(pastEnd.truncated).toBe(false);
   });
+
+  it("bounds artifact reads for indexed searches across 1,000 Observations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "context-vault-observations-scale-"));
+    roots.push(root);
+    const artifactsRoot = join(root, "artifacts");
+    const metadataRoot = join(root, "metadata");
+    await Promise.all([mkdir(artifactsRoot), mkdir(metadataRoot)]);
+    const records: string[] = [];
+    await Promise.all(
+      Array.from({ length: 1_000 }, async (_, index) => {
+        const content =
+          index === 999 ? `background evidence ${index} unique-newest-marker` : `background evidence ${index}`;
+        const artifactId = createHash("sha256").update(content).digest("hex");
+        await mkdir(join(artifactsRoot, artifactId.slice(0, 2)), { recursive: true });
+        await writeFile(join(artifactsRoot, artifactId.slice(0, 2), `${artifactId}.txt`), content);
+        records[index] = JSON.stringify({
+          schemaVersion: 1,
+          artifactId,
+          observationId: observationId("scale", `call-${index}`),
+          toolName: "read",
+          sessionId: "scale",
+          contentHash: artifactId,
+          originalBytes: Buffer.byteLength(content),
+          sanitizedBytes: Buffer.byteLength(content),
+          redactionCount: 0,
+          createdAt: "2026-08-30T00:00:00.000Z",
+          updatedAt: "2026-08-30T00:00:00.000Z",
+        });
+      }),
+    );
+    await writeFile(join(metadataRoot, "observations.jsonl"), `${records.join("\n")}\n`);
+    const store = new ArtifactStore({ artifactsRoot, metadataRoot });
+    const runtime = new ObservationRuntime({
+      store,
+      receiptMaxBytes: 512,
+      projectId: "project",
+      projectRoot: "/project",
+      sessionId: "scale",
+    });
+
+    await expect(
+      store.findSearchCandidates([{ value: "index-hydration", collapseIdentifierSeparators: false }]),
+    ).resolves.toEqual(new Set());
+    const read = vi.spyOn(store, "read");
+    const startedAt = performance.now();
+    await expect(runtime.search({ query: "missing-scale-marker" })).resolves.toMatchObject({ results: [] });
+    const newest = await runtime.search({ query: "unique-newest-marker" });
+    const durationMs = performance.now() - startedAt;
+
+    expect(newest.results).toHaveLength(1);
+    expect(newest.results[0]?.matches[0]?.text).toContain("unique-newest-marker");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(durationMs).toBeLessThan(1_000);
+  }, 30_000);
 
   it("returns only sanitized bounded search evidence", async () => {
     const { runtime } = await setup({ threshold: 1 });
