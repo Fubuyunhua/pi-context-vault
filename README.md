@@ -8,7 +8,7 @@ Context Vault does **not** index repositories or inject repository context. That
 
 ## Install
 
-Requirements: Node.js `>=22.19.0`, Pi `0.84.1`.
+Requirements: Node.js `>=22.19.0` and a current Pi installation. Pi core packages are host-provided peers; CI currently tests the extension against Pi `0.84.1`.
 
 Choose a reviewed version from [Releases](https://github.com/Fubuyunhua/pi-context-vault/releases), then replace the placeholder with that tag or commit:
 

@@ -82,10 +82,13 @@ it("publishes only Vault-owned source and has no repository runtime dependency",
     "LICENSE",
   ]);
   expect(manifest.peerDependencies).toEqual({
+    "@earendil-works/pi-coding-agent": "*",
+    typebox: "*",
+  });
+  expect(manifest.devDependencies).toMatchObject({
     "@earendil-works/pi-coding-agent": "0.84.1",
     typebox: "1.3.7",
   });
-  expect(manifest.devDependencies).toMatchObject(manifest.peerDependencies as Record<string, string>);
   expect(manifest.scripts?.["test:pi"]).toBe("node scripts/pi-rpc-smoke.mjs");
   expect(manifest.scripts).not.toHaveProperty("test:watcher");
   expect(manifest.scripts).not.toHaveProperty("bench");

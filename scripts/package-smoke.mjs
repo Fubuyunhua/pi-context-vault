@@ -6,6 +6,8 @@ import { join, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const scratch = mkdtempSync(join(tmpdir(), "pi-context-vault-package-"));
 const npmCli = process.env.npm_execpath;
+const piVersion = process.env.VAULT_SMOKE_PI_VERSION ?? "0.84.1";
+const typeboxVersion = process.env.VAULT_SMOKE_TYPEBOX_VERSION ?? "1.3.7";
 const run = (command, args, cwd = root) => execFileSync(command, args, { cwd, encoding: "utf8", stdio: "pipe" });
 
 function assertDependencyAbsent(tree, forbidden) {
@@ -83,8 +85,8 @@ try {
       "--no-fund",
       "--no-package-lock",
       join(scratch, packed.filename),
-      "@earendil-works/pi-coding-agent@0.84.1",
-      "typebox@1.3.7",
+      `@earendil-works/pi-coding-agent@${piVersion}`,
+      `typebox@${typeboxVersion}`,
     ],
     install,
   );
@@ -99,10 +101,10 @@ try {
   if (manifest.dependencies && Object.keys(manifest.dependencies).length > 0)
     throw new Error("Vault has runtime dependencies");
   if (
-    manifest.peerDependencies?.["@earendil-works/pi-coding-agent"] !== "0.84.1" ||
-    manifest.peerDependencies?.typebox !== "1.3.7"
+    manifest.peerDependencies?.["@earendil-works/pi-coding-agent"] !== "*" ||
+    manifest.peerDependencies?.typebox !== "*"
   ) {
-    throw new Error("Vault peer versions exceed the tested compatibility surface");
+    throw new Error("Vault core peers must be provided by the Pi host");
   }
   if (manifest.scripts?.["test:pi"] !== "node scripts/pi-rpc-smoke.mjs")
     throw new Error("packed manifest has an unexpected real Pi smoke command");

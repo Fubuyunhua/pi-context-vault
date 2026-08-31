@@ -8,7 +8,7 @@ Context Vault **不**建立仓库索引，也不注入仓库上下文。该能�
 
 ## 安装
 
-要求：Node.js `>=22.19.0`，Pi `0.84.1`。
+要求：Node.js `>=22.19.0` 和当前版本的 Pi。Pi 核心包由宿主提供；CI 目前使用 Pi `0.84.1` 测试该扩展。
 
 从 [Releases](https://github.com/Fubuyunhua/pi-context-vault/releases) 选择经过审核的版本，然后把占位符替换为对应 tag 或 commit：
 
