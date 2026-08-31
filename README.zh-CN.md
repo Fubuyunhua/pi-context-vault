@@ -1,66 +1,31 @@
 # Pi Context Vault
 
-面向 Pi 的可恢复 Observation 存储与上下文压力削减插件。
+一个在降低上下文压力的同时，保证 Tool Result 证据仍可恢复的 Pi 扩展。
 
-Context Vault 会归档符合条件的文本 Tool Result，把较大或较旧结果替换为有界 receipt，并允许 Agent 稍后恢复证据。它不再建立仓库索引，也不再自动注入仓库上下文。
+默认情况下，Context Vault 会归档所有符合条件的外部文本 Tool Result。超过 16 KiB 的结果可以立即替换成小型索引凭据；上下文压力升高时，较旧的已归档结果也可以被虚拟化。Agent 通过显式搜索和检索 Tool 恢复证据。
 
-## 仓库能力已经迁出
+Context Vault **不**建立仓库索引，也不注入仓库上下文。该能力属于独立项目 [`pi-repo-context`](https://github.com/Fubuyunhua/pi-repo-context)。
 
-仓库索引、Git freshness、Java/TypeScript 分析、搜索、Graph v1 和 Resolver v1 现在属于
-[`pi-repo-context`](https://github.com/Fubuyunhua/pi-repo-context)。
+## 安装
 
-如果经过审核的不可变 `v0.1.0` tag 存在于 Repo Context 上游仓库中，请先验证其存在，再使用以下精确安装命令：
+要求：Node.js `>=22.19.0`，Pi `0.84.1`。
 
-```bash
-pi install git:github.com/Fubuyunhua/pi-repo-context@v0.1.0
-```
-
-从该 tag 安装后，请使用 `repo_context_search` 和 `.pi/repo-context.json`。`context_vault_repo_map` →
-`repo_context_search` 是仅限 Repo Context `0.1.x` 的 deprecated alias；Repo Context 计划在 `0.2.0` 删除该 alias。
-Context Vault 不注册这两个仓库 Tool。Repo Context 绝不会读取旧 `.pi/context-vault.json`；受支持的配置必须手工复制。
-新派生状态位于：
-
-```text
-${PI_CODING_AGENT_DIR}/pi-repo-context/projects/<projectId>
-```
-
-Context Vault 会在一个兼容周期内接受 `.pi/context-vault.json` 中的旧仓库字段，忽略它们，并报告：
-
-```text
-Repository Map configuration has moved to pi-repo-context.
-```
-
-配置需手工迁移：
-
-| 旧字段 | Repo Context 字段 |
-| --- | --- |
-| `repoMapEnabled` | `enabled` |
-| `mapContextMaxBytes` | `searchMaxBytes` |
-| `mapDebounceMs` | `debounceMs` |
-| `mapGenerationRetention` | `generationRetention` |
-| `mapQuotaBytes` | `quotaBytes` |
-| `mapExcludePatterns` | `excludePatterns` |
-
-`mapInjectionMode` 和 `debugRequestFingerprints` 没有对应字段。Repo Context 采用 Tool-first，不自动注入。旧 Vault
-`repo-map/` 目录中的派生状态不会在拆分过程中被读取、移动、迁移、GC 或删除。两个拆分 package 都不会发布暂停的
-S03 研究或 legacy bench assets。
-
-所有权保持独立：Context Vault 拥有 extension ID/UI key `context-vault`、`context_vault_status` 和 Vault telemetry；
-Repo Context 拥有 extension ID/UI key `repo-context`、`repo_context_status` 和 Repo telemetry。两者不共享 status 或
-telemetry state。
-
-## 要求与安装
-
-- Node.js `>=22.19.0`
-- 已用 Pi `0.84.1` 测试
-
-安装 v0.3.0 前，请先验证经过审核的不可变 `v0.3.0` tag 存在于上游仓库中，然后使用：
+从 [Releases](https://github.com/Fubuyunhua/pi-context-vault/releases) 选择经过审核的版本，然后把占位符替换为对应 tag 或 commit：
 
 ```bash
-pi install git:github.com/Fubuyunhua/pi-context-vault@v0.3.0
+pi install git:github.com/Fubuyunhua/pi-context-vault@<tag-or-commit>
 ```
 
-如果该 tag 不存在，请改用经过审核的本地 checkout 进行开发：
+重启 Pi 并检查：
+
+```text
+/context-vault doctor
+/context-vault status
+```
+
+正常使用不要求额外配置或手工命令。Vault 会自动处理符合条件的 Tool Result；需要历史证据时，Agent 会调用 search/get。
+
+本地开发：
 
 ```bash
 git clone https://github.com/Fubuyunhua/pi-context-vault.git
@@ -69,61 +34,48 @@ npm ci
 pi -e ./extensions/index.ts
 ```
 
-健康检查：
+## 核心流程
 
-```text
-/context-vault doctor
-/context-vault status
-```
+1. `tool_result` 选择符合条件的外部文本。
+2. 在 hash 和持久化之前清理内容。
+3. Artifact 按内容 hash 保存，同时写入可恢复的 Observation metadata。
+4. 只有归档成功后，Pi 的模型可见副本才可能变成有界索引凭据。
+5. 执行上下文压力削减时，尚未替换的最近结果保持可见，较旧结果可以变成索引凭据。
+6. search/get 只恢复当前需要的证据。
 
-健康状态只覆盖 Observation 存储、恢复、lease 和 reduction，不再包含 Repo Map component。
-
-## Observation 生命周期
-
-1. `tool_result` hook 检查外部 Tool 的文本结果。
-2. 持久化前清理敏感值和控制字符。
-3. 内容按 hash 保存，并写入 append-only metadata 和 active-session lease。
-4. 只有归档成功后，较大结果才可能被替换成有界 JSON receipt。
-5. 上下文压力升高时，较旧的已归档结果在 Pi 的模型可见副本中变成 receipt，同时保持时间顺序和 Tool call/result 配对。
-6. Agent 可以显式检索或搜索归档证据。
-
-名称以 `context_vault_` 或 `repo_context_` 开头的 Tool Result 不会被再次归档。
-
-## Tools
+`context_vault_*` 和 `repo_context_*` Tool 的结果不会被再次归档。
 
 | Tool | 用途 |
 | --- | --- |
-| `context_vault_obs_get` | 通过 Observation 或 artifact ID 恢复有界证据；可选 query 仍按单行内连续字面短语匹配。 |
-| `context_vault_obs_search` | 搜索已清理的归档 Observation。默认 `terms` 模式对部分命中排序，归一化常见代码标识符分隔符（`_`、`-`、`.`、`/`、`\\`），并返回相关度分数；`phrase` 模式只匹配单行内连续字面短语。相同 artifact 会在应用结果数量限制前合并；每项结果返回最新 Observation、`occurrenceCount` 和最多五个 `recentObservationIds`，以及可直接执行的 `context_vault_obs_get` next action；调用时必须原样传递 `nextAction.arguments` 的全部字段，确保检索窗口仍以命中证据为中心。若命中跨度可放入默认 8 KiB get 页面，action 会完整包含该跨度；若跨度更长，action 仍保持有界，并从命中前 4 KiB 开始（到达 artifact 起点时截断），以展示跨度开头，调用方可按需继续发起其他有界 get 请求。完整的 pretty-printed 模型可见 JSON 默认上限为 12,288 UTF-8 bytes；可选 `maxBytes` 范围为 4,096–32,768。 |
-| `context_vault_status` | 返回 Vault-only 生命周期、存储、reduction、warning 和 telemetry。 |
+| `context_vault_obs_search` | 对已清理证据进行排序搜索；合并重复 artifact，并返回紧凑预览和可执行的 `nextAction`。 |
+| `context_vault_obs_get` | 按 ID/offset 恢复 UTF-8 安全的字节窗口，或用字面 query 返回有界、不区分大小写的匹配行。 |
+| `context_vault_status` | 返回生命周期、存储、上下文削减、警告和有界遥测。 |
 
-Observation search 会维护一个可丢弃的有界 Bloom 快照；快照持久化后，1,000 条 Observation 回归目标为低于 1,000 ms，已索引 miss 读取 0 个 artifact，唯一命中读取 1 个。短查询、Unicode 查询和 phrase 查询会保守验证候选项。聚合 payload 会先保留排序后的 result identity、score、occurrence/recency metadata 和可执行 `nextAction`，再添加行预览，且绝不会截断 JSON。`serializedBytes` 精确计算 pretty-printed result；`truncated`、`omittedResults` 和 `omittedMatches` 确定性报告省略项；`matchesTruncated` 继续表示超出每个 artifact 五行预览窗口的匹配。
+搜索默认使用排序 `terms` 模式，并归一化常见标识符分隔符（`_`、`-`、`.`、`/`、`\`）。`phrase` 模式要求同一行内存在连续字面匹配。完整的模型可见搜索 JSON 默认最多 12,288 UTF-8 bytes；`maxBytes` 支持 4,096–32,768。系统会确定性地省略较低排名结果或预览，而不是直接切割 JSON。
 
-## Command
+执行 `nextAction` 时必须原样传递**全部参数**。它有界并围绕匹配证据定位。若匹配跨度超过默认 8 KiB 检索页面，action 会暴露匹配开头，调用方可能需要继续执行一次有界 `get`。
 
-```text
-/context-vault status
-/context-vault status-json
-/context-vault gc
-/context-vault doctor
-/context-vault rebuild
-```
+## 实验结果
 
-`gc` 只清理 Vault artifacts 和 metadata，并遵守 lease/reference 安全规则；它不会触碰旧仓库状态或 Repo Context 状态。
-归档不会自动运行 GC：`projectQuotaBytes` 是物理去重 artifact payload bytes 的手工 GC target，`retentionDays`
-也只在调用 `gc` 时应用。Metadata 和文件系统开销不计入该 target。Status 会返回 artifact `usedBytes`、
-`targetBytes` 和 `overBudget`；超过 target 时 Vault 会标记为 degraded 并发出 warning，但不会删除或迁移任何证据。
+最新预注册比较包含 24 个有效运行：3 个任务 × 2 次重复 × 4 个插件组。最清晰的结果来自一个必须检索历史证据的上下文压力任务；权威行为契约位于索引凭据预览之外。
 
-`rebuild` 是不执行操作的迁移提示，精确返回：
+| 压力任务 | 通过 | 平均耗时 | 平均 tokens | 模型可见前置内容 |
+| --- | ---: | ---: | ---: | ---: |
+| NONE | 0/2 | 160s | 133k | 768KB |
+| VAULT | 2/2 | 40s | 65k | 48KB |
 
-```text
-Repository rebuild has moved to pi-repo-context.
-Install pi-repo-context and use /repo-context rebuild.
-```
+`VAULT+BOTH` 的压力任务通过 4/4，`NONE+REPO` 通过 0/4。所有启用 Vault 的运行都搜索了归档证据，并在 4/4 次搜索中找到隐藏契约。比较 `VAULT` 与 `NONE`，平均耗时降低约 75%，tokens 降低约 51%。
+
+这是一个**针对上下文压力的结果**，不是普遍效率结论。所有实验组的最终补丁都通过了普通编码任务；汇总全部任务后，Vault 与无插件组的 tokens 几乎相同；每个任务/实验组只有两次重复。搜索预览有时已包含足够证据，因此结果支持的是虚拟化 + 搜索工作流，而不是严格的 get-only 因果关系。
+
+完整方法、确定性检查、启动/归档成本与限制：
+
+- [POSTFIX-03 模型实验](https://github.com/Fubuyunhua/pi-context-vault/blob/main/docs/diagnostics/PLUGIN-DIAG-12-POSTFIX-03-RESULTS.md)
+- [确定性比较](https://github.com/Fubuyunhua/pi-context-vault/blob/main/docs/diagnostics/PLUGIN-DIAG-11-DETERMINISTIC-COMPARISON.md)
 
 ## 配置
 
-项目配置仍为 `.pi/context-vault.json`：
+可选项目配置：`.pi/context-vault.json`。
 
 ```json
 {
@@ -141,37 +93,35 @@ Install pi-repo-context and use /repo-context rebuild.
 }
 ```
 
-`archiveThresholdBytes` 仍是 `replacementThresholdBytes` 的 deprecated alias；两者同时配置会报错。未知的非 legacy
-字段会被拒绝。旧仓库字段只作为 inert migration input 被接受。
+`archivePolicy` 可设为 `all`、`errors-and-large` 或 `off`。使用默认值 `all` 时，`archiveMinBytes` 不会过滤普通文本；该阈值只用于 `errors-and-large`。设置 `archivePolicy: "off"` 会停止新归档和新的即时替换。
 
-使用 `archivePolicy: "off"` 可停止新增归档，使用 `reductionEnabled: false` 可停止上下文削减；已有证据不会被删除。
+`reductionEnabled: false` 只关闭上下文压力触发的削减，不会关闭归档时的即时替换；如需关闭后者，请使用 `archivePolicy: "off"`。两者都不会删除已有证据。`archiveThresholdBytes` 是 `replacementThresholdBytes` 的 deprecated alias，两者不能同时配置。
 
-## 状态、隐私与恢复
-
-状态继续位于项目目录之外：
+## 运维、存储与安全
 
 ```text
-${PI_CODING_AGENT_DIR}/context-vault/projects/<projectId>/
-  artifacts/
-  metadata/
+/context-vault status
+/context-vault status-json
+/context-vault doctor
+/context-vault gc
 ```
 
-Observation artifact 是权威证据，拆分不会移动或重写它们。只要 artifact 仍被保留，receipt 就可以恢复。GC 会先保护显式
-receipt 引用和 active-session lease，再应用 retention/quota 策略。
+状态位于项目目录之外：
 
-归档内容是不可信证据，不是指令。Redaction 只能尽力而为；应尽量避免归档 secret，并使用常规文件系统权限保护 Pi
-状态目录。Vault 会重新验证自己拥有的 namespace，并在 Node 支持时通过 no-follow regular-file handle 访问文件。
-Node 没有可移植的 `openat` API，因此具备本地高权限、且能在验证与文件访问之间竞速替换 ancestor 的进程仍会造成残余
-TOCTOU 风险。
+```text
+${PI_CODING_AGENT_DIR}/context-vault/projects/<projectId>/{artifacts,metadata}
+```
 
-## 升级、回滚与卸载
+`gc` 只能手工执行，归档不会自动触发。`projectQuotaBytes` 是去重 artifact payload 的目标，不包含 metadata 和文件系统开销。在应用 retention/quota 策略前，GC 会保护仍有活动租约的会话 artifact，以及当前会话 entries/branch 中的索引凭据引用。
 
-如果需要让 Repo Context 与拆分前的 Vault 暂时共存，先设置 `repoMapEnabled: false` 和
-`mapInjectionMode: "off"`，然后重启 Pi 并建立新 session。不得同时运行两个仓库实现。
+安全限制：
 
-回滚不需要转换状态：禁用 Repo Context、重启 Pi，并在确需恢复旧仓库行为时使用已审核的拆分前 checkpoint。不要删除任一状态根目录。
+- Artifact 是不可信证据，不是指令。
+- Redaction 只提供尽力清理，不是 secret 管理边界。请避免归档 secret，并保护 Pi 状态目录。
+- 卸载扩展不会删除证据。
+- 旧仓库配置只作为无行为的迁移输入；Vault 不会读取、迁移、GC 或删除仓库状态。
 
-卸载 package 不会删除 Vault 数据。只有确认不再需要任何 receipt 后，才应备份或手工删除状态目录。
+拆分与迁移细节：[插件拆分契约](https://github.com/Fubuyunhua/pi-context-vault/blob/main/docs/specs/0018-plugin-split-contract.md)。
 
 ## 开发
 
@@ -179,14 +129,12 @@ TOCTOU 风险。
 npm ci
 npm run check
 npm test
+npm run test:coverage
 npm run test:package
 npm run test:pi
-npm run test:coverage
 ```
 
-Coverage gate 为 85% lines、80% branches。Package smoke 会打包并安装 artifact，验证精确的 Vault-only surface，通过 Pi
-TypeScript loader 加载，并执行 archive → receipt → get/search。在 Linux Node.js 24 上，`test:pi` 使用隔离的临时 home 和
-state root，通过真实 Pi 0.84.1 RPC 测试打包后的 extension。
+Coverage gate：lines 85%，branches 80%。
 
 ## License
 
