@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { EXTENSION_VERSION, REBUILD_MIGRATION_MESSAGE } from "../src/extension.js";
-import { LEGACY_REPO_CONFIG_KEYS, LEGACY_REPO_CONFIG_WARNING } from "../src/state/config.js";
+import { LEGACY_REPO_CONFIG_KEYS } from "../src/state/config.js";
 
 const ACTIVE_CONFIG_KEYS = [
   "reductionEnabled",
@@ -18,26 +18,14 @@ const ACTIVE_CONFIG_KEYS = [
   "retentionDays",
 ] as const;
 
-it("keeps English and Chinese README migration and Vault surfaces aligned", () => {
+it("keeps the concise English and Chinese README product contracts aligned", () => {
   const english = readFileSync("README.md", "utf8");
   const chinese = readFileSync("README.zh-CN.md", "utf8");
   for (const text of [english, chinese]) {
     for (const token of [
+      "pi-context-vault",
       "pi-repo-context",
-      "pi install git:github.com/Fubuyunhua/pi-repo-context@v0.1.0",
-      "pi install git:github.com/Fubuyunhua/pi-context-vault@v0.3.0",
-      "repo_context_search",
-      "repo_context_status",
-      "context_vault_repo_map",
-      "context-vault",
-      "repo-context",
-      "UI",
-      "telemetry",
-      "0.1.x",
-      "0.2.0",
-      "S03",
-      "bench",
-      ".pi/repo-context.json",
+      "pi install git:github.com/Fubuyunhua/pi-context-vault@<tag-or-commit>",
       "context_vault_obs_get",
       "context_vault_obs_search",
       "context_vault_status",
@@ -45,21 +33,20 @@ it("keeps English and Chinese README migration and Vault surfaces aligned", () =
       "/context-vault status-json",
       "/context-vault gc",
       "/context-vault doctor",
+      "PLUGIN-DIAG-12-POSTFIX-03-RESULTS.md",
+      "PLUGIN-DIAG-11-DETERMINISTIC-COMPARISON.md",
       "npm run test:pi",
-      LEGACY_REPO_CONFIG_WARNING,
-      ...REBUILD_MIGRATION_MESSAGE.split("\n"),
       ...ACTIVE_CONFIG_KEYS,
-      ...LEGACY_REPO_CONFIG_KEYS,
     ]) {
       expect(text, `README missing ${token}`).toContain(token);
     }
+    expect(text).not.toContain("context_vault_repo_map");
+    expect(text).not.toContain("pi install git:github.com/Fubuyunhua/pi-repo-context");
   }
-  expect(english).toContain("verify that the reviewed immutable `v0.3.0` tag exists");
-  expect(english).toContain("If the reviewed immutable `v0.1.0` tag exists");
-  expect(english).toContain("If the tag is not present, use a reviewed local checkout");
-  expect(chinese).toContain("请先验证经过审核的不可变 `v0.3.0` tag 存在");
-  expect(chinese).toContain("如果经过审核的不可变 `v0.1.0` tag 存在");
-  expect(chinese).toContain("如果该 tag 不存在，请改用经过审核的本地 checkout");
+  expect(english).toContain("24 evaluable runs");
+  expect(english).toContain("Across `VAULT+BOTH`, 4/4 pressure runs passed");
+  expect(chinese).toContain("24 个有效运行");
+  expect(chinese).toContain("`VAULT+BOTH` 的压力任务通过 4/4");
 });
 
 it("publishes only Vault-owned source and has no repository runtime dependency", () => {
