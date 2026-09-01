@@ -25,7 +25,8 @@ it("keeps the concise English and Chinese README product contracts aligned", () 
     for (const token of [
       "pi-context-vault",
       "pi-repo-context",
-      "pi install git:github.com/Fubuyunhua/pi-context-vault@<tag-or-commit>",
+      "pi install npm:pi-context-vault@0.3.1",
+      "pi install git:github.com/Fubuyunhua/pi-context-vault@v0.3.1",
       "context_vault_obs_get",
       "context_vault_obs_search",
       "context_vault_status",
@@ -57,12 +58,13 @@ it("publishes only Vault-owned source and has no repository runtime dependency",
     dependencies?: Record<string, string>;
     peerDependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
+    publishConfig?: Record<string, string>;
     scripts?: Record<string, string>;
   };
   expect({ name: manifest.name, manifestVersion: manifest.version, runtimeVersion: EXTENSION_VERSION }).toEqual({
     name: "pi-context-vault",
-    manifestVersion: "0.3.0",
-    runtimeVersion: "0.3.0",
+    manifestVersion: "0.3.1",
+    runtimeVersion: "0.3.1",
   });
   expect(manifest.dependencies ?? {}).toEqual({});
   expect(manifest.files).toEqual([
@@ -89,6 +91,11 @@ it("publishes only Vault-owned source and has no repository runtime dependency",
     "@earendil-works/pi-coding-agent": "0.84.1",
     typebox: "1.3.7",
   });
+  expect(manifest.publishConfig).toEqual({
+    access: "public",
+    registry: "https://registry.npmjs.org/",
+  });
+  expect(manifest.scripts?.prepublishOnly).toBe("npm run check && npm run test:coverage:release");
   expect(manifest.scripts?.["test:pi"]).toBe("node scripts/pi-rpc-smoke.mjs");
   expect(manifest.scripts).not.toHaveProperty("test:watcher");
   expect(manifest.scripts).not.toHaveProperty("bench");
@@ -106,7 +113,22 @@ it("publishes only Vault-owned source and has no repository runtime dependency",
   }
 });
 
-it("keeps the final release record stable and the pre-split candidate frozen", () => {
+it("keeps release records stable and the pre-split candidate frozen", () => {
+  const currentRelease = readFileSync("docs/releases/v0.3.1.md", "utf8");
+  expect(currentRelease).toMatch(/^# pi-context-vault v0\.3\.1$/mu);
+  expect(currentRelease).toMatch(/^Release date: 2026-09-01$/mu);
+  for (const token of [
+    "pi install npm:pi-context-vault@0.3.1",
+    "pi install git:github.com/Fubuyunhua/pi-context-vault@v0.3.1",
+    "context_vault_obs_get",
+    "context_vault_obs_search",
+    "context_vault_status",
+    '"@earendil-works/pi-coding-agent": "*"',
+    '"typebox": "*"',
+  ]) {
+    expect(currentRelease, `current release record missing ${token}`).toContain(token);
+  }
+
   expect(() => readFileSync("docs/releases/v0.2.0.md", "utf8")).toThrow();
   const legacy = readFileSync("docs/legacy/releases/v0.2.0-rc.md", "utf8");
   expect(legacy).toContain("RELEASE CANDIDATE / UNTAGGED");

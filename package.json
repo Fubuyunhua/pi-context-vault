@@ -1,6 +1,6 @@
 {
   "name": "pi-context-vault",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Recoverable observation storage and context-pressure reduction for Pi",
   "type": "module",
   "license": "MIT",
@@ -46,9 +46,15 @@
     "format": "biome check --write .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:coverage:release": "vitest run --coverage --maxWorkers=1",
     "test:package": "node scripts/package-smoke.mjs",
     "test:pi": "node scripts/pi-rpc-smoke.mjs",
-    "ci": "npm run check && npm run test:coverage && npm run test:package"
+    "ci": "npm run check && npm run test:coverage && npm run test:package",
+    "prepublishOnly": "npm run check && npm run test:coverage:release"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

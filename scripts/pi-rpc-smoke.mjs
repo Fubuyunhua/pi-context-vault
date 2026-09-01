@@ -5,7 +5,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
-const VAULT_VERSION = "0.3.0";
+const VAULT_VERSION = "0.3.1";
 const PI_VERSION = "0.84.1";
 const TYPEBOX_VERSION = "1.3.7";
 const REBUILD_MESSAGE =
