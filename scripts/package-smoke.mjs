@@ -96,7 +96,7 @@ try {
 
   const packedRoot = join(install, "node_modules", "pi-context-vault");
   const manifest = JSON.parse(readFileSync(join(packedRoot, "package.json"), "utf8"));
-  if (manifest.name !== "pi-context-vault" || manifest.version !== "0.3.0")
+  if (manifest.name !== "pi-context-vault" || manifest.version !== "0.3.1")
     throw new Error("package identity mismatch");
   if (manifest.dependencies && Object.keys(manifest.dependencies).length > 0)
     throw new Error("Vault has runtime dependencies");
